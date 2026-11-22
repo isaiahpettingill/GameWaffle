@@ -13,18 +13,22 @@
   let runtime, atlasImages = {}, socket, loop, last = 0, elapsed = 0, loadVersion = 0;
   const audio = createAudio();
   const keys = new Set(), fingers = new Map(), taps = new Set();
-  const hosted = !__DEMO_CART__ && /^https?:$/.test(location.protocol);
+  const embedded = document.getElementById('gamewaffle-cartridge');
+  const hosted = !embedded && /^https?:$/.test(location.protocol);
+  let startingRoom;
   const keyboard = { ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right', KeyZ:'a',Space:'a',KeyX:'b',KeyC:'x',Enter:'menu',KeyW:'up',KeyS:'down',KeyA:'left',KeyD:'right' };
   const second = { KeyI:'up',KeyK:'down',KeyJ:'left',KeyL:'right',KeyN:'a',KeyM:'b',Comma:'x',Period:'menu' };
   const gamepad = [12,13,14,15,0,1,2,9];
 
-  async function load(next) {
+  async function load(next, requestedRoom) {
+    const room = Object.hasOwn(next.rooms, requestedRoom) ? requestedRoom : next.start;
     const version = ++loadVersion;
-    const [loadedRuntime, images] = await Promise.all([createRuntime(next), preload(next)]);
+    const [loadedRuntime, images] = await Promise.all([createRuntime(next, room), preload(next)]);
     if (version !== loadVersion) { loadedRuntime.free(); return; }
     runtime?.free();
     runtime = loadedRuntime;
     cart = next;
+    startingRoom = room;
     atlasImages = images;
     audio.setCart(next);
     show(JSON.parse(runtime.snapshot()));
@@ -150,7 +154,7 @@
   }
   function localReset() {
     disconnect();
-    if (cart) load(cart).catch(err=>{ error=String(err.message ?? err); });
+    if (cart) load(cart, startingRoom).catch(err=>{ error=String(err.message ?? err); });
   }
   function countChanged() {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({kind:'join',players}));
@@ -159,10 +163,11 @@
     touch = matchMedia('(pointer:coarse)').matches;
     (async () => {
       try {
-        const buffer = __DEMO_CART__
-          ? Uint8Array.from(atob(__DEMO_CART__), c=>c.charCodeAt(0))
+        const buffer = embedded
+          ? Uint8Array.from(atob(embedded.textContent.trim()), c=>c.charCodeAt(0))
           : new Uint8Array(await (await fetch('./demo.waffle')).arrayBuffer());
-        await load(unpack(buffer));
+        const room = hosted ? new URLSearchParams(location.search).get('room') : undefined;
+        await load(unpack(buffer), room);
       } catch (err) { error=String(err.message ?? err); status='Choose a cartridge'; }
     })();
     loop = requestAnimationFrame(tick);

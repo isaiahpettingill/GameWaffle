@@ -158,6 +158,20 @@ const room = (title,background,obstacles,droneX)=>({
     {name:'Terrain',order:2,collidable:true,cells:[...floor,...obstacles]},
   ],
 });
+const courtyard = {
+  title:'Top-down Courtyard', view:'top_down', background:'#252838', cols:22, rows:15, music:'music',
+  entities:[
+    ...names.map((sprite,player)=>({sprite,player,x:84+player*32,y:260})),
+    {sprite:'drone',x:420,y:100},
+  ],
+  layers:[
+    {name:'Ground',order:0,collidable:false,cells:[[8,5,'water'],[9,5,'water'],[8,6,'water'],[9,6,'water']]},
+    {name:'Walls',order:2,collidable:true,cells:[
+      ...Array.from({length:7},(_,i)=>[7+i,8,'stone']),
+      [7,7,'stone'],[13,7,'stone'],[13,6,'stone'],[5,6,'crate'],[11,10,'crate'],[15,7,'crate'],
+    ]},
+  ],
+};
 const project={
   name:'Basalt Works',start:'yard',tileSize:24,sprites,
   tiles:Object.fromEntries(Object.entries({stone:'static',crate:'breakable',ladder:'ladder',ledge:'one_way',water:'fluid'})
@@ -166,6 +180,7 @@ const project={
   rooms:{
     yard:room('Foundry Yard','#171829',[[13,13,'crate'],[14,13,'crate'],[14,12,'crate'],[17,13,'ladder'],[17,12,'ladder'],
       [17,11,'ladder'],[17,10,'ladder'],[18,10,'ledge'],[19,10,'ledge'],[20,10,'ledge'],[23,13,'water'],[24,13,'water'],[25,13,'water']],532),
+    courtyard,
     vault:room('Cooling Vault','#14252c',[[8,13,'crate'],[11,12,'ledge'],[12,12,'ledge'],[15,12,'stone'],[15,13,'stone'],
       [18,13,'water'],[19,13,'water'],[20,13,'water'],[23,13,'ladder'],[23,12,'ladder'],[24,11,'ledge']],587),
   },

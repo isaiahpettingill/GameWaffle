@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { cp, mkdir, readFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { build } from 'vite';
+import { embedCartridge, playerTemplate } from './web-export.mjs';
 
 const options = { stdio: 'inherit' };
 execFileSync('cargo', ['build','--locked','--manifest-path','runtime/Cargo.toml','--release','--target','wasm32-unknown-unknown'], options);
@@ -9,5 +10,9 @@ execFileSync('wasm-bindgen', ['--target','web','--out-dir','web-built/runtime','
   'runtime/target/wasm32-unknown-unknown/release/gamewaffle_runtime.wasm'], options);
 await build();
 await cp('node_modules/blockly/media','web-built/site/blockly-media',{ recursive:true });
-process.env.GAMEWAFFLE_STANDALONE = (await readFile('web-built/demo.waffle')).toString('base64');
+process.env.GAMEWAFFLE_STANDALONE = '1';
 await build();
+const player = 'web-built/standalone/player.html';
+await rename(player, playerTemplate);
+const demo = await readFile('web-built/demo.waffle');
+await writeFile(player, embedCartridge(await readFile(playerTemplate, 'utf8'), demo));

@@ -128,6 +128,13 @@ pub struct Solid {
     pub physics: Physics,
 }
 
+#[derive(Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum View {
+    Platformer,
+    TopDown,
+}
+
 #[derive(Clone, Deserialize)]
 pub struct Room {
     pub cols: usize,
@@ -135,9 +142,17 @@ pub struct Room {
     pub size: f32,
     pub height: f32,
     pub gravity: f32,
+    pub view: Option<View>,
     pub entities: Vec<Spawn>,
     pub solids: Vec<Solid>,
     pub blockers: Vec<usize>,
+}
+
+impl Room {
+    pub fn is_top_down(&self) -> bool {
+        self.view
+            .map_or(self.gravity.abs() < 0.01, |view| view == View::TopDown)
+    }
 }
 
 #[derive(Deserialize)]

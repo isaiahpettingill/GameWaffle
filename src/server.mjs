@@ -7,6 +7,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { compileProject, discoverAssets, describeArt, projectPath, scriptCode } from './compiler.mjs';
 import { pack, encodeCbor, decodeCbor } from './cartridge.mjs';
 import { buttons } from './schema.mjs';
+import { embedCartridge, playerTemplate } from './web-export.mjs';
 import { Runtime, initSync } from '../web-built/runtime/runtime.js';
 
 const args = process.argv.slice(2);
@@ -79,6 +80,9 @@ const files = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; char
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   try {
+    if (url.pathname === '/export.html' && req.method === 'GET') {
+      return send(res, 200, embedCartridge(await readFile(playerTemplate, 'utf8'), bytes), 'text/html; charset=utf-8');
+    }
     if (url.pathname === '/demo.waffle') return send(res, 200, bytes, 'application/octet-stream');
     if (url.pathname === '/lan.waffle') return send(res, 200, connections.size ? clientsCart : bytes, 'application/octet-stream');
     if (url.pathname.startsWith('/api/')) {

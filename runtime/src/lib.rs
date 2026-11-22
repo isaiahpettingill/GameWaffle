@@ -36,6 +36,7 @@ struct Actor {
     width: f32,
     height: f32,
     facing: f32,
+    aim: Vec2,
     player: Option<usize>,
     team: i32,
     layer: i32,
@@ -46,6 +47,17 @@ struct Actor {
 }
 
 impl Actor {
+    fn face(&mut self, v: Vec2, top_down: bool) {
+        if v.x.abs() > 0.05 {
+            self.facing = v.x.signum();
+        }
+        if top_down && v.length_squared() > 0.0025 {
+            self.aim = unit(v);
+        } else if !top_down {
+            self.aim = Vec2::new(self.facing, 0.0);
+        }
+    }
+
     fn velocity(&mut self, velocity: Vec2) {
         self.v = velocity;
         if let Some(body) = &self.body {
@@ -308,6 +320,7 @@ impl Runtime {
                 height,
                 v: Vec2::zero(),
                 facing: 1.0,
+                aim: Vec2::new(1.0, 0.0),
                 player,
                 team,
                 layer,
@@ -362,8 +375,9 @@ impl Runtime {
         {
             let mut contacts = self.contacts.borrow_mut();
             contacts.previous.clear();
+            let top_down = self.game.rooms[&self.room].is_top_down();
             for actor in self.actors.values() {
-                let drop = actor.player.is_some_and(|slot| self.inputs[slot].down);
+                let drop = !top_down && actor.player.is_some_and(|slot| self.inputs[slot].down);
                 contacts
                     .previous
                     .insert(actor.id, ((actor.p.y + actor.height / 2.0) / PPM, drop));
@@ -416,6 +430,7 @@ impl Runtime {
             return;
         };
         let input = actor.player.map_or(Input::default(), |slot| inputs[slot]);
+        let top_down = self.game.rooms[&self.room].is_top_down();
         for op in code {
             let arg = |index: usize| op.get(index).and_then(Value::as_f64).unwrap_or(0.0) as f32;
             let name = |index: usize| op.get(index).and_then(Value::as_str).unwrap_or("");
@@ -424,38 +439,29 @@ impl Runtime {
                     let actor = self.actors.get_mut(&id).unwrap();
                     let dx = f32::from(input.right) - f32::from(input.left);
                     let dy = f32::from(input.down) - f32::from(input.up);
-                    if dx != 0.0 {
-                        actor.facing = dx;
-                    }
-                    let vy = if self.game.rooms[&self.room].gravity.abs() < 0.01 {
-                        dy * arg(1)
+                    let direction = Vec2::new(dx, if top_down { dy } else { 0.0 });
+                    actor.face(direction, top_down);
+                    let velocity = if top_down {
+                        arg(1) * unit(direction)
                     } else {
-                        actor.v.y
+                        Vec2::new(dx * arg(1), actor.v.y)
                     };
-                    actor.velocity(Vec2::new(dx * arg(1), vy));
+                    actor.velocity(velocity);
                 }
-                Some(1) if !input.down && self.grounded(id) => {
+                Some(1) if !top_down && !input.down && self.grounded(id) => {
                     let actor = self.actors.get_mut(&id).unwrap();
                     actor.velocity(Vec2::new(actor.v.x, -arg(1)));
                 }
                 Some(2) if arg(1) > 0.0 && arg(2) > 0.0 => {
                     let owner = &self.actors[&id];
                     let range = arg(2);
-                    let center =
-                        owner.p + Vec2::new(owner.facing * (owner.width + range) / 2.0, 0.0);
+                    let width = if arg(3) > 0.0 { arg(3) } else { owner.height };
                     for target in self
                         .actors
                         .values()
                         .filter(|target| self.hittable(owner, target))
                     {
-                        if overlap(
-                            center,
-                            range,
-                            if arg(3) > 0.0 { arg(3) } else { owner.height },
-                            target.p,
-                            target.width,
-                            target.height,
-                        ) {
+                        if attack_intersects(owner, target, range, width) {
                             actions.push(Action::Damage {
                                 source: id,
                                 target: target.id,
@@ -489,9 +495,7 @@ impl Runtime {
                         })
                         .map_or(Vec2::zero(), |to| arg(1) * unit(to - p));
                     let actor = self.actors.get_mut(&id).unwrap();
-                    if v.x.abs() > 0.05 {
-                        actor.facing = v.x.signum();
-                    }
+                    actor.face(v, top_down);
                     actor.velocity(v);
                 }
                 Some(5) if self.sounds.len() < 64 => self.sounds.push(name(1).into()),
@@ -625,7 +629,7 @@ impl Runtime {
                     }
                 }
             }
-            if ladder && actor.player.is_some() {
+            if ladder && !self.game.rooms[&self.room].is_top_down() && actor.player.is_some() {
                 let input = inputs[actor.player.unwrap()];
                 gravity = 0.0;
                 let dy = (f32::from(input.down) - f32::from(input.up)) * 3.5;
@@ -662,7 +666,7 @@ impl Runtime {
             .as_ref()
             .and_then(|s| self.game.sprites.get(s))
             .and_then(|s| s.projectile.clone());
-        let mut dir = Vec2::new(owner.facing, 0.0);
+        let mut dir = owner.aim;
         if aim != "facing"
             && let Some(target) = self.target(owner, owner.p)
         {
@@ -779,6 +783,22 @@ impl Runtime {
 fn unit(mut v: Vec2) -> Vec2 {
     v.normalize();
     v
+}
+
+fn attack_intersects(owner: &Actor, target: &Actor, range: f32, width: f32) -> bool {
+    let forward = owner.aim;
+    let side = Vec2::new(-forward.y, forward.x);
+    let reach = (owner.width * forward.x.abs() + owner.height * forward.y.abs() + range) / 2.0;
+    let delta = target.p - (owner.p + reach * forward);
+    let dot = |a: Vec2, b: Vec2| a.x * b.x + a.y * b.y;
+    [forward, side, Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)]
+        .into_iter()
+        .all(|axis| {
+            let attack_radius =
+                (range * dot(forward, axis).abs() + width * dot(side, axis).abs()) / 2.0;
+            let target_radius = (target.width * axis.x.abs() + target.height * axis.y.abs()) / 2.0;
+            dot(delta, axis).abs() < attack_radius + target_radius
+        })
 }
 
 fn overlap(p: Vec2, w: f32, h: f32, q: Vec2, tw: f32, th: f32) -> bool {
