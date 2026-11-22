@@ -29,9 +29,9 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
   const image = atlasImages[snapshot.room];
   if (!image) return;
   const render = [
-    ...snapshot.actors.map(actor=>({ ...actor, actor:true })),
+    ...snapshot.actors.map(actor=>({ ...actor, actor:true, depth:actor.image.startsWith('sprite/') ? actor.y+actor.height/2 : -Infinity })),
     ...room.baked,
-  ].sort((a,b)=>a.layer-b.layer || Number(!!a.actor)-Number(!!b.actor));
+  ].sort((a,b)=>a.layer-b.layer || Number(!!a.actor)-Number(!!b.actor) || (room.ySort && a.actor && b.actor ? a.depth-b.depth || 0 : 0));
   for (const entry of render) {
     const rect = atlas.entries[entry.image];
     if (!entry.actor) {

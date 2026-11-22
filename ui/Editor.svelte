@@ -3,14 +3,16 @@
   import ScriptPanel from './ScriptPanel.svelte';
   import Physics from './Physics.svelte';
   import { unpack } from '../src/cartridge.mjs';
-  import { createRuntime } from './runtime.js';
-  import { drawRoom, preload } from './render.js';
+  import RoomMap from './RoomMap.svelte';
 
   let project=$state(null), assets=$state([]), art=$state({}), tab=$state('room'), roomId=$state(''), spriteId=$state(''),
-    tileId=$state(''), layerIndex=$state(0), tool=$state('paint'), assetKind=$state('sprite'), scriptDirty=$state(false),
+    tileId=$state(''), layerIndex=$state(0), assetKind=$state('sprite'), scriptDirty=$state(false),
     dirty=$state(false), busy=$state(false), error=$state(''), status=$state('Opening project…'), newId=$state(''),
-    newSource=$state(''), audioId=$state(''), audioSource=$state(''), variant=$state(''), slot=$state(''), showGrid=$state(true);
-  let cart=$state.raw(null), thumbs=$state({}), atlases={}, canvas=$state(), helperSnapshot=$state.raw(null);
+    newSource=$state(''), audioId=$state(''), audioSource=$state('');
+  let tileArt=$state.raw({}), spriteArt=$state.raw({}), previewModes=$state.raw({});
+  let historyVersion=$state(0), selectedEntity=$state(-1), roomPanel=$state('layers'), addPreset=$state(false);
+  let savedRooms={}, dirtyOutsideRoom=false, history=new Map(), previewUrls=[];
+  let dimensions=$state(null);
   let revision=-1, checking=false;
   let sourceError=$state('');
   let room=$derived(project?.rooms[roomId]), layer=$derived(room?.layers?.[layerIndex]);
@@ -19,7 +21,17 @@
   let artFiles=$derived(assets.filter(file=>/\.(ase|aseprite)$/i.test(file)));
   let audioFiles=$derived(assets.filter(file=>/\.(wav|ogg|oga|opus|qoa)$/i.test(file)));
   const tabs=[['room','Room'],['blocks','Blocks'],['assets','Assets']];
-  const paletteColors=['#ffc875','#92dac4','#bda6ed','#ee9e9f'];
+  const historyStatus=$derived.by(()=>{
+    const revision=historyVersion;
+    const edits=history.get(roomId);
+    return { revision, canUndo:Boolean(edits?.undo.length), canRedo:Boolean(edits?.redo.length) };
+  });
+  const sortedLayers=$derived((room?.layers ?? []).map((layer,index)=>({layer,index,order:layer.order??index}))
+    .sort((a,b)=>b.order-a.order || b.index-a.index));
+  const maxTiles=$derived(Math.floor(4096/(project?.tileSize??24)));
+  const roomView=$derived(room?.view ?? (Math.abs(room?.gravity??24) < .01 ? 'top_down' : 'platformer'));
+  const actor=$derived(room?.entities[selectedEntity]);
+  const exportName=$derived((project?.name??'game').toLowerCase().replace(/[^a-z0-9]+/g,'-') || 'game');
 
   async function request(path, method='GET', data) {
     const response=await fetch(path,{method,headers:data ? {'Content-Type':'application/json'} : {},body:data ? JSON.stringify(data) : undefined});
@@ -31,21 +43,29 @@
     const response=await fetch('./demo.waffle',{cache:'no-store'});
     if(!response.ok)throw Error('Could not open project preview');
     const next=unpack(new Uint8Array(await response.arrayBuffer()));
-    atlases=await preload(next);
-    for(const url of Object.values(thumbs)) URL.revokeObjectURL(url);
-    thumbs=Object.fromEntries(Object.entries(next.thumbnails??{}).map(([id,bytes])=>[id,URL.createObjectURL(new Blob([bytes],{type:'image/png'}))]));
-    cart=next;
+    for(const url of previewUrls) URL.revokeObjectURL(url);
+    previewUrls=[];
+    function png(bytes){
+      const url=URL.createObjectURL(new Blob([bytes],{type:'image/png'}));
+      previewUrls.push(url);
+      return url;
+    }
+    const tiles=next.tilePreviews??Object.fromEntries(Object.entries(next.thumbnails??{}).map(([id,bytes])=>[id,{variants:[bytes]}]));
+    tileArt=Object.fromEntries(Object.entries(tiles).map(([id,data])=>[id,data.variants.map(png)]));
+    previewModes=Object.fromEntries(Object.entries(tiles).map(([id,data])=>[id,data.mode]));
+    spriteArt=Object.fromEntries(Object.entries(next.spritePreviews??{}).map(([id,data])=>[id,png(data)]));
   }
   async function load() {
     try{
       const value=await request('./api/project');
       project=value.project; assets=value.assets; art=value.art; revision=value.revision;
+      savedRooms=JSON.stringify(value.project.rooms);
       audioSource=assets.find(file=>/\.(wav|ogg|oga|opus|qoa)$/i.test(file)) ?? '';
       roomId=project.start ?? Object.keys(project.rooms)[0];
       spriteId=Object.keys(project.sprites ?? {})[0] ?? '';
       tileId=Object.keys(project.tiles ?? {})[0] ?? '';
       newSource=assets.find(file=>/\.(ase|aseprite)$/i.test(file)) ?? '';
-      layerIndex=Math.max(0,(project.rooms[roomId]?.layers?.length ?? 1)-1);
+      layerIndex=chooseInitialLayer(project.rooms[roomId]);
       await updatePreviews();
       status='Ready';
     }catch(err){error=err.message;status='Project unavailable';}
@@ -53,62 +73,8 @@
   onMount(()=>{
     load();
     const monitor=setInterval(checkAssets,1600);
-    return ()=>{clearInterval(monitor);for(const url of Object.values(thumbs))URL.revokeObjectURL(url);};
+    return ()=>{clearInterval(monitor);for(const url of previewUrls)URL.revokeObjectURL(url);};
   });
-  $effect(()=>{
-    const next=cart,id=roomId;
-    helperSnapshot=null;
-    if(!next?.rooms?.[id])return;
-    let cancelled=false;
-    createRuntime(next,id).then(runtime=>{
-      try{
-        const state=JSON.parse(runtime.snapshot());
-        if(!cancelled)helperSnapshot=state;
-      }finally{runtime.free();}
-    }).catch(err=>{if(!cancelled)error=String(err.message ?? err);});
-    return ()=>{cancelled=true;};
-  });
-  $effect(()=>{
-    const target=canvas, view=room, data=cart, state=helperSnapshot, grid=showGrid;
-    if(!target || !view)return;
-    const tileSize=project.tileSize ?? 24;
-    const all=view.layers.map(entry=>[...entry.cells]);
-    const placed=view.entities.map(entity=>({...entity}));
-    const draft=dirty;
-    const background=view.background ?? '#171829';
-    if(!draft && state && data) {
-      drawRoom(target,data,state,atlases,grid);
-      return;
-    }
-    target.width=view.cols*tileSize;target.height=view.rows*tileSize;
-    const ctx=target.getContext('2d');
-    ctx.imageSmoothingEnabled=false;
-    ctx.fillStyle=background;ctx.fillRect(0,0,target.width,target.height);
-    let current=true;
-    const loaded=Object.fromEntries(Object.entries(thumbs).map(([id,url])=>{
-      const image=new Image();image.src=url;return [id,image];
-    }));
-    Promise.allSettled(Object.values(loaded).map(image=>image.decode())).then(()=>{
-      if(!current)return;
-      for(const cells of all)for(const [x,y,id] of cells){
-        const image=loaded[id];
-        if(image?.naturalWidth)ctx.drawImage(image,x*tileSize,y*tileSize,tileSize,tileSize);
-        else {ctx.fillStyle='#736485';ctx.fillRect(x*tileSize,y*tileSize,tileSize,tileSize);}
-      }
-      for(const e of placed){
-        ctx.fillStyle=paletteColors[e.player]??'#a16b8c';
-        ctx.fillRect(e.x-6,e.y-7,12,14);
-      }
-      if(grid){
-        ctx.strokeStyle='#d1bad42e';ctx.beginPath();
-        for(let x=0;x<target.width;x+=tileSize){ctx.moveTo(x+.5,0);ctx.lineTo(x+.5,target.height);}
-        for(let y=0;y<target.height;y+=tileSize){ctx.moveTo(0,y+.5);ctx.lineTo(target.width,y+.5);}
-        ctx.stroke();
-      }
-    });
-    return ()=>{current=false;};
-  });
-
   async function checkAssets(){
     if(!project||busy||checking)return;
     checking=true;
@@ -125,7 +91,121 @@
       }
     }catch(err){sourceError=err.message;}finally{checking=false;}
   }
-  function mark(){dirty=true;status='Unsaved project';}
+  function mark(){
+    dirtyOutsideRoom=true;
+    updateDirty();
+  }
+  function updateDirty(){
+    dirty=dirtyOutsideRoom || JSON.stringify(project.rooms)!==savedRooms;
+    status=dirty ? 'Unsaved project' : 'Ready';
+  }
+  function replaceRoom(next){
+    if(busy)return;
+    const before=JSON.stringify(room);
+    const after=JSON.stringify(next);
+    if(before===after)return;
+    const edits=history.get(roomId)??{undo:[],redo:[]};
+    edits.undo.push(before);
+    if(edits.undo.length>50)edits.undo.shift();
+    edits.redo.length=0;
+    history.set(roomId,edits);
+    applyRoom(after);
+  }
+  function applyRoom(serialized){
+    project.rooms[roomId]=JSON.parse(serialized);
+    layerIndex=Math.min(layerIndex,project.rooms[roomId].layers.length-1);
+    if(selectedEntity>=project.rooms[roomId].entities.length)selectedEntity=-1;
+    dimensions=null;
+    historyVersion+=1;
+    updateDirty();
+  }
+  function editRoom(change){
+    const next=JSON.parse(JSON.stringify(room));
+    change(next);
+    replaceRoom(next);
+  }
+  function restoreRoom(back){
+    if(busy)return;
+    const edits=history.get(roomId);
+    const active=back ? edits?.undo : edits?.redo;
+    if(!active?.length)return;
+    (back ? edits.redo : edits.undo).push(JSON.stringify(room));
+    selectedEntity=-1;
+    applyRoom(active.pop());
+  }
+  function setRoom(key,value){
+    editRoom(next=>{if(value==='')delete next[key];else next[key]=value;});
+  }
+  function setView(view){
+    editRoom(next=>{
+      next.view=view;
+      next.ySort=view==='top_down';
+      next.closedEdges=view==='top_down';
+      if(view==='platformer' && Math.abs(next.gravity??24)<.01)next.gravity=24;
+    });
+  }
+  function resizeRoom(key,input){
+    const value=input.valueAsNumber;
+    if(!Number.isInteger(value)||value<1||value>maxTiles){input.value=room[key];return;}
+    const next={...(dimensions??{cols:room.cols,rows:room.rows}),[key]:value};
+    const size=project.tileSize??24;
+    const cuts=room.layers.some(layer=>layer.cells.some(([x,y])=>x>=next.cols||y>=next.rows))
+      || room.entities.some(entity=>entity.x>=next.cols*size||entity.y>=next.rows*size);
+    if(cuts){dimensions=next;return;}
+    editRoom(draft=>Object.assign(draft,next));
+  }
+  function cropRoom(){
+    const {cols,rows}=dimensions;
+    const size=project.tileSize??24;
+    editRoom(next=>{
+      Object.assign(next,{cols,rows});
+      for(const layer of next.layers)layer.cells=layer.cells.filter(([x,y])=>x<cols&&y<rows);
+      next.entities=next.entities.filter(entity=>entity.x<cols*size&&entity.y<rows*size);
+    });
+    selectedEntity=-1;
+  }
+  function chooseLayer(index){
+    layerIndex=index;
+    roomPanel='layers';
+  }
+  function changeLayer(key,value){
+    if(key==='name' && !value.trim())return;
+    editRoom(next=>{next.layers[layerIndex][key]=value;});
+  }
+  function moveLayer(direction){
+    const index=sortedLayers.findIndex(entry=>entry.index===layerIndex);
+    const neighbor=sortedLayers[index+direction];
+    if(!neighbor)return;
+    editRoom(next=>{
+      if(neighbor.order===sortedLayers[index].order){
+        const order=sortedLayers.map(item=>item.index);
+        [order[index],order[index+direction]]=[order[index+direction],order[index]];
+        const high=sortedLayers[0].order;
+        const anchor=Math.max(-10000,high-order.length+1);
+        order.reverse().forEach((layer,i)=>{next.layers[layer].order=anchor+i;});
+      }else{
+        next.layers[layerIndex].order=neighbor.order;
+        next.layers[neighbor.index].order=sortedLayers[index].order;
+      }
+    });
+  }
+  function removeLayer(){
+    if(room.layers.length<2)return;
+    editRoom(next=>next.layers.splice(layerIndex,1));
+  }
+  function changeActor(key,value){
+    if(!actor)return;
+    const maximum=(key==='x'?room.cols:room.rows)*(project.tileSize??24);
+    if((key==='x'||key==='y') && (!Number.isFinite(value)||value<0||value>=maximum))return;
+    editRoom(next=>{
+      if(key==='player'&&value!==''){
+        const occupied=next.entities.find((entry,index)=>index!==selectedEntity && entry.player===Number(value));
+        if(occupied)delete occupied.player;
+      }
+      if(value==='')delete next.entities[selectedEntity][key];
+      else next.entities[selectedEntity][key]=key==='player' ? Number(value) : value;
+    });
+  }
   function openTab(id){
     if(scriptDirty && id!=='blocks'){error='Save or discard the current script first.';return;}
     error='';tab=id;
@@ -134,18 +214,31 @@
     if(scriptDirty && spriteId!==id){error='Save or discard the current script first.';return;}
     spriteId=id;assetKind='sprite';error='';
   }
+  function chooseInitialLayer(map){
+    const layers=(map?.layers??[]).map((item,index)=>({item,index}));
+    return layers.sort((a,b)=>Number(Boolean(b.item.collidable))-Number(Boolean(a.item.collidable))
+      || (b.item.order??b.index)-(a.item.order??a.index)).at(0)?.index??0;
+  }
   function selectRoom(id){
-    roomId=id;layerIndex=Math.max(0,(project.rooms[id]?.layers?.length??1)-1);
+    if(scriptDirty){openTab('room');return;}
+    roomPanel='layers';selectedEntity=-1;dimensions=null;
+    roomId=id;layerIndex=chooseInitialLayer(project.rooms[id]);
     openTab('room');
   }
   async function saveProject(){
+    if(busy)return false;
     busy=true;error='';
+    const saved=JSON.stringify(project);
     try{
-      await request('./api/project','PUT',project);
+      await request('./api/project','PUT',JSON.parse(saved));
       await updatePreviews();
       revision=(await request('./api/status')).revision;
-      dirty=false; status='Project saved';
-    }catch(err){error=err.message;}finally{busy=false;}
+      savedRooms=JSON.stringify(JSON.parse(saved).rooms);
+      dirtyOutsideRoom=JSON.stringify(project)!==saved && dirtyOutsideRoom;
+      updateDirty();
+      if(!dirty)status='Project saved';
+      return !dirty;
+    }catch(err){error=err.message;return false;}finally{busy=false;}
   }
   async function saveScript(id){
     if(!project.sprites[id].script) project.sprites[id].script=`scripts/${id}.cbor`;
@@ -163,44 +256,46 @@
       status=dirty ? 'Unsaved project' : 'Assets rebuilt';
     }catch(err){error=err.message;}finally{busy=false;}
   }
-  function paint(event){
-    if(!room || !canvas)return;
-    if(event.type==='pointermove' && !(event.buttons&1))return;
-    if(event.type==='pointermove' && tool==='spawn')return;
-    const rect=canvas.getBoundingClientRect(), size=project.tileSize??24;
-    const px=(event.clientX-rect.left)/rect.width*canvas.width, py=(event.clientY-rect.top)/rect.height*canvas.height;
-    const x=Math.floor(px/size),y=Math.floor(py/size);
-    if(x<0||y<0||x>=room.cols||y>=room.rows)return;
-    if(tool==='spawn'){
-      if(!spriteId)return;
-      if(slot!=='')room.entities=room.entities.filter(actor=>actor.player!==Number(slot));
-      room.entities.push({sprite:spriteId,x:Math.round(px),y:Math.round(py),...(slot==='' ? {} :{player:Number(slot)})});
-      mark();return;
+  function saveShortcut(event){
+    if((event.ctrlKey || event.metaKey) && event.key.toLowerCase()==='s' && project && tab==='room'){
+      event.preventDefault();
+      if(dirty)saveProject();
     }
-    if(!layer)return;
-    const index=layer.cells.findIndex(cell=>cell[0]===x&&cell[1]===y);
-    if(tool==='erase'){
-      if(index>=0){layer.cells.splice(index,1);mark();}
-      return;
-    }
-    if(!tileId)return;
-    const after=[x,y,tileId,...(variant===''?[]:[Number(variant)])];
-    if(index>=0){
-      if(JSON.stringify(layer.cells[index])===JSON.stringify(after))return;
-      layer.cells[index]=after;
-    }else layer.cells.push(after);
-    mark();
+  }
+  async function saveThenOpen(event){
+    if(busy){event.preventDefault();return;}
+    if(scriptDirty){event.preventDefault();error='Save or discard the current script first.';return;}
+    if(!dirty)return;
+    event.preventDefault();
+    const link=event.currentTarget;
+    const href=link.href;
+    const download=link.getAttribute('download');
+    if(!await saveProject())return;
+    if(download==null){location.assign(href);return;}
+    const action=document.createElement('a');
+    action.href=href;
+    action.download=download;
+    action.click();
   }
   function addLayer(){
-    room.layers.push({name:`Layer ${room.layers.length+1}`,order:room.layers.length+1,collidable:false,cells:[]});
-    layerIndex=room.layers.length-1;mark();
+    const order=Math.min(10000,Math.max(-1,...sortedLayers.map(item=>item.order))+1);
+    editRoom(next=>next.layers.push({name:`Layer ${next.layers.length+1}`,order,collidable:false,cells:[]}));
+    layerIndex=room.layers.length-1;
   }
-  function addRoom(){
+  function addRoom(view){
+    if(scriptDirty){openTab('room');return;}
     let index=1;
     while(project.rooms[`room${index}`])index++;
     const id=`room${index}`;
-    project.rooms[id]={title:`Room ${index}`,cols:28,rows:15,background:'#171829',layers:[{name:'Terrain',order:1,collidable:true,cells:[]}],entities:[]};
-    selectRoom(id);mark();
+    const topDown=view==='top_down';
+    project.rooms[id]={title:`Room ${index}`,cols:28,rows:15,background:'#171829',view,
+      layers:[
+        {name:topDown?'Ground':'Background',order:0,collidable:false,cells:[]},
+        {name:topDown?'Walls':'Terrain',order:2,collidable:true,cells:[]},
+      ],entities:[]};
+    addPreset=false;
+    selectRoom(id);
+    updateDirty();
   }
   function addAsset(){
     if(!/^[a-zA-Z0-9_-]+$/.test(newId)||['__proto__','constructor','prototype'].includes(newId)||!newSource){
@@ -249,6 +344,8 @@
   }
 </script>
 
+<svelte:window onkeydown={saveShortcut} />
+
 <header class="appbar">
   <div class="brand">
     <span class="logo" aria-hidden="true">{#each Array(9) as _}<i></i>{/each}</span>
@@ -257,17 +354,28 @@
   <div class="row actions">
     <span class="status" role="status">{status}</span>
     <button onclick={rebuild} disabled={busy||!project}>Rebuild assets</button>
-    <a class="button download" download={`${(project?.name??'game').toLowerCase().replace(/[^a-z0-9]+/g,'-')}.waffle`} href="./demo.waffle">Export cartridge</a>
-    <a class="button primary" href="./player.html">Play ↗</a>
+    <button onclick={saveProject} disabled={!dirty||busy}>Save project</button>
+    <details class="export-menu">
+      <summary>Export</summary>
+      <div class="card">
+        <a download={exportName+'.html'} href="./export.html" onclick={saveThenOpen}>Standalone web game</a>
+        <a download={exportName+'.waffle'} href="./demo.waffle" onclick={saveThenOpen}>Cartridge</a>
+      </div>
+    </details>
+    <a class="button primary" href="./player.html" onclick={saveThenOpen}>Play game ↗</a>
   </div>
 </header>
 {#if error || sourceError}<p role="alert" class="error banner">{error || sourceError}</p>{/if}
 {#if project}
   <main>
     <aside class="project card">
-      <div class="heading row"><h2>Project</h2><button class="small-button" onclick={saveProject} disabled={!dirty||busy}>Save</button></div>
+      <div class="heading row"><h2>Project</h2></div>
       <div class="category">
-        <div class="heading row"><h3>Rooms</h3><button class="small-button" title="New room" aria-label="New room" onclick={addRoom}>+</button></div>
+        <div class="heading row"><h3>Rooms</h3><button class="small-button" title="New room" aria-label="New room" aria-expanded={addPreset} disabled={busy} onclick={()=>addPreset=!addPreset}>+</button></div>
+        {#if addPreset}<div class="presets">
+          <button onclick={()=>addRoom('platformer')}>New platformer room</button>
+          <button onclick={()=>addRoom('top_down')}>New top-down room</button>
+        </div>{/if}
         {#each Object.entries(project.rooms) as [id,item]}
           <button class="item" class:selected={roomId===id} onclick={()=>selectRoom(id)}>
             <i class="room-icon"></i><span>{item.title??id}</span>
@@ -282,45 +390,28 @@
           </button>
         {/each}
       </div>
-      <div class="category compact">
+      {#if tab!=='room'}<div class="category compact">
         <div class="heading row"><h3>Tiles</h3><button class="small-button" title="Add tile" aria-label="Add tile" onclick={()=>{assetKind='tile';openTab('assets');}}>+</button></div>
         {#each Object.keys(project.tiles??{}) as id}
           <button class="item" class:selected={tileId===id} onclick={()=>{tileId=id;assetKind='tile';if(tab!=='assets')openTab('room');}}>
-            {#if thumbs[id]}<img src={thumbs[id]} alt="">{:else}<i class="room-icon"></i>{/if}<span>{id}</span>
+            {#if tileArt[id]?.[0]}<img src={tileArt[id][0]} alt="">{:else}<i class="room-icon"></i>{/if}<span>{id}</span>
           </button>
         {/each}
       </div>
-    </aside>
+    {/if}</aside>
     <div class="work">
       <nav class="row" aria-label="Editor views">
         {#each tabs as [id,title]}<button class:active={tab===id} onclick={()=>openTab(id)}>{title}</button>{/each}
       </nav>
       {#if tab==='room' && room}
-        <section class="card map">
-          <div class="maphead row">
-            <div><h2>{room.title??roomId}</h2><small>{room.cols} × {room.rows} tiles · {project.tileSize??24} px</small></div>
-            <div class="row mode">
-              <button class:selected={tool==='paint'} onclick={()=>tool='paint'}>Paint</button>
-              <button class:selected={tool==='erase'} onclick={()=>tool='erase'}>Erase</button>
-              <button class:selected={tool==='spawn'} onclick={()=>tool='spawn'}>Place sprite</button>
-              <button aria-pressed={showGrid} onclick={()=>showGrid=!showGrid}>Grid</button>
-            </div>
-          </div>
-          <div class="canvas-wrap">
-            <canvas aria-label="Room map" bind:this={canvas} onpointerdown={paint} onpointermove={paint}></canvas>
-          </div>
-          <div class="mapfoot row">
-            {#if tool==='spawn'}
-              <label>Sprite <select bind:value={spriteId}>{#each Object.keys(project.sprites??{}) as id}<option value={id}>{id}</option>{/each}</select></label>
-              <label>Player <select bind:value={slot}><option value="">None</option>{#each [0,1,2,3] as id}<option value={String(id)}>{id+1}</option>{/each}</select></label>
-            {:else}
-              <label>Layer <select bind:value={layerIndex}>{#each room.layers as item,index}<option value={index}>{item.name}</option>{/each}</select></label>
-              <label>Tile <select bind:value={tileId}>{#each Object.keys(project.tiles??{}) as id}<option value={id}>{id}</option>{/each}</select></label>
-              <label>Variant <input type="number" min="0" step="1" placeholder="Auto" value={variant} onchange={e=>variant=e.currentTarget.value}></label>
-            {/if}
-            <small>{dirty?'Save to update the playable cartridge.':'Click or drag on the map.'}</small>
-          </div>
-        </section>
+        {#key roomId}
+          <RoomMap {room} {roomId} size={project.tileSize??24} tiles={project.tiles??{}} sprites={project.sprites??{}}
+            {tileArt} {spriteArt} {previewModes} {layerIndex} bind:selectedEntity bind:tileId bind:spriteId {busy}
+            canUndo={historyStatus.canUndo} canRedo={historyStatus.canRedo}
+            onUndo={()=>restoreRoom(true)} onRedo={()=>restoreRoom(false)} onEdit={replaceRoom}
+            onLayer={chooseLayer} onSprites={()=>roomPanel='sprites'} onAssets={()=>{assetKind='tile';openTab('assets');}}
+            onPlay={saveThenOpen} />
+        {/key}
       {:else if tab==='blocks'}
         {#if spriteId}
           {#key spriteId}<ScriptPanel sprite={spriteId} bind:dirty={scriptDirty} onSave={saveScript} />{/key}
@@ -388,39 +479,83 @@
       {/if}
     </div>
     <aside class="inspector card">
-      <div class="heading row"><h2>{tab==='room' ? 'Room settings' : 'Sprite & tile settings'}</h2></div>
       {#if tab==='room' && room}
-        <div class="row start-room">
-          {#if (project.start??Object.keys(project.rooms)[0])===roomId}<small>Starting room</small>
-          {:else}<button class="small-button" onclick={()=>set(project,'start',roomId)}>Set as starting room</button>{/if}
+        <div class="panel-tabs row">
+          {#each [['layers','Layers'],['room','Room'],['sprites','Sprites']] as [id,label]}
+            <button class:selected={roomPanel===id} aria-pressed={roomPanel===id} onclick={()=>roomPanel=id}>{label}</button>
+          {/each}
         </div>
-        <label class="stack">Room name <input value={room.title??roomId} onchange={e=>set(room,'title',e.currentTarget.value)}></label>
-        <div class="pair">
-          <label class="stack">Columns <input type="number" min="1" max="170" value={room.cols} onchange={e=>set(room,'cols',e.currentTarget.valueAsNumber)}></label>
-          <label class="stack">Rows <input type="number" min="1" max="170" value={room.rows} onchange={e=>set(room,'rows',e.currentTarget.valueAsNumber)}></label>
-          <label class="stack">Gravity <input type="number" min="-100" max="100" step="any" value={room.gravity??24} onchange={e=>set(room,'gravity',e.currentTarget.valueAsNumber)}></label>
-          <label class="stack">Background <input type="color" value={room.background??'#171829'} onchange={e=>set(room,'background',e.currentTarget.value)}></label>
-        </div>
-        {#each [['music','Music'],['ambience','Ambient FX']] as [key,label]}
-          <label class="stack">{label}<select value={room[key]??''} onchange={e=>set(room,key,e.currentTarget.value)}>
-            <option value="">None</option>{#each Object.keys(project.audio??{}) as id}<option value={id}>{id}</option>{/each}
+        {#if roomPanel==='room'}
+          <div class="row start-room">
+            {#if (project.start??Object.keys(project.rooms)[0])===roomId}<small>Starting room</small>
+            {:else}<button class="small-button" onclick={()=>set(project,'start',roomId)}>Set as starting room</button>{/if}
+          </div>
+          <label class="stack">Room name <input value={room.title??roomId} onchange={e=>setRoom('title',e.currentTarget.value)}></label>
+          <label class="stack">Room view <select aria-label="Room view" value={roomView} onchange={e=>setView(e.currentTarget.value)}>
+            <option value="platformer">Platformer</option><option value="top_down">Top-down</option>
           </select></label>
-        {/each}
-        <div class="heading row mini"><h3>Visual layers</h3><button class="small-button" title="Add layer" aria-label="Add layer" onclick={addLayer}>+</button></div>
-        {#each room.layers as item,index}
-          <button class="item" class:selected={layerIndex===index} onclick={()=>layerIndex=index}><span>{item.name}</span><small>{item.collidable?'Solid':'Visual'}</small></button>
-        {/each}
-        {#if layer}
-          <label class="stack">Layer name <input value={layer.name} onchange={e=>set(layer,'name',e.currentTarget.value)}></label>
-          <label class="stack">Draw order <input type="number" value={layer.order??layerIndex} onchange={e=>set(layer,'order',e.currentTarget.valueAsNumber)}></label>
-          <label class="check"><input type="checkbox" checked={layer.collidable} onchange={e=>set(layer,'collidable',e.currentTarget.checked)}> Collidable layer</label>
+          <div class="pair">
+            <label class="stack">Columns <input type="number" min="1" max={maxTiles} value={dimensions?.cols??room.cols} onchange={e=>resizeRoom('cols',e.currentTarget)}></label>
+            <label class="stack">Rows <input type="number" min="1" max={maxTiles} value={dimensions?.rows??room.rows} onchange={e=>resizeRoom('rows',e.currentTarget)}></label>
+            {#if roomView==='platformer'}
+              <label class="stack">Gravity <input type="number" min="-100" max="100" step="any" value={room.gravity??24} onchange={e=>setRoom('gravity',e.currentTarget.valueAsNumber)}></label>
+            {/if}
+            <label class="stack">Background <input type="color" value={room.background??'#171829'} onchange={e=>setRoom('background',e.currentTarget.value)}></label>
+          </div>
+          {#if dimensions}
+            <p class="crop-note">The new room size cuts off tiles or sprites.</p>
+            <div class="row"><button onclick={cropRoom}>Resize and crop</button><button onclick={()=>dimensions=null}>Cancel</button></div>
+          {/if}
+          <label class="check"><input type="checkbox" checked={room.closedEdges??roomView==='top_down'} onchange={e=>setRoom('closedEdges',e.currentTarget.checked)}> Solid room edges</label>
+          {#if roomView==='top_down'}
+            <label class="check"><input type="checkbox" checked={room.ySort??true} onchange={e=>setRoom('ySort',e.currentTarget.checked)}> Draw lower sprites in front</label>
+          {/if}
+          {#each [['music','Music'],['ambience','Ambient sound']] as [key,label]}
+            <label class="stack">{label}<select value={room[key]??''} onchange={e=>setRoom(key,e.currentTarget.value)}>
+              <option value="">None</option>{#each Object.keys(project.audio??{}) as id}<option value={id}>{id}</option>{/each}
+            </select></label>
+          {/each}
+        {:else if roomPanel==='layers'}
+          <div class="heading row mini"><h3>Draw order</h3><button class="small-button" disabled={busy} onclick={addLayer}>Add layer</button></div>
+          {#each sortedLayers as {layer:item,index}}
+            <button class="item" class:selected={layerIndex===index} onclick={()=>chooseLayer(index)}>
+              <span>{item.name}</span><small>{item.collidable?'Collision on':'Visual only'}</small>
+            </button>
+          {/each}
+          {#if layer}
+            <label class="stack">Layer name <input value={layer.name} onchange={e=>changeLayer('name',e.currentTarget.value)}></label>
+            <label class="check"><input type="checkbox" checked={layer.collidable} onchange={e=>changeLayer('collidable',e.currentTarget.checked)}> Enable collision</label>
+            <label class="stack">Layer order <input type="number" min="-10000" max="10000" value={layer.order??layerIndex} onchange={e=>{
+              const value=e.currentTarget.valueAsNumber;
+              if(Number.isInteger(value)&&Math.abs(value)<=10000)changeLayer('order',value);
+            }}></label>
+            <div class="row layer-actions">
+              <button disabled={busy||sortedLayers[0]?.index===layerIndex} onclick={()=>moveLayer(-1)}>Move up</button>
+              <button disabled={busy||sortedLayers.at(-1)?.index===layerIndex} onclick={()=>moveLayer(1)}>Move down</button>
+            </div>
+            {#if room.layers.length>1}<button class="small-button remove" onclick={removeLayer}>Remove layer</button>{/if}
+          {/if}
+        {:else}
+          {#if !room.entities.length}<p class="muted">Use Place sprite to add a sprite.</p>{/if}
+          {#each room.entities as entity,index}
+            <button class="item" class:selected={selectedEntity===index} onclick={()=>selectedEntity=index}>
+              <span>{entity.sprite}</span>{#if entity.player!=null}<small>Player {entity.player+1}</small>{/if}
+            </button>
+          {/each}
+          {#if actor}
+            <div class="pair">
+              <label class="stack">X position <input type="number" min="0" value={actor.x} onchange={e=>changeActor('x',e.currentTarget.valueAsNumber)}></label>
+              <label class="stack">Y position <input type="number" min="0" value={actor.y} onchange={e=>changeActor('y',e.currentTarget.valueAsNumber)}></label>
+            </div>
+            <label class="stack">Player slot <select aria-label="Sprite player slot" value={actor.player==null ? '' : String(actor.player)} onchange={e=>changeActor('player',e.currentTarget.value)}>
+              <option value="">None</option>{#each [0,1,2,3] as player}<option value={String(player)}>Player {player+1}</option>{/each}
+            </select></label>
+            <button class="small-button remove" onclick={()=>{editRoom(next=>next.entities.splice(selectedEntity,1));selectedEntity=-1;}}>Remove sprite</button>
+          {/if}
         {/if}
-        <div class="heading row mini"><h3>Placed sprites</h3></div>
-        {#each room.entities as actor,index}
-          <div class="actor row"><span>{actor.sprite}{actor.player==null ? '' : ' · P'+(actor.player+1)}</span><button class="small-button" aria-label={`Remove ${actor.sprite}`} onclick={()=>{room.entities.splice(index,1);mark();}}>×</button></div>
-        {/each}
       {:else}
         {@const target=tab==='blocks' ? sprite : inspector}
+        <div class="heading row"><h2>Sprite and tile settings</h2></div>
         {#if target}
           <p class="asset-name">{tab==='blocks'||assetKind==='sprite' ? spriteId : tileId}</p>
           {#if target.physics}
@@ -441,6 +576,7 @@
   .banner{margin:.6rem 1.1rem 0;padding:.55rem .65rem;border:1px solid #79505d;border-radius:7px;background:#30242f;}
   main{display:grid;grid-template-columns:minmax(155px,185px) minmax(300px,1fr) minmax(210px,255px);gap:.8rem;align-items:start;padding:.85rem 1.1rem;}
   .project,.inspector{padding:.65rem;}
+  .work{min-width:0;}
   .heading{justify-content:space-between;margin-bottom:.55rem;}
   h2{font-size:.94rem;}
   h3{font-size:.72rem;font-weight:700;color:var(--muted);}
@@ -456,21 +592,22 @@
   nav{margin-bottom:.65rem;}
   nav button{background:none;border-color:transparent;font-size:.8rem;}
   nav .active{color:var(--accent);border-color:#6b5769;background:#322b3c;}
-  .map{overflow:hidden;}
-  .maphead{justify-content:space-between;padding:.65rem .7rem;}
-  .mode{font-size:.74rem;}
-  .canvas-wrap{background:#171721;min-height:160px;display:grid;place-items:center;}
-  canvas{width:100%;max-height:65vh;object-fit:contain;touch-action:none;cursor:crosshair;}
-  .mapfoot{padding:.6rem .7rem;font-size:.75rem;}
-  .mapfoot label{display:flex;align-items:center;gap:.32rem;color:var(--muted);}
-  .mapfoot input{width:4.5rem;}
-  .mapfoot small{margin-left:auto;}
+  .panel-tabs{border-bottom:1px solid var(--line);padding-bottom:.45rem;margin-bottom:.45rem;}
+  .panel-tabs button,.layer-actions button{font-size:.73rem;padding:.3rem .35rem;}
+  .layer-actions,.remove,.crop-note{margin-top:.55rem;}
+  .crop-note{font-size:.75rem;color:var(--accent);margin-bottom:.35rem;}
+  .presets{display:grid;gap:.25rem;margin-bottom:.45rem;}
+  .presets button{font-size:.75rem;text-align:left;padding:.35rem;}
+  .export-menu{position:relative;}
+  .export-menu summary{padding:.42rem .62rem;border:1px solid var(--line);border-radius:7px;cursor:pointer;}
+  .export-menu>div{position:absolute;right:0;top:calc(100% + 6px);z-index:5;display:grid;min-width:11rem;padding:.3rem;}
+  .export-menu a{padding:.38rem .45rem;border-radius:5px;text-decoration:none;color:inherit;}
+  .export-menu a:hover{background:#3b3248;color:var(--accent);}
   .inspector{max-height:calc(100dvh - 5.6rem);overflow:auto;}
   .stack{display:grid;gap:.23rem;color:var(--muted);font-size:.75rem;margin-top:.45rem;}
   .pair{display:grid;grid-template-columns:1fr 1fr;gap:0 .46rem;}
   .mini{margin-top:.75rem;margin-bottom:.26rem;}
   .check{display:flex;align-items:center;gap:.3rem;font-size:.75rem;color:var(--muted);margin-top:.4rem;}
-  .actor{justify-content:space-between;font-size:.75rem;padding:.2rem .28rem;}
   .asseteditor,.empty{padding:.8rem;}
   .asseteditor .stack{max-width:34rem;}
   .asseteditor h3{margin-top:1rem;margin-bottom:.38rem;}
@@ -480,5 +617,5 @@
   .extra{margin-top:.55rem;}.start-room{margin-bottom:.15rem;}
   .asset-name{font-size:.85rem;color:var(--accent);}
   @media(max-width:880px){main{grid-template-columns:140px minmax(0,1fr);}.inspector{grid-column:2;max-height:none;}.status{display:none;}}
-  @media(max-width:570px){.appbar{align-items:start;padding:.55rem;}.actions{justify-content:end;font-size:.72rem;}.download{display:none;}main{display:flex;flex-direction:column;padding:.55rem;}.project,.work,.inspector{width:100%;}.project{display:grid;grid-template-columns:repeat(3,1fr);gap:.3rem;}.project>.heading{grid-column:1/4;}.category{margin-top:0;}.mapfoot small{margin-left:0;}}
+  @media(max-width:570px){.appbar{align-items:start;padding:.55rem;}.actions{justify-content:end;font-size:.72rem;}main{display:flex;flex-direction:column;padding:.55rem;}.project,.work,.inspector{width:100%;}.project{display:grid;grid-template-columns:repeat(3,1fr);gap:.3rem;}.project>.heading{grid-column:1/4;}.category{margin-top:0;}}
 </style>

@@ -228,6 +228,10 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     const cols = integer(room.cols, 1, Math.floor(4096 / size), 'room columns');
     const rows = integer(room.rows, 1, Math.floor(4096 / size), 'room rows');
     const width = cols * size, height = rows * size;
+    const view = room.view ?? (Math.abs(room.gravity ?? 24) < .01 ? 'top_down' : 'platformer');
+    if (!['platformer','top_down'].includes(view)) throw Error(`Unknown room view: ${view}`);
+    const gravity = view === 'top_down' ? 0 : number(room.gravity ?? 24, -100, 100, 'room gravity');
+    const ySort = room.ySort ?? view === 'top_down';
     const images = new Map(), baked = [], entities = [], solids = [], blockers = new Set();
     const usedSprites = new Set();
     function includeSprite(sprite) {
@@ -296,19 +300,32 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         x = end;
       }
     }
-    // Keep tile thumbnails and metadata in the global project catalog. Pack only room references.
+    if (room.closedEdges ?? view === 'top_down') {
+      const physics = props(undefined, 'static');
+      solids.push(
+        { x: -size/2, y: height/2, width: size, height: height+size*2, physics },
+        { x: width+size/2, y: height/2, width: size, height: height+size*2, physics },
+        { x: width/2, y: -size/2, width, height:size, physics },
+        { x: width/2, y: height+size/2, width, height:size, physics },
+      );
+    }
     atlases[id] = atlas(images);
     rooms[id] = { title: room.title ?? id, cols, rows, width, height, size, baked, solids, entities,
       blockers: [...blockers], background: room.background ?? '#101a23', music: room.music,
-      ambience: room.ambience, gravity: number(room.gravity ?? 24, -100, 100, 'room gravity') };
+      ambience: room.ambience, gravity, view, ySort };
   }
   const start = project.start ?? Object.keys(rooms)[0];
   if (!Object.hasOwn(rooms, start)) throw Error('Choose a valid starting room');
-  const thumbnails = Object.fromEntries(Object.entries(tiles).map(([id, tile]) => {
-    const source = frames.get(tile.variants[0][0].image);
-    return [id, PNG.sync.write({ width: source.width, height: source.height, data: source.rgba })];
-  }));
-  return { name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, thumbnails };
+  function thumbnail(frame) {
+    const { width, height, rgba: data } = frames.get(frame.image);
+    return PNG.sync.write({ width, height, data });
+  }
+  const tilePreviews = Object.fromEntries(Object.entries(tiles).map(([id, tile]) =>
+    [id, { mode: tile.physics.mode, variants: tile.variants.map(clip => thumbnail(clip[0])) }]));
+  const spritePreviews = Object.fromEntries(Object.entries(sprites).map(([id, sprite]) =>
+    [id, thumbnail((sprite.clips[sprite.animation] ?? sprite.clips.default).frames[0])]));
+  return { name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio,
+    tilePreviews, spritePreviews };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

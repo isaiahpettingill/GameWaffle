@@ -406,6 +406,146 @@
         }
       ]
     },
+    "courtyard": {
+      "title": "Top-down Courtyard",
+      "view": "top_down",
+      "background": "#252838",
+      "cols": 22,
+      "rows": 15,
+      "music": "music",
+      "entities": [
+        {
+          "sprite": "maker",
+          "player": 0,
+          "x": 84,
+          "y": 260
+        },
+        {
+          "sprite": "runner",
+          "player": 1,
+          "x": 116,
+          "y": 260
+        },
+        {
+          "sprite": "scout",
+          "player": 2,
+          "x": 148,
+          "y": 260
+        },
+        {
+          "sprite": "pilot",
+          "player": 3,
+          "x": 180,
+          "y": 260
+        },
+        {
+          "sprite": "drone",
+          "x": 420,
+          "y": 100
+        }
+      ],
+      "layers": [
+        {
+          "name": "Ground",
+          "order": 0,
+          "collidable": false,
+          "cells": [
+            [
+              8,
+              5,
+              "water"
+            ],
+            [
+              9,
+              5,
+              "water"
+            ],
+            [
+              8,
+              6,
+              "water"
+            ],
+            [
+              9,
+              6,
+              "water"
+            ]
+          ]
+        },
+        {
+          "name": "Walls",
+          "order": 2,
+          "collidable": true,
+          "cells": [
+            [
+              7,
+              8,
+              "stone"
+            ],
+            [
+              8,
+              8,
+              "stone"
+            ],
+            [
+              9,
+              8,
+              "stone"
+            ],
+            [
+              10,
+              8,
+              "stone"
+            ],
+            [
+              11,
+              8,
+              "stone"
+            ],
+            [
+              12,
+              8,
+              "stone"
+            ],
+            [
+              13,
+              8,
+              "stone"
+            ],
+            [
+              7,
+              7,
+              "stone"
+            ],
+            [
+              13,
+              7,
+              "stone"
+            ],
+            [
+              13,
+              6,
+              "stone"
+            ],
+            [
+              5,
+              6,
+              "crate"
+            ],
+            [
+              11,
+              10,
+              "crate"
+            ],
+            [
+              15,
+              7,
+              "crate"
+            ]
+          ]
+        }
+      ]
+    },
     "vault": {
       "title": "Cooling Vault",
       "background": "#14252c",

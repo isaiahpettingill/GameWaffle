@@ -6,7 +6,8 @@
     "build": "node src/compiler.mjs && node src/build.mjs",
     "start": "node src/server.mjs",
     "demo": "node src/demo.mjs",
-    "cart": "node src/compiler.mjs"
+    "cart": "node src/compiler.mjs",
+    "export:web": "node src/web-export.mjs"
   },
   "type": "module",
   "dependencies": {
