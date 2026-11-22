@@ -1,0 +1,17 @@
+[package]
+name = "gamewaffle-runtime"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+box2d-rs = "0.0.4"
+ciborium = "0.2.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wasm-bindgen = "=0.2.105"
+
+[patch.crates-io]
+box2d-rs = { path = "vendor/box2d-rs" }

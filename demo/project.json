@@ -1,0 +1,674 @@
+{
+  "name": "Basalt Works",
+  "start": "yard",
+  "tileSize": 24,
+  "sprites": {
+    "maker": {
+      "source": "assets/maker.aseprite",
+      "script": "scripts/maker.cbor",
+      "animation": "idle",
+      "team": 1,
+      "layer": 4,
+      "width": 20,
+      "height": 23,
+      "projectile": "spark",
+      "physics": {
+        "mode": "dynamic",
+        "density": 1,
+        "friction": 0.15,
+        "group": -1,
+        "health": 7
+      }
+    },
+    "runner": {
+      "source": "assets/runner.aseprite",
+      "script": "scripts/runner.cbor",
+      "animation": "idle",
+      "team": 1,
+      "layer": 4,
+      "width": 20,
+      "height": 23,
+      "projectile": "spark",
+      "physics": {
+        "mode": "dynamic",
+        "density": 1,
+        "friction": 0.15,
+        "group": -1,
+        "health": 7
+      }
+    },
+    "scout": {
+      "source": "assets/scout.aseprite",
+      "script": "scripts/scout.cbor",
+      "animation": "idle",
+      "team": 1,
+      "layer": 4,
+      "width": 20,
+      "height": 23,
+      "projectile": "spark",
+      "physics": {
+        "mode": "dynamic",
+        "density": 1,
+        "friction": 0.15,
+        "group": -1,
+        "health": 7
+      }
+    },
+    "pilot": {
+      "source": "assets/pilot.aseprite",
+      "script": "scripts/pilot.cbor",
+      "animation": "idle",
+      "team": 1,
+      "layer": 4,
+      "width": 20,
+      "height": 23,
+      "projectile": "spark",
+      "physics": {
+        "mode": "dynamic",
+        "density": 1,
+        "friction": 0.15,
+        "group": -1,
+        "health": 7
+      }
+    },
+    "drone": {
+      "source": "assets/drone.aseprite",
+      "script": "scripts/drone.cbor",
+      "animation": "idle",
+      "team": 2,
+      "layer": 4,
+      "width": 20,
+      "height": 20,
+      "physics": {
+        "mode": "dynamic",
+        "gravity": 0,
+        "health": 5,
+        "elasticity": 0.4
+      }
+    },
+    "spark": {
+      "source": "assets/spark.aseprite",
+      "width": 8,
+      "height": 8,
+      "physics": {
+        "mode": "none"
+      }
+    }
+  },
+  "tiles": {
+    "stone": {
+      "source": "assets/stone.aseprite",
+      "physics": {
+        "mode": "static"
+      }
+    },
+    "crate": {
+      "source": "assets/crate.aseprite",
+      "physics": {
+        "mode": "breakable"
+      }
+    },
+    "ladder": {
+      "source": "assets/ladder.aseprite",
+      "physics": {
+        "mode": "ladder"
+      }
+    },
+    "ledge": {
+      "source": "assets/ledge.aseprite",
+      "physics": {
+        "mode": "one_way"
+      }
+    },
+    "water": {
+      "source": "assets/water.aseprite",
+      "physics": {
+        "mode": "fluid"
+      }
+    }
+  },
+  "audio": {
+    "hit": "assets/hit.wav",
+    "music": "assets/music.wav"
+  },
+  "rooms": {
+    "yard": {
+      "title": "Foundry Yard",
+      "background": "#171829",
+      "cols": 28,
+      "rows": 15,
+      "music": "music",
+      "entities": [
+        {
+          "sprite": "maker",
+          "player": 0,
+          "x": 62,
+          "y": 311
+        },
+        {
+          "sprite": "runner",
+          "player": 1,
+          "x": 92,
+          "y": 311
+        },
+        {
+          "sprite": "scout",
+          "player": 2,
+          "x": 122,
+          "y": 311
+        },
+        {
+          "sprite": "pilot",
+          "player": 3,
+          "x": 152,
+          "y": 311
+        },
+        {
+          "sprite": "drone",
+          "x": 532,
+          "y": 230
+        }
+      ],
+      "layers": [
+        {
+          "name": "Scenery",
+          "order": 0,
+          "collidable": false,
+          "cells": [
+            [
+              9,
+              13,
+              "water"
+            ],
+            [
+              10,
+              13,
+              "water"
+            ],
+            [
+              11,
+              13,
+              "water"
+            ]
+          ]
+        },
+        {
+          "name": "Terrain",
+          "order": 2,
+          "collidable": true,
+          "cells": [
+            [
+              0,
+              14,
+              "stone"
+            ],
+            [
+              1,
+              14,
+              "stone"
+            ],
+            [
+              2,
+              14,
+              "stone"
+            ],
+            [
+              3,
+              14,
+              "stone"
+            ],
+            [
+              4,
+              14,
+              "stone"
+            ],
+            [
+              5,
+              14,
+              "stone"
+            ],
+            [
+              6,
+              14,
+              "stone"
+            ],
+            [
+              7,
+              14,
+              "stone"
+            ],
+            [
+              8,
+              14,
+              "stone"
+            ],
+            [
+              9,
+              14,
+              "stone"
+            ],
+            [
+              10,
+              14,
+              "stone"
+            ],
+            [
+              11,
+              14,
+              "stone"
+            ],
+            [
+              12,
+              14,
+              "stone"
+            ],
+            [
+              13,
+              14,
+              "stone"
+            ],
+            [
+              14,
+              14,
+              "stone"
+            ],
+            [
+              15,
+              14,
+              "stone"
+            ],
+            [
+              16,
+              14,
+              "stone"
+            ],
+            [
+              17,
+              14,
+              "stone"
+            ],
+            [
+              18,
+              14,
+              "stone"
+            ],
+            [
+              19,
+              14,
+              "stone"
+            ],
+            [
+              20,
+              14,
+              "stone"
+            ],
+            [
+              21,
+              14,
+              "stone"
+            ],
+            [
+              22,
+              14,
+              "stone"
+            ],
+            [
+              23,
+              14,
+              "stone"
+            ],
+            [
+              24,
+              14,
+              "stone"
+            ],
+            [
+              25,
+              14,
+              "stone"
+            ],
+            [
+              26,
+              14,
+              "stone"
+            ],
+            [
+              27,
+              14,
+              "stone"
+            ],
+            [
+              13,
+              13,
+              "crate"
+            ],
+            [
+              14,
+              13,
+              "crate"
+            ],
+            [
+              14,
+              12,
+              "crate"
+            ],
+            [
+              17,
+              13,
+              "ladder"
+            ],
+            [
+              17,
+              12,
+              "ladder"
+            ],
+            [
+              17,
+              11,
+              "ladder"
+            ],
+            [
+              17,
+              10,
+              "ladder"
+            ],
+            [
+              18,
+              10,
+              "ledge"
+            ],
+            [
+              19,
+              10,
+              "ledge"
+            ],
+            [
+              20,
+              10,
+              "ledge"
+            ],
+            [
+              23,
+              13,
+              "water"
+            ],
+            [
+              24,
+              13,
+              "water"
+            ],
+            [
+              25,
+              13,
+              "water"
+            ]
+          ]
+        }
+      ]
+    },
+    "vault": {
+      "title": "Cooling Vault",
+      "background": "#14252c",
+      "cols": 28,
+      "rows": 15,
+      "music": "music",
+      "entities": [
+        {
+          "sprite": "maker",
+          "player": 0,
+          "x": 62,
+          "y": 311
+        },
+        {
+          "sprite": "runner",
+          "player": 1,
+          "x": 92,
+          "y": 311
+        },
+        {
+          "sprite": "scout",
+          "player": 2,
+          "x": 122,
+          "y": 311
+        },
+        {
+          "sprite": "pilot",
+          "player": 3,
+          "x": 152,
+          "y": 311
+        },
+        {
+          "sprite": "drone",
+          "x": 587,
+          "y": 230
+        }
+      ],
+      "layers": [
+        {
+          "name": "Scenery",
+          "order": 0,
+          "collidable": false,
+          "cells": [
+            [
+              9,
+              13,
+              "water"
+            ],
+            [
+              10,
+              13,
+              "water"
+            ],
+            [
+              11,
+              13,
+              "water"
+            ]
+          ]
+        },
+        {
+          "name": "Terrain",
+          "order": 2,
+          "collidable": true,
+          "cells": [
+            [
+              0,
+              14,
+              "stone"
+            ],
+            [
+              1,
+              14,
+              "stone"
+            ],
+            [
+              2,
+              14,
+              "stone"
+            ],
+            [
+              3,
+              14,
+              "stone"
+            ],
+            [
+              4,
+              14,
+              "stone"
+            ],
+            [
+              5,
+              14,
+              "stone"
+            ],
+            [
+              6,
+              14,
+              "stone"
+            ],
+            [
+              7,
+              14,
+              "stone"
+            ],
+            [
+              8,
+              14,
+              "stone"
+            ],
+            [
+              9,
+              14,
+              "stone"
+            ],
+            [
+              10,
+              14,
+              "stone"
+            ],
+            [
+              11,
+              14,
+              "stone"
+            ],
+            [
+              12,
+              14,
+              "stone"
+            ],
+            [
+              13,
+              14,
+              "stone"
+            ],
+            [
+              14,
+              14,
+              "stone"
+            ],
+            [
+              15,
+              14,
+              "stone"
+            ],
+            [
+              16,
+              14,
+              "stone"
+            ],
+            [
+              17,
+              14,
+              "stone"
+            ],
+            [
+              18,
+              14,
+              "stone"
+            ],
+            [
+              19,
+              14,
+              "stone"
+            ],
+            [
+              20,
+              14,
+              "stone"
+            ],
+            [
+              21,
+              14,
+              "stone"
+            ],
+            [
+              22,
+              14,
+              "stone"
+            ],
+            [
+              23,
+              14,
+              "stone"
+            ],
+            [
+              24,
+              14,
+              "stone"
+            ],
+            [
+              25,
+              14,
+              "stone"
+            ],
+            [
+              26,
+              14,
+              "stone"
+            ],
+            [
+              27,
+              14,
+              "stone"
+            ],
+            [
+              8,
+              13,
+              "crate"
+            ],
+            [
+              11,
+              12,
+              "ledge"
+            ],
+            [
+              12,
+              12,
+              "ledge"
+            ],
+            [
+              15,
+              12,
+              "stone"
+            ],
+            [
+              15,
+              13,
+              "stone"
+            ],
+            [
+              18,
+              13,
+              "water"
+            ],
+            [
+              19,
+              13,
+              "water"
+            ],
+            [
+              20,
+              13,
+              "water"
+            ],
+            [
+              23,
+              13,
+              "ladder"
+            ],
+            [
+              23,
+              12,
+              "ladder"
+            ],
+            [
+              24,
+              11,
+              "ledge"
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,50 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #ece9e3;
+  background: #191923;
+  color-scheme: dark;
+  font-synthesis: none;
+  --bg: #191923;
+  --panel: #23232f;
+  --well: #1c1c27;
+  --line: #3c3949;
+  --muted: #b6b0c0;
+  --accent: #f4c77e;
+  --mint: #a3d1b7;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, input, select { font: inherit; }
+button, .button {
+  color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 7px;
+  padding: .48rem .72rem; cursor: pointer; line-height: 1.25;
+}
+button:hover, .button:hover { border-color: var(--accent); }
+button:disabled { opacity:.45; cursor: default; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 2px solid var(--mint); outline-offset: 3px;
+}
+button.primary, .button.primary { background:var(--accent); border-color:var(--accent); color:#2a2231; font-weight:700; }
+button.selected { border-color:var(--accent); color:var(--accent); }
+input, select {
+  width:100%; background:var(--well); border:1px solid var(--line); color:inherit; border-radius:6px; padding:.42rem .5rem;
+}
+input[type=checkbox] { width:auto; accent-color:var(--accent); }
+input[type=color] { height:2.25rem; padding:.15rem .25rem; }
+a { color: var(--accent); }
+a.button { text-decoration:none; display:inline-flex; align-items:center; }
+h1,h2,h3,p { margin:0; }
+small, .muted { color:var(--muted); }
+label { min-width:0; }
+canvas { display:block; image-rendering:pixelated; }
+.logo {
+  display:grid; grid-template-columns:repeat(3, 5px); gap:3px; padding:7px;
+  border:1px solid #8c694a; border-radius:8px; color:var(--accent); background:#322839;
+}
+.logo i { width:5px; height:5px; border:1px solid currentColor; background:#f4c77e50; border-radius:1px; }
+.brand { display:flex; align-items:center; gap:.7rem; }
+.brand h1 { font-size:1.04rem; font-weight:750; letter-spacing:.005em; }
+.brand small { display:block; margin-top:.14rem; font-size:.72rem; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+.error { color:#ffabaa; }
+.row { display:flex; flex-wrap:wrap; align-items:center; gap:.45rem; }
