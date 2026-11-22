@@ -26,6 +26,7 @@ struct Bullet {
 
 struct Actor {
     id: u32,
+    name: Option<String>,
     sprite: Option<String>,
     tile: Option<Clip>,
     physics: Physics,
@@ -87,6 +88,7 @@ enum Action {
     },
     Remove(u32),
     Fire(u32, String, f32, f32),
+    Instance(Spawn),
 }
 
 #[wasm_bindgen]
@@ -105,6 +107,7 @@ pub struct Runtime {
     events: Vec<RuntimeEvent>,
     transition: Option<String>,
     pending_start: Vec<u32>,
+    pending_instances: Vec<Spawn>,
 }
 
 #[wasm_bindgen]
@@ -162,6 +165,7 @@ impl Runtime {
                     .map_or("", |clip| clip.image(elapsed));
                 ActorView {
                     id: actor.id,
+                    name: actor.name.as_deref(),
                     x: actor.p.x,
                     y: actor.p.y,
                     width: actor.width,
@@ -228,6 +232,7 @@ impl Runtime {
             events: Vec::new(),
             transition: None,
             pending_start: Vec::new(),
+            pending_instances: Vec::new(),
         };
         rt.load(&start)?;
         Ok(rt)
@@ -241,6 +246,7 @@ impl Runtime {
         self.blocked = room.blockers.iter().copied().collect();
         self.static_ids.clear();
         self.pending_start.clear();
+        self.pending_instances.clear();
         self.sounds.clear();
         self.events.clear();
         self.next = 1;
@@ -256,33 +262,39 @@ impl Runtime {
             self.static_ids.insert(id);
         }
         for spawn in room.entities {
-            if spawn.sprite.is_some()
-                && !self
-                    .game
-                    .sprites
-                    .contains_key(spawn.sprite.as_deref().unwrap_or_default())
-            {
-                return Err("Unknown sprite in room".into());
-            }
-            let sprite = spawn
-                .sprite
-                .as_ref()
-                .and_then(|id| self.game.sprites.get(id));
-            let config = spawn
-                .physics
-                .unwrap_or_else(|| sprite.map_or_else(Physics::default, |s| s.physics.clone()));
-            let size = sprite.map_or((room.size, room.size), |s| (s.width, s.height));
-            let layer = spawn.layer.unwrap_or_else(|| sprite.map_or(0, |s| s.layer));
-            let clip = spawn.clip.map(|frames| Clip { frames, repeat: 0 });
-            let player = spawn.player.filter(|slot| *slot < 4);
-            self.add(
-                spawn.sprite,
-                clip,
-                config,
-                Vec2::new(spawn.x, spawn.y),
-                size,
-                (layer, player),
-            );
+            self.add_scene_actor(spawn, room.size)?;
+        }
+        Ok(())
+    }
+
+    fn add_scene_actor(&mut self, spawn: Spawn, size: f32) -> Result<(), String> {
+        let definition = match spawn.sprite.as_ref() {
+            Some(key) => Some(self.game.sprites.get(key).ok_or("Unknown sprite in room")?),
+            None => None,
+        };
+        let config = spawn.physics.unwrap_or_else(|| {
+            definition.map_or_else(Physics::default, |sprite| sprite.physics.clone())
+        });
+        let size = definition.map_or((size, size), |sprite| (sprite.width, sprite.height));
+        let layer = spawn
+            .layer
+            .unwrap_or_else(|| definition.map_or(0, |sprite| sprite.layer));
+        let clip = spawn.clip.map(|frames| Clip { frames, repeat: 0 });
+        let id = self.add(
+            spawn.sprite,
+            clip,
+            config,
+            Vec2::new(spawn.x, spawn.y),
+            size,
+            (layer, spawn.player.filter(|slot| *slot < 4)),
+        );
+        let actor = self.actors.get_mut(&id).unwrap();
+        actor.name = spawn.name;
+        if let Some(animation) = spawn.animation {
+            actor.animation = animation;
+        }
+        if spawn.flip_x == Some(true) {
+            actor.face(Vec2::new(-1.0, 0.0), false);
         }
         Ok(())
     }
@@ -310,6 +322,7 @@ impl Runtime {
             id,
             Actor {
                 id,
+                name: None,
                 sprite,
                 tile,
                 physics,
@@ -413,6 +426,13 @@ impl Runtime {
             self.run(b, event, &inputs, &mut actions);
         }
         self.apply(&mut actions, &inputs);
+        let size = self.game.rooms[&self.room].size;
+        for spawn in std::mem::take(&mut self.pending_instances) {
+            if self.actors.len() >= MAX_ACTORS + self.static_ids.len() {
+                break;
+            }
+            self.add_scene_actor(spawn, size)?;
+        }
         Ok(())
     }
 
@@ -514,6 +534,15 @@ impl Runtime {
                 Some(8) if self.game.rooms.contains_key(name(1)) && name(1) != self.room => {
                     self.transition = Some(name(1).into())
                 }
+                Some(9) if self.game.sprites.contains_key(name(1)) => {
+                    let p = self.actors[&id].p;
+                    actions.push(Action::Instance(Spawn {
+                        sprite: Some(name(1).into()),
+                        x: p.x + arg(2),
+                        y: p.y + arg(3),
+                        ..Spawn::default()
+                    }));
+                }
                 _ => {}
             }
         }
@@ -551,6 +580,11 @@ impl Runtime {
             budget -= 1;
             match action {
                 Action::Fire(id, aim, speed, damage) => self.fire(id, aim, speed, damage),
+                Action::Instance(spawn) => {
+                    if self.pending_instances.len() < MAX_ACTORS {
+                        self.pending_instances.push(spawn);
+                    }
+                }
                 Action::Damage {
                     source,
                     target: id,

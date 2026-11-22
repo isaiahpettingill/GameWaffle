@@ -7,19 +7,33 @@ Blockly.setLocale(English);
 
 const labels = {start:'Room start',tick:'Every tick',a:'Press A',b:'Press B',x:'Press X',menu:'Press Start',
   begin_contact:'Contact begins',end_contact:'Contact ends',damage:'Receive damage',destroy:'Destroyed'};
-const colors = {walk:218,jump:218,velocity:218,damage:354,fire:354,chase:159,animate:280,sound:37,room:159};
+const colors = {walk:218,jump:218,velocity:218,damage:354,fire:354,chase:159,animate:280,sound:37,room:159,spawn:187};
 const eventBlock = 'waffle_event';
-Blockly.defineBlocksWithJsonArray([
-  { type:eventBlock, message0:'When %1', args0:[{type:'field_dropdown',name:'event',options:Events.map(id=>[labels[id],id])}],
-    nextStatement:'waffle',colour:41,tooltip:'Starts a stack of blocks when this event occurs.' },
-  ...Object.entries(Blocks).map(([id,[message,fields]])=>({
+const spriteOptions = new WeakMap();
+function blockDefinition(id) {
+  const [message,fields] = Blocks[id];
+  return {
     type:`waffle_${id}`, message0:message, colour:colors[id],
     args0:fields.map(([name,type,fallback])=> type === 'number' ? {type:'field_number',name,value:fallback,min:-10000,max:10000}
       : Array.isArray(type) ? {type:'field_dropdown',name,options:type.map(value=>[value.replaceAll('_',' '),value])}
       : {type:'field_input',name,text:fallback}),
     previousStatement:'waffle', nextStatement:'waffle',
-  })),
+  };
+}
+Blockly.defineBlocksWithJsonArray([
+  { type:eventBlock, message0:'When %1', args0:[{type:'field_dropdown',name:'event',options:Events.map(id=>[labels[id],id])}],
+    nextStatement:'waffle',colour:41,tooltip:'Starts a stack of blocks when this event occurs.' },
+  ...Object.keys(Blocks).filter(id=>id!=='spawn').map(blockDefinition),
 ]);
+Blockly.Blocks.waffle_spawn = {
+  init() {
+    const workspace = this.workspace.targetWorkspace ?? this.workspace;
+    const options = spriteOptions.get(workspace);
+    const spec = blockDefinition('spawn');
+    if (options?.length) spec.args0[0] = {type:'field_dropdown',name:'sprite',options};
+    this.jsonInit(spec);
+  },
+};
 
 const theme = Blockly.Theme.defineTheme('gamewaffle',{
   name:'gamewaffle',base:Blockly.Themes.Classic,
@@ -31,7 +45,7 @@ const theme = Blockly.Theme.defineTheme('gamewaffle',{
   fontStyle:{family:'system-ui, sans-serif',weight:'600',size:12},
 });
 const blocks = (ids)=>ids.map(id=>({kind:'block',type:`waffle_${id}`}));
-export function mountBlocks(node, onChange) {
+export function mountBlocks(node, onChange, sprites) {
   const workspace = Blockly.inject(node,{
     theme, renderer:'zelos', trashcan:true, media:'./blockly-media/',
     grid:{spacing:22,length:2,colour:'#454052',snap:false},
@@ -41,9 +55,10 @@ export function mountBlocks(node, onChange) {
       {kind:'category',name:'Events',colour:41,contents:[{kind:'block',type:eventBlock}]},
       {kind:'category',name:'Motion',colour:218,contents:blocks(['walk','jump','velocity','chase'])},
       {kind:'category',name:'Combat',colour:354,contents:blocks(['damage','fire'])},
-      {kind:'category',name:'Room & media',colour:159,contents:blocks(['animate','sound','room'])},
+      {kind:'category',name:'Room & media',colour:159,contents:blocks(['spawn','animate','sound','room'])},
     ]},
   });
+  spriteOptions.set(workspace,sprites.map(id=>[id,id]));
   let changing = false;
   workspace.addChangeListener(event=>{
     if (!changing && !event.isUiEvent && [Blockly.Events.BLOCK_CREATE,Blockly.Events.BLOCK_DELETE,Blockly.Events.BLOCK_CHANGE,Blockly.Events.BLOCK_MOVE].includes(event.type)) onChange();

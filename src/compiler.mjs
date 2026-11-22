@@ -6,6 +6,7 @@ import { encode as encodeQoa } from 'qoa-format';
 import { readAseprite, tagFrames } from './ase.mjs';
 import { decodeCbor, pack } from './cartridge.mjs';
 import { Blocks, Events, Opcodes } from './schema.mjs';
+import { instanceNames } from './instances.mjs';
 
 export function projectPath(root, file) {
   const target = resolve(root, file);
@@ -190,6 +191,15 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     number(sprites[id].width, 1, 8192, 'sprite width');
     number(sprites[id].height, 1, 8192, 'sprite height');
   }
+  for (const [id, sprite] of Object.entries(sprites)) {
+    for (const instructions of Object.values(sprite.code)) {
+      for (const [opcode, target] of instructions) {
+        if (opcode === Opcodes.spawn && !Object.hasOwn(sprites, target)) {
+          throw Error(`Sprite "${id}" adds an instance of unknown sprite "${target}"`);
+        }
+      }
+    }
+  }
   const size = integer(project.tileSize ?? 24, 4, 128, 'tile size');
   const tiles = Object.create(null);
   for (const [id, tile] of Object.entries(project.tiles ?? {})) {
@@ -241,10 +251,27 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       usedSprites.add(sprite);
       for (const clip of Object.values(definition.clips)) for (const frame of clip.frames) images.set(frame.image, frames.get(frame.image));
       if (definition.projectile) includeSprite(definition.projectile);
+      for (const instructions of Object.values(definition.code)) {
+        for (const [opcode, target] of instructions) {
+          if (opcode === Opcodes.spawn) includeSprite(target);
+        }
+      }
     }
     const players = new Set();
-    for (const entry of room.entities ?? []) {
+    const names = instanceNames(room.entities ?? []);
+    const usedNames = new Set();
+    for (const [index, entry] of (room.entities ?? []).entries()) {
       includeSprite(entry.sprite);
+      const name = names[index];
+      if (typeof name !== 'string' || !name.trim() || name.length > 64 || /[\x00-\x1f\x7f]/.test(name)) {
+        throw Error(`Invalid instance name in room "${id}"`);
+      }
+      if (usedNames.has(name)) throw Error(`Duplicate instance name "${name}" in room "${id}"`);
+      usedNames.add(name);
+      const definition = sprites[entry.sprite];
+      if (entry.layer != null) integer(entry.layer, -10000, 10000, 'instance visual layer');
+      const animation = entry.animation != null && Object.hasOwn(definition.clips, entry.animation) ? entry.animation : undefined;
+      if (entry.flipX != null && typeof entry.flipX !== 'boolean') throw Error(`Invalid facing for instance "${name}"`);
       number(entry.x, 0, width, 'entity x');
       number(entry.y, 0, height, 'entity y');
       if (entry.player != null) {
@@ -252,7 +279,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         if (players.has(entry.player)) throw Error(`Duplicate player slot in ${id}`);
         players.add(entry.player);
       }
-      entities.push({ ...entry, physics: entry.physics ? props(entry.physics, sprites[entry.sprite].physics.mode) : undefined });
+      const physics = entry.physics ? props({ ...definition.physics, ...entry.physics }, definition.physics.mode) : undefined;
+      entities.push({ ...entry, name, animation, physics });
     }
     for (const sound of [room.music, room.ambience].filter(Boolean)) {
       if (!Object.hasOwn(audio, sound)) throw Error(`Unknown room audio: ${sound}`);

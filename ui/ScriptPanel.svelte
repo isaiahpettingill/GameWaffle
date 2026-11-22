@@ -1,11 +1,11 @@
 <script>
   import { onMount } from 'svelte';
   import { mountBlocks } from './blocks.js';
-  let { sprite, dirty = $bindable(false), onSave } = $props();
+  let { sprite, sprites, dirty = $bindable(false), onSave } = $props();
   let host, blockEditor, version=0;
   let error=$state(''), ready=$state(false), busy=$state(false);
   onMount(()=>{
-    blockEditor=mountBlocks(host,()=>{dirty=true;});
+    blockEditor=mountBlocks(host,()=>{dirty=true;},sprites);
     open(sprite);
     return ()=>{version++;blockEditor.dispose();};
   });

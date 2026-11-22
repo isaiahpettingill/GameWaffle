@@ -108,13 +108,17 @@ pub struct Sprite {
     pub projectile: Option<String>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 pub struct Spawn {
     pub x: f32,
     pub y: f32,
     pub layer: Option<i32>,
     pub player: Option<usize>,
     pub sprite: Option<String>,
+    pub name: Option<String>,
+    pub animation: Option<String>,
+    #[serde(rename = "flipX")]
+    pub flip_x: Option<bool>,
     pub clip: Option<Vec<Frame>>,
     pub physics: Option<Physics>,
 }
@@ -186,6 +190,8 @@ pub struct ActorView<'a> {
     pub layer: i32,
     pub facing: f32,
     pub image: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<&'a str>,
     pub player: Option<usize>,
     pub health: f32,
 }

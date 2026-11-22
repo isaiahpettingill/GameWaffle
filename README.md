@@ -27,7 +27,7 @@ npm start -- --project path/to/project
 1. In **Project**, select **New room** (+). Select **New platformer room** or **New top-down room**.
 2. Select the layer that you want to edit. Use **Terrain** or **Walls** for collision. Use **Background** or **Ground** for decoration.
 3. Select a tile from the palette. Select **Brush**. Drag across the map to paint tiles. Use **Rectangle** to fill an area. Use **Pick tile** to select a tile from the map.
-4. Select **Place sprite**. Select a sprite and, if necessary, a player slot. Click the map to place the sprite. Use **Select sprite** to move or remove it.
+4. Select a sprite definition in **Project**. Click the map to add an instance. You can also drag the definition to the map.
 5. Select **Play room** to save and test the room.
 
 Use **Grid** to show tile boundaries. Use **Collision** to show collision tiles. Use **Pan**, the zoom controls, and **Fit** to change the view. Use **Undo** to reverse a complete brush stroke or room edit. Use **Redo** to apply the change again.
@@ -35,13 +35,21 @@ Use **Grid** to show tile boundaries. Use **Collision** to show collision tiles.
 | Task | Shortcut |
 |---|---|
 | Brush, eraser, rectangle, pick tile | B, E, R, I |
-| Place sprite, select sprite, pan | P, V, H |
+| Add instance, select instance, pan | P, V, H |
 | Pan temporarily | Hold Space or drag with the middle mouse button |
 | Remove the selected sprite | Delete |
 | Undo and redo | Ctrl+Z and Ctrl+Shift+Z |
 | Save the project | Ctrl+S |
 
 On macOS, use Command in place of Ctrl.
+
+### Use sprite instances
+
+Add a sprite definition once. Add as many instances of that definition as necessary. Instances use the same art and script. Each instance has its own name, position, and game state.
+
+Select an instance on the map or in the **Instances** panel. Set its player slot if it needs player controls. Open **Instance overrides** to change its starting health, animation, draw layer, or facing. Leave a field empty to use the definition value where applicable. Select **Open definition** or **Open script** to make a change for all instances.
+
+To create an instance during play, use **Add instance of** in a Blockly script. Select the sprite definition. Set the X and Y offsets in pixels from the instance that runs the block. The new instance runs the **Start** event before its first physics step.
 
 ### Platformer and top-down settings
 
@@ -55,7 +63,7 @@ Use a collidable layer for walls. The pathfinding block uses four-direction A* o
 
 Use [demo/project.json](demo/project.json) as an example. Put art and audio files in the project's `assets/` directory. Studio rebuilds the saved project when these files change. Select **Rebuild assets** to start a rebuild manually.
 
-- **Sprites.** Register the Aseprite file in **Assets**. Set the physics mode, collision filter, and visual layer. Use **Blocks** to attach behavior to events. Studio saves each sprite script as CBOR. The compiler converts the blocks to operation codes and operands.
+- **Sprites.** Register the Aseprite file in **Assets**. Set the physics mode. Open **Collision filter** to set the category, mask, and group. Open **Appearance** to set the visual layer. Use **Blocks** to attach behavior to events. Studio saves each sprite script as CBOR. The compiler converts the blocks to operation codes and operands.
 - **Tiles.** Register the Aseprite file and select a tag. Each frame in the tag is a variant. Use `:animated:` or `:fluid:` to play the frames in sequence. Use `:mirror-x:`, `:mirror-y:`, or `:rot-90:` to transform the frames. Set tile properties in Studio.
 - **Art.** Studio reads `.ase` and `.aseprite` files. It uses indexed palettes, transparency, frame times, and tag playback direction. Flatten native Aseprite tilemap layers and layers with non-normal blend modes before import.
 - **Collision.** Enable collision on a room layer to use its tile physics. Available tile types include solid tiles, one-way platforms, ladders, breakable tiles, fluid zones, and rigid bodies. The compiler combines adjacent static collision tiles and makes a separate texture atlas for each room.

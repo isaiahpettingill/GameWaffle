@@ -9,6 +9,7 @@ export const Blocks = {
   velocity: ['Set velocity x %1 y %2', [['x','number',0], ['y','number',0]]],
   animate: ['Play animation %1', [['tag','text','idle']]],
   room: ['Go to room %1', [['room','text','yard']]],
+  spawn: ['Add instance of %1 at offset X %2 Y %3', [['sprite','text','drone'],['x','number',0],['y','number',0]]],
 };
 export const Opcodes = Object.fromEntries(Object.keys(Blocks).map((name, i) => [name, i]));
 export const buttons = ['up','down','left','right','a','b','x','menu'];
