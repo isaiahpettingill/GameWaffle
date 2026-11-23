@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=GameWaffle Studio
+Exec=AppRun %f
+Icon=gamewaffle
+Categories=Development;Game;
+Terminal=true

@@ -1,15 +1,17 @@
 <script>
-  import { tick } from 'svelte';
+  import { platformGravity, roomBorder } from '../src/schema.mjs';
+import { tick } from 'svelte';
+  import { newInstanceName, spriteDragType } from '../src/instances.mjs';
 
   let {
     room, roomId, size, tiles, sprites, tileArt, spriteArt, previewModes, layerIndex,
-    selectedEntity = $bindable(-1), tileId = $bindable(''), spriteId = $bindable(''),
+    selectedEntity = $bindable(-1), tileId = $bindable(''), spriteId = $bindable(''), tool = $bindable('paint'),
     canUndo, canRedo, onUndo, onRedo, onEdit, onLayer, onSprites, onAssets, onPlay, busy,
   } = $props();
 
   const tools = [
     ['paint', 'B', 'Brush'], ['erase', 'E', 'Eraser'], ['rect', 'R', 'Rectangle'],
-    ['pick', 'I', 'Pick tile'], ['spawn', 'P', 'Place sprite'], ['select', 'V', 'Select sprite'],
+    ['pick', 'I', 'Pick tile'], ['spawn', 'P', 'Add instance'], ['select', 'V', 'Select instance'],
     ['hand', 'H', 'Pan'],
   ];
   const playerColors = ['#ffc875','#92dac4','#bda6ed','#ee9e9f'];
@@ -17,7 +19,7 @@
     static: '#ffc875', one_way: '#97d2f0', ladder: '#a8d4aa', fluid: '#78d3cc',
     dynamic: '#f7a270', kinematic: '#f7a270', breakable: '#f3a197', sensor: '#c8a6f0',
   };
-  let tool = $state('paint'), variant = $state('auto'), slot = $state(''), query = $state('');
+  let variant = $state('auto'), query = $state('');
   let grid = $state(true), collisionView = $state(false), snap = $state(true);
   let zoom = $state(null), viewportWidth = $state(1), viewportHeight = $state(1);
   let viewport, canvas = $state(), draft = $state.raw(null), hover = $state.raw(null), gesture;
@@ -37,8 +39,8 @@
     paint: 'Drag to paint tiles.', erase: 'Drag to erase tiles on the active layer.',
     rect: 'Drag from one corner to the other to fill a rectangle.',
     pick: 'Select a tile on a visible layer to use it as the brush.',
-    spawn: 'Select a point to place the sprite. A player slot has one sprite per room.',
-    select: 'Select or drag a sprite. Press Delete to remove it.',
+    spawn: 'Select a sprite definition. Click the map to add an instance.',
+    select: 'Select or drag an instance. Press Delete to remove it.',
     hand: 'Drag to move the view.',
   }[tool]);
 
@@ -74,7 +76,7 @@
     ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = view.background ?? '#171829';
     ctx.fillRect(0,0,width,height);
-    const topDown = (view.view ?? (Math.abs(view.gravity ?? 24) < .01 ? 'top_down' : 'platformer')) === 'top_down';
+    const topDown = (view.view ?? (Math.abs(view.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer')) === 'top_down';
     const entries = [
       ...orderedLayers(view).filter(({index})=>!hidden[index]).map(entry=>({...entry, sprite:false})),
       ...view.entities.map((actor,index)=>({actor,index,sprite:true,order:actor.layer ?? sprites[actor.sprite]?.layer ?? 0})),
@@ -86,7 +88,13 @@
         const actor = entry.actor;
         const [w,h] = spriteSize(actor);
         const img = image(spriteArt[actor.sprite]);
-        if (img?.complete && img.naturalWidth) ctx.drawImage(img,actor.x-w/2,actor.y-h/2,w,h);
+        if (img?.complete && img.naturalWidth) {
+          ctx.save();
+          ctx.translate(actor.x,actor.y);
+          if (actor.flipX) ctx.scale(-1,1);
+          ctx.drawImage(img,-w/2,-h/2,w,h);
+          ctx.restore();
+        }
         else { ctx.fillStyle = '#a16b8c'; ctx.fillRect(actor.x-w/2,actor.y-h/2,w,h); }
         continue;
       }
@@ -107,11 +115,13 @@
       ctx.stroke();
     }
     if (collisionView) {
-      if (view.closedEdges ?? topDown) {
+      const border = roomBorder(view,topDown);
+      if (border !== 'open') {
         const inset = Math.max(1, 1.5 / scale);
         ctx.strokeStyle = collision.static;
         ctx.lineWidth = inset;
-        ctx.strokeRect(inset/2,inset/2,width-inset,height-inset);
+        if (border === 'closed') ctx.strokeRect(inset/2,inset/2,width-inset,height-inset);
+        else { ctx.beginPath(); ctx.moveTo(inset/2,0); ctx.lineTo(inset/2,height); ctx.moveTo(width-inset/2,0); ctx.lineTo(width-inset/2,height); ctx.stroke(); }
         ctx.lineWidth = 1;
       }
       for (const {item,index} of orderedLayers(view)) {
@@ -152,6 +162,13 @@
     ctx.lineWidth = Math.max(1,1 / scale);
     if (tool === 'spawn') {
       const p = placement(hover);
+      const img = image(spriteArt[spriteId]);
+      if (img?.complete && img.naturalWidth) {
+        const [w,h] = spriteSize({sprite:spriteId});
+        ctx.globalAlpha = .55;
+        ctx.drawImage(img,p.px-w/2,p.py-h/2,w,h);
+        ctx.globalAlpha = 1;
+      }
       ctx.beginPath();
       ctx.moveTo(p.px-5,p.py); ctx.lineTo(p.px+5,p.py);
       ctx.moveTo(p.px,p.py-5); ctx.lineTo(p.px,p.py+5);
@@ -250,7 +267,7 @@
       return Math.abs(actor.x-p.px) <= w/2+2 && Math.abs(actor.y-p.py) <= h/2+2;
     };
     const hits = room.entities.map((actor,index)=>({actor,index})).filter(entry=>hit(entry.actor));
-    const topDown = (room.view ?? (Math.abs(room.gravity ?? 24) < .01 ? 'top_down' : 'platformer')) === 'top_down';
+    const topDown = (room.view ?? (Math.abs(room.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer')) === 'top_down';
     hits.sort((a,b)=>(a.actor.layer ?? sprites[a.actor.sprite]?.layer ?? 0)-(b.actor.layer ?? sprites[b.actor.sprite]?.layer ?? 0)
       || ((room.ySort ?? topDown)
         ? a.actor.y+spriteSize(a.actor)[1]/2-b.actor.y-spriteSize(b.actor)[1]/2 : a.index-b.index));
@@ -274,13 +291,7 @@
       }
       return;
     } else if (tool === 'spawn') {
-      if (!spriteId) return;
-      const {px,py} = placement(p);
-      const entities = room.entities.filter(actor=>slot==='' || actor.player!==Number(slot));
-      entities.push({sprite:spriteId,x:px,y:py,...(slot==='' ? {} : {player:Number(slot)})});
-      onEdit({...room,entities});
-      selectedEntity = entities.length-1;
-      onSprites();
+      placeInstance(spriteId,p);
       return;
     } else if (tool === 'select') {
       selectedEntity = spriteAt(p);
@@ -297,6 +308,34 @@
     }
     canvas.setPointerCapture(event.pointerId);
     event.preventDefault();
+  }
+
+  function placeInstance(id,p) {
+    if (!Object.hasOwn(sprites,id)) return;
+    const {px,py} = placement(p);
+    const name = newInstanceName(id,room.entities);
+    const entities = [...room.entities,{sprite:id,name,x:px,y:py}];
+    onEdit({...room,entities});
+    selectedEntity = entities.length-1;
+    onSprites();
+  }
+
+  function dragOver(event) {
+    if (busy || !event.dataTransfer.types.includes(spriteDragType)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    hover = point(event);
+  }
+
+  function drop(event) {
+    if (busy || !event.dataTransfer.types.includes(spriteDragType)) return;
+    event.preventDefault();
+    const id = event.dataTransfer.getData(spriteDragType);
+    if (!Object.hasOwn(sprites,id)) return;
+    spriteId = id;
+    chooseTool('select');
+    placeInstance(id,point(event));
+    hover = null;
   }
 
   function move(event) {
@@ -363,6 +402,7 @@
     }
     const match = tools.find(([,shortcut])=>shortcut.toLowerCase()===event.key.toLowerCase());
     if (match) chooseTool(match[0]);
+    if (event.key === 'Escape' && tool === 'spawn') chooseTool('select');
     if (event.key === 'Delete' && room.entities[selectedEntity]) {
       onEdit({...room,entities:room.entities.filter((_,index)=>index!==selectedEntity)});
       selectedEntity = -1;
@@ -408,6 +448,7 @@
     <div class="canvas-space">
       <canvas aria-label="Room map" class:hand={tool==='hand' || space} class:select={tool==='pick' || tool==='select'}
         bind:this={canvas} {width} {height} style:width={`${width*scale}px`} style:height={`${height*scale}px`}
+        ondragover={dragOver} ondrop={drop}
         onpointerdown={down} onpointermove={move} onpointerup={event=>finish(event,true)}
         onpointercancel={event=>finish(event,false)} onlostpointercapture={event=>finish(event,false)}
         onpointerleave={()=>{if(!gesture)hover=null;}}></canvas>
@@ -419,13 +460,21 @@
   </div>
   {#if collisionView}<div class="legend"><span class="solid">Solid</span><span class="one-way">One-way</span><span class="fluid">Fluid</span><span class="ladder">Ladder</span><span class="dynamic">Moving</span><span class="breakable">Breakable</span><span class="sensor">Sensor</span></div>{/if}
   {#if spriteTool}
-    <div class="palette row">
+    <div class="palette">
       {#if tool==='spawn'}
-        <label>Sprite <select aria-label="Sprite" bind:value={spriteId}>{#each Object.keys(sprites) as id}<option value={id}>{id}</option>{/each}</select></label>
-        <label>Player slot <select aria-label="Player slot" bind:value={slot}><option value="">None</option>{#each [0,1,2,3] as id}<option value={String(id)}>Player {id+1}</option>{/each}</select></label>
+        <strong>Sprite definitions</strong>
+        <div class="tile-list">
+          {#each Object.keys(sprites) as id}
+            <button class:selected={spriteId===id} aria-pressed={spriteId===id}
+              aria-label={`Use ${id} for placement`} onclick={()=>spriteId=id}>
+              {#if spriteArt[id]}<img src={spriteArt[id]} alt="">{:else}<span class="tile-fallback"></span>{/if}
+              <span>{id}</span>
+            </button>
+          {/each}
+        </div>
       {:else if room.entities[selectedEntity]}
-        <span>{room.entities[selectedEntity].sprite} selected</span>
-      {:else}<span>Select a sprite on the map.</span>{/if}
+        <span>{room.entities[selectedEntity].name ?? room.entities[selectedEntity].sprite} selected</span>
+      {:else}<span>Select an instance on the map.</span>{/if}
     </div>
   {:else}
     <div class="palette">

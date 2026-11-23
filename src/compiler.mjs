@@ -1,11 +1,18 @@
+import {addSeams} from './seams.mjs';
+import {pack} from './pack.mjs';
+import {defaultFont} from './font.mjs';
+import { effects, platformGravity, roomBorder } from './schema.mjs';
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { PNG } from 'pngjs';
 import { encode as encodeQoa } from 'qoa-format';
 import { readAseprite, tagFrames } from './ase.mjs';
-import { decodeCbor, pack } from './cartridge.mjs';
-import { Blocks, Events, Opcodes } from './schema.mjs';
+import { decodeCbor } from './cartridge.mjs';
+import {loadModules} from './modules.mjs';
+import {parseScript} from './wafflescript.mjs';
+import { compileScript, tileSizes, variableName } from './script.mjs';
+import { instanceNames } from './instances.mjs';
 
 export function projectPath(root, file) {
   const target = resolve(root, file);
@@ -43,22 +50,6 @@ function props(value = {}, defaultMode) {
     drag: number(value.drag ?? 2, 0, 20, 'fluid drag'), damage: number(value.damage ?? 0, 0, 100_000, 'fluid damage per second') };
 }
 
-export function scriptCode(script) {
-  return Object.fromEntries(Object.entries(script.events ?? {}).map(([event, list]) => {
-    if (!Events.includes(event) || !Array.isArray(list) || list.length > 256) throw Error(`Invalid event: ${event}`);
-    return [event, list.map(block => {
-      if (!Object.hasOwn(Blocks, block.op)) throw Error(`Invalid block: ${block.op}`);
-      return [Opcodes[block.op], ...Blocks[block.op][1].map(([field, type, defaultValue]) => {
-        const value = block[field] ?? defaultValue;
-        if (type === 'number') return number(value, -10000, 10000, field);
-        if (type === 'text' && typeof value === 'string' && value.length <= 96) return value;
-        if (Array.isArray(type) && type.includes(value)) return value;
-        throw Error(`Invalid block value for ${field}`);
-      })];
-    })];
-  }));
-}
-
 function blit(src, dest, x, y) {
   for (let row = 0; row < src.height; row++) {
     const from = row * src.width * 4;
@@ -83,7 +74,9 @@ function transformed(source, flags) {
 
 function atlas(images) {
   const list = [...images].sort((a,b) => b[1].height - a[1].height || b[1].width - a[1].width);
-  const width = Math.max(512, ...list.map(([, image]) => image.width));
+  const pixels = list.reduce((total,[,image])=>total+(image.width+1)*(image.height+1),0);
+  const estimate = 2 ** Math.ceil(Math.log2(Math.sqrt(Math.max(1,pixels))));
+  const width = Math.max(512,Math.min(4096,estimate),...list.map(([,image])=>image.width));
   let x = 0, y = 0, height = 0;
   const entries = Object.create(null);
   for (const [id, image] of list) {
@@ -128,24 +121,34 @@ function wavToQoa(b) {
   return encodeQoa({ channelData, sampleRate });
 }
 
-export async function discoverAssets(root) {
+const artFile = /\.(ase|aseprite|png)$/i;
+const assetFile = /\.(ase|aseprite|png|wav|opus|ogg|oga|qoa)$/i;
+async function readArt(file,read) {
+  const data=await read(file);
+  if(!file.toLowerCase().endsWith('.png'))return readAseprite(data);
+  if(data.length<24||data.readUInt32BE(16)>4096||data.readUInt32BE(20)>4096)throw Error('PNG exceeds 4096 pixels per side');
+  const {width,height,data:rgba}=PNG.sync.read(data);
+  return {width,height,tags:[],frames:[{duration:100,rgba}]};
+}
+export async function discoverAssets(root,store) {
+  if(store)return (await store.list('assets')).filter(file=>assetFile.test(file)).sort();
   const result = [];
   async function walk(path) {
     for (const entry of await readdir(resolve(root, path), { withFileTypes: true })) {
       const file = path + '/' + entry.name;
       if (entry.isDirectory()) await walk(file);
-      else if (entry.isFile() && /\.(ase|aseprite|wav|opus|ogg|oga|qoa)$/i.test(entry.name)) result.push(file);
+      else if (entry.isFile() && assetFile.test(entry.name)) result.push(file);
     }
   }
   await walk('assets').catch(error => { if (error.code !== 'ENOENT') throw error; });
   return result.sort();
 }
 
-export async function describeArt(root) {
-  const files = (await discoverAssets(root)).filter(file => /\.(ase|aseprite)$/i.test(file));
+export async function describeArt(root,store) {
+  const files = (await discoverAssets(root,store)).filter(file => artFile.test(file));
   const descriptions = await Promise.all(files.map(async file => {
     try {
-      const ase = readAseprite(await readFile(projectPath(root, file)));
+      const ase = await readArt(file,store?.read ?? (name=>readFile(projectPath(root,name))));
       return [file, { tags: ase.tags.map(tag => tag.name), width: ase.width, height: ase.height }];
     } catch (error) {
       return [file, { error: error.message, tags: [] }];
@@ -154,11 +157,13 @@ export async function describeArt(root) {
   return Object.fromEntries(descriptions);
 }
 
-export async function compileProject(root, { project: draft, scripts = new Map() } = {}) {
-  const project = draft ?? JSON.parse(await readFile(resolve(root, 'project.json'), 'utf8'));
+export async function compileProject(root, { project: draft, scripts = new Map(), store } = {}) {
+  if (!store && root.endsWith('.waffleproj')) store=await (await import('./project-store.mjs')).projectStore(root);
+  const read = store?.read ?? ((name,encoding)=>readFile(projectPath(root,name),encoding));
+  const project = draft ?? JSON.parse(await read('project.json','utf8'));
   const frames = new Map(), sources = new Map();
   async function source(file) {
-    if (!sources.has(file)) sources.set(file, readAseprite(await readFile(projectPath(root, file))));
+    if (!sources.has(file)) sources.set(file, await readArt(file,read));
     return sources.get(file);
   }
   function register(id, ase, index, flags = []) {
@@ -168,7 +173,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     return { image: id, ms: frame.duration };
   }
 
-  const sprites = Object.create(null);
+  const sprites = Object.create(null), dependencies = new Map();
   for (const [id, sprite] of Object.entries(project.sprites ?? {})) {
     key(id, 'sprite');
     const ase = await source(sprite.source);
@@ -176,21 +181,51 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     const clips = Object.create(null);
     clips.default = { frames: all, repeat: 0 };
     for (const tag of ase.tags) clips[tag.name] = { frames: tagFrames(tag).map(i => all[i]), repeat: tag.repeat };
-    let code = {};
+    let script = { events:{}, dependencies:new Set() };
     if (sprite.script) {
       try {
-        code = scriptCode(scripts.get(id) ?? decodeCbor(await readFile(projectPath(root, sprite.script))));
+        const unit=scripts.get(id) ?? (sprite.script.endsWith('.ws') ? parseScript(await read(sprite.script,'utf8')) : decodeCbor(await read(sprite.script)));
+        script=compileScript(unit,await loadModules(unit,read));
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
       }
     }
-    sprites[id] = { clips, code, physics: props(sprite.physics, 'none'), width: sprite.width ?? ase.width,
+    if(sprite.emitter && (!effects.includes(sprite.emitter.effect) || !Number.isInteger(sprite.emitter.rate) || sprite.emitter.rate<1 || sprite.emitter.rate>240))throw Error('Invalid particle emitter for '+id);
+    dependencies.set(id,script.dependencies);
+    sprites[id] = { clips, program:script.events, physics: props(sprite.physics, 'none'), width: sprite.width ?? ase.width,
       height: sprite.height ?? ase.height, layer: sprite.layer ?? 0, animation: sprite.animation ?? 'default',
-      team: sprite.team ?? 0, projectile: sprite.projectile };
+      emitter:sprite.emitter??null, alwaysActive:sprite.alwaysActive??false, team: sprite.team ?? 0, projectile: sprite.projectile };
     number(sprites[id].width, 1, 8192, 'sprite width');
     number(sprites[id].height, 1, 8192, 'sprite height');
   }
-  const size = integer(project.tileSize ?? 24, 4, 128, 'tile size');
+  for (const [id, targets] of dependencies) for (const target of targets) {
+    if (!Object.hasOwn(sprites,target)) throw Error(`Sprite "${id}" adds an instance of unknown sprite "${target}"`);
+  }
+  const size = project.tileSize ?? 24;
+  if (!tileSizes.includes(size)) throw Error('Set the tile size to 8, 16, 24, or 32 pixels');
+  function variables(values, flags) {
+    return Object.fromEntries(Object.entries(values ?? {}).map(([name,value])=>{
+      if (!variableName(name) || !(flags ? typeof value === 'boolean' : Number.isSafeInteger(value))) {
+        throw Error(`Invalid initial value for ${name}`);
+      }
+      return [name,value];
+    }));
+  }
+  const globals = variables(project.variables,false), flags = variables(project.flags,true);
+  function conditions(...sources){
+    return sources.filter(s=>s?.flag).map(s=>{
+      if(!Object.hasOwn(flags,s.flag))throw Error('Unknown condition flag: '+s.flag);
+      return [s.flag,s.when??true];
+    });
+  }
+  const camera = {
+    min_width:integer(project.camera?.min_width??128,128,512,'camera minimum width'),
+    min_height:integer(project.camera?.min_height??128,128,512,'camera minimum height'),
+    max_width:integer(project.camera?.max_width??512,128,512,'camera maximum width'),
+    max_height:integer(project.camera?.max_height??512,128,512,'camera maximum height'),
+    zoom:integer(project.camera?.zoom??2,1,8,'camera pixel zoom'),
+  };
+  if (camera.min_width>camera.max_width || camera.min_height>camera.max_height) throw Error('Camera minimum exceeds maximum');
   const tiles = Object.create(null);
   for (const [id, tile] of Object.entries(project.tiles ?? {})) {
     key(id, 'tile');
@@ -217,20 +252,26 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     const asset = typeof config === 'string' ? { source: config } : config;
     const extension = extname(asset.source).slice(1).toLowerCase();
     if (!['wav','ogg','oga','opus','qoa'].includes(extension)) throw Error(`Unsupported audio format: ${extension}`);
-    const data = await readFile(projectPath(root, asset.source));
+    const data = await read(asset.source);
     audio[id] = extension === 'wav' && asset.compress !== false
       ? { format: 'qoa', data: wavToQoa(data) } : { format: extension, data };
   }
 
+  let font=defaultFont();
+  if(project.font){
+    const image=await source(project.font);
+    if(image.width!==96 || image.height!==48)throw Error('Use a 96 × 48 pixel bitmap font sheet');
+    font={width:96,height:48,rgba:image.frames[0].rgba};
+  }
   const rooms = Object.create(null), atlases = Object.create(null);
   for (const [id, room] of Object.entries(project.rooms ?? {})) {
     key(id, 'room');
     const cols = integer(room.cols, 1, Math.floor(4096 / size), 'room columns');
     const rows = integer(room.rows, 1, Math.floor(4096 / size), 'room rows');
     const width = cols * size, height = rows * size;
-    const view = room.view ?? (Math.abs(room.gravity ?? 24) < .01 ? 'top_down' : 'platformer');
+    const view = room.view ?? (Math.abs(room.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer');
     if (!['platformer','top_down'].includes(view)) throw Error(`Unknown room view: ${view}`);
-    const gravity = view === 'top_down' ? 0 : number(room.gravity ?? 24, -100, 100, 'room gravity');
+    const gravity = view === 'top_down' ? 0 : number(room.gravity ?? platformGravity, -100, 100, 'room gravity');
     const ySort = room.ySort ?? view === 'top_down';
     const images = new Map(), baked = [], entities = [], solids = [], blockers = new Set();
     const usedSprites = new Set();
@@ -241,10 +282,23 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       usedSprites.add(sprite);
       for (const clip of Object.values(definition.clips)) for (const frame of clip.frames) images.set(frame.image, frames.get(frame.image));
       if (definition.projectile) includeSprite(definition.projectile);
+      for (const target of dependencies.get(sprite)) includeSprite(target);
     }
     const players = new Set();
-    for (const entry of room.entities ?? []) {
+    const names = instanceNames(room.entities ?? []);
+    const usedNames = new Set();
+    for (const [index, entry] of (room.entities ?? []).entries()) {
       includeSprite(entry.sprite);
+      const name = names[index];
+      if (typeof name !== 'string' || !name.trim() || name.length > 64 || /[\x00-\x1f\x7f]/.test(name)) {
+        throw Error(`Invalid instance name in room "${id}"`);
+      }
+      if (usedNames.has(name)) throw Error(`Duplicate instance name "${name}" in room "${id}"`);
+      usedNames.add(name);
+      const definition = sprites[entry.sprite];
+      if (entry.layer != null) integer(entry.layer, -10000, 10000, 'instance visual layer');
+      const animation = entry.animation != null && Object.hasOwn(definition.clips, entry.animation) ? entry.animation : undefined;
+      if (entry.flipX != null && typeof entry.flipX !== 'boolean') throw Error(`Invalid facing for instance "${name}"`);
       number(entry.x, 0, width, 'entity x');
       number(entry.y, 0, height, 'entity y');
       if (entry.player != null) {
@@ -252,7 +306,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         if (players.has(entry.player)) throw Error(`Duplicate player slot in ${id}`);
         players.add(entry.player);
       }
-      entities.push({ ...entry, physics: entry.physics ? props(entry.physics, sprites[entry.sprite].physics.mode) : undefined });
+      const physics = entry.physics ? props({ ...definition.physics, ...entry.physics }, definition.physics.mode) : undefined;
+      entities.push({ ...entry, conditions:conditions(project.sprites[entry.sprite],entry), name, animation, physics });
     }
     for (const sound of [room.music, room.ambience].filter(Boolean)) {
       if (!Object.hasOwn(audio, sound)) throw Error(`Unknown room audio: ${sound}`);
@@ -260,7 +315,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     for (const [index, layer] of (room.layers ?? []).entries()) {
       const order = integer(layer.order ?? index, -10000, 10000, 'visual layer');
       const cells = new Map(), zone = new Map();
-      let sheet;
+      const chunks = new Map();
+      const chunkSize = Math.floor(256/size);
       for (const cell of layer.cells ?? []) {
         const [x,y,tileId,variant] = cell;
         integer(x, 0, cols-1, 'tile x');
@@ -272,24 +328,31 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         const clip = tile.variants[variant ?? ((x * 37 + y * 17) % tile.variants.length)];
         if (!clip) throw Error(`Unknown variant for ${tileId}`);
         const physics = layer.collidable ? tile.physics : { ...tile.physics, mode: 'none' };
-        const dynamic = !['static','none'].includes(physics.mode);
+        const gates=conditions(layer,project.tiles[tileId]);
+        const dynamic = gates.length>0 || !['static','none'].includes(physics.mode);
         if (!dynamic && clip.length === 1) {
-          sheet ??= { width, height, rgba: Buffer.alloc(width * height * 4) };
-          blit(frames.get(clip[0].image), sheet, x * size, y * size);
+          const col = Math.floor(x/chunkSize)*chunkSize, row = Math.floor(y/chunkSize)*chunkSize;
+          const image = `layer/${index}/${col}/${row}`;
+          if (!chunks.has(image)) {
+            const w = Math.min(chunkSize,cols-col)*size, h = Math.min(chunkSize,rows-row)*size;
+            chunks.set(image,{width:w,height:h,rgba:Buffer.alloc(w*h*4),x:col*size,y:row*size});
+          }
+          const chunk = chunks.get(image);
+          blit(frames.get(clip[0].image),chunk,x*size-chunk.x,y*size-chunk.y);
         } else {
           for (const frame of clip) images.set(frame.image, frames.get(frame.image));
           entities.push({ x: (x+.5)*size, y:(y+.5)*size, tile: tileId, clip,
-            physics: physics.mode === 'static' ? { ...physics, mode: 'none' } : physics, layer: order });
+            conditions:gates, blocker:gates.length && physics.mode==='static'?y*cols+x:null,
+            physics: !gates.length && physics.mode === 'static' ? { ...physics, mode: 'none' } : physics, layer: order });
         }
-        if (physics.mode === 'static') {
+        if (!gates.length && physics.mode === 'static') {
           zone.set(y * cols + x, physics);
           blockers.add(y * cols + x);
         }
       }
-      if (sheet) {
-        const image = `layer/${index}`;
-        images.set(image, sheet);
-        baked.push({ image, layer: order });
+      for (const [image,chunk] of chunks) {
+        images.set(image,chunk);
+        baked.push({image,layer:order,x:chunk.x,y:chunk.y});
       }
       for (let y = 0; y < rows; y++) for (let x = 0; x < cols;) {
         const physics = zone.get(y * cols + x);
@@ -300,20 +363,37 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         x = end;
       }
     }
-    if (room.closedEdges ?? view === 'top_down') {
+    const border = roomBorder(room, view === 'top_down');
+    if (!['closed','sides','open'].includes(border)) throw Error('Invalid room border');
+    if (border !== 'open') {
       const physics = props(undefined, 'static');
-      solids.push(
-        { x: -size/2, y: height/2, width: size, height: height+size*2, physics },
-        { x: width+size/2, y: height/2, width: size, height: height+size*2, physics },
-        { x: width/2, y: -size/2, width, height:size, physics },
-        { x: width/2, y: height+size/2, width, height:size, physics },
-      );
+      const walls={
+        left:{x:-size/2,y:height/2,width:size,height:height+size*16},
+        right:{x:width+size/2,y:height/2,width:size,height:height+size*16},
+        up:{x:width/2,y:-size/2,width,height:size},
+        down:{x:width/2,y:height+size/2,width,height:size},
+      };
+      for(const edge of border==='closed'?Object.keys(walls):['left','right']){
+        const exit=room.exits?.[edge],opposite={left:'right',right:'left',up:'down',down:'up'}[edge];
+        const back=project.rooms[exit?.targets?.[0]]?.exits?.[opposite];
+        if(exit?.adjacent && exit.mode==='fixed' && !exit.flag && back?.adjacent && back.mode==='fixed' && !back.flag && back.targets[0]===id)continue;
+        solids.push({...walls[edge],physics});
+      }
+    }
+    images.set('ui/font',font);
+    const exits={};
+    for(const [edge,exit] of Object.entries(room.exits??{})){
+      if(!['left','right','up','down'].includes(edge)||!['fixed','save','crossing'].includes(exit.mode)
+        || !exit.targets?.length || exit.targets.some(t=>!Object.hasOwn(project.rooms,t)))throw Error('Invalid exit in '+id);
+      if(exit.flag && !Object.hasOwn(flags,exit.flag))throw Error('Unknown exit flag in '+id);
+      exits[edge]={mode:exit.mode,targets:exit.targets,flag:exit.flag||null,when:exit.when??true,adjacent:exit.adjacent??false};
     }
     atlases[id] = atlas(images);
-    rooms[id] = { title: room.title ?? id, cols, rows, width, height, size, baked, solids, entities,
+    rooms[id] = { title: room.title ?? id, exits, cols, rows, width, height, size, baked, solids, entities,
       blockers: [...blockers], background: room.background ?? '#101a23', music: room.music,
       ambience: room.ambience, gravity, view, ySort };
   }
+  addSeams(rooms,atlases,sprites,atlas);
   const start = project.start ?? Object.keys(rooms)[0];
   if (!Object.hasOwn(rooms, start)) throw Error('Choose a valid starting room');
   function thumbnail(frame) {
@@ -324,7 +404,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     [id, { mode: tile.physics.mode, variants: tile.variants.map(clip => thumbnail(clip[0])) }]));
   const spritePreviews = Object.fromEntries(Object.entries(sprites).map(([id, sprite]) =>
     [id, thumbnail((sprite.clips[sprite.animation] ?? sprite.clips.default).frames[0])]));
-  return { name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio,
+  return { saveId:project.saveId??project.name, name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
     tilePreviews, spritePreviews };
 }
 

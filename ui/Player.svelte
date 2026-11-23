@@ -3,7 +3,7 @@
   import { unpack } from '../src/cartridge.mjs';
   import { buttons } from '../src/schema.mjs';
   import { createRuntime } from './runtime.js';
-  import { drawRoom, preload } from './render.js';
+  import { drawRoom, loadAtlas } from './render.js';
   import { createAudio } from './audio.js';
 
   let canvas, shell, fileInput;
@@ -11,33 +11,55 @@
   let touch = $state(false), muted = $state(true), players = $state(1);
   let status = $state('Loading cartridge…'), error = $state(''), lanSlots = $state([]);
   let runtime, atlasImages = {}, socket, loop, last = 0, elapsed = 0, loadVersion = 0;
+  let slot=$state(1);
   const audio = createAudio();
   const keys = new Set(), fingers = new Map(), taps = new Set();
   const embedded = document.getElementById('gamewaffle-cartridge');
   const hosted = !embedded && /^https?:$/.test(location.protocol);
-  let startingRoom;
-  const keyboard = { ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right', KeyZ:'a',Space:'a',KeyX:'b',KeyC:'x',Enter:'menu',KeyW:'up',KeyS:'down',KeyA:'left',KeyD:'right' };
+  let startingRoom, currentBytes;
+  const keyboard = { ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right', KeyZ:'a',Semicolon:'a',Quote:'b',Space:'x',MouseLeft:'a',MouseRight:'b',KeyX:'b',KeyC:'x',Enter:'menu',KeyW:'up',KeyS:'down',KeyA:'left',KeyD:'right' };
   const second = { KeyI:'up',KeyK:'down',KeyJ:'left',KeyL:'right',KeyN:'a',KeyM:'b',Comma:'x',Period:'menu' };
   const gamepad = [12,13,14,15,0,1,2,9];
 
-  async function load(next, requestedRoom) {
+  async function load(bytes, requestedRoom) {
+    const next = unpack(bytes);
     const room = Object.hasOwn(next.rooms, requestedRoom) ? requestedRoom : next.start;
     const version = ++loadVersion;
-    const [loadedRuntime, images] = await Promise.all([createRuntime(next, room), preload(next)]);
+    const firstAtlas = await loadAtlas(next.atlases[room]);
+    const loadedRuntime = await createRuntime(bytes, room);
     if (version !== loadVersion) { loadedRuntime.free(); return; }
     runtime?.free();
     runtime = loadedRuntime;
+    runtime.set_seed(crypto.getRandomValues(new Uint32Array(1))[0]);
     cart = next;
+    currentBytes = bytes;
     startingRoom = room;
-    atlasImages = images;
+    atlasImages = {[room]:firstAtlas};
     audio.setCart(next);
     show(JSON.parse(runtime.snapshot()));
     status = 'Local game';
     error = '';
   }
   function show(frame) {
+    if (snapshot?.room!==frame.room || snapshot?.tick>frame.tick) {
+      const current=cart;
+      for(const id of cart.rooms[frame.room].neighbors??[]){
+        loadAtlas(cart.atlases[id]).then(image=>{if(current===cart)atlasImages[id]=image;}).catch(e=>{if(current===cart)error=e.message;});
+      }
+    }
     snapshot = frame;
-    if (canvas) drawRoom(canvas,cart,frame,atlasImages);
+    if (atlasImages[frame.room]) {
+      if (canvas) drawRoom(canvas,cart,frame,atlasImages);
+    } else if (cart.atlases[frame.room]) {
+      const expected=cart;
+      loadAtlas(cart.atlases[frame.room]).then(image=>{
+        if (cart!==expected) return;
+        atlasImages[frame.room]=image;
+        if (canvas && snapshot?.room===frame.room) drawRoom(canvas,cart,snapshot,atlasImages);
+      }).catch(err=>{error=String(err.message??err);});
+    }
+    const fault=frame.events?.find(event=>event.kind==='script_error');
+    if (fault) error=`Script ${fault.actor}/${fault.event}: ${fault.message}`;
     audio.setRoom(frame.room);
     for (const sound of frame.sounds) audio.play(sound,.65);
   }
@@ -54,7 +76,7 @@
       status = 'Connecting…';
       const response = await fetch('./lan.waffle');
       if (!response.ok) throw Error('Cannot load the LAN cartridge');
-      await load(unpack(new Uint8Array(await response.arrayBuffer())));
+      await load(new Uint8Array(await response.arrayBuffer()));
       status = 'Connecting…';
       const connection = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/lan`);
       socket = connection;
@@ -82,7 +104,7 @@
     const file = event.currentTarget.files[0];
     if (!file) return;
     disconnect();
-    try { await load(unpack(new Uint8Array(await file.arrayBuffer()))); }
+    try { await load(new Uint8Array(await file.arrayBuffer())); }
     catch(err) { error = String(err.message ?? err); }
     event.target.value = '';
   }
@@ -113,7 +135,12 @@
         taps.clear();
         if (socket?.readyState === WebSocket.OPEN) {
           if (socket.bufferedAmount < 64_000) socket.send(JSON.stringify({kind:'input',input:data}));
-        } else if (runtime && !socket) show(JSON.parse(runtime.step(JSON.stringify(data))));
+         } else if (runtime && !socket) {
+          runtime.set_view_size(canvas.width,canvas.height);
+          const mask = data.reduce((bits,input,slot)=>buttons.reduce((value,button,index)=>
+            input[button] ? value | (1 << (slot*8+index)) : value,bits),0) >>> 0;
+          show(JSON.parse(runtime.step_buttons(mask)));
+        }
       }
     } catch (err) {
       error = String(err.message ?? err);
@@ -136,6 +163,13 @@
     if (button && fingers.get(event.pointerId) !== button) taps.add(button);
     fingers.set(event.pointerId,button);
   }
+  function mouseChange(event) {
+    if (event.type === 'mousedown' && event.target !== canvas) return;
+    const key = ['MouseLeft',null,'MouseRight'][event.button];
+    if (!key) return;
+    if (event.type === 'mousedown') { keys.add(key); taps.add(keyboard[key]); canvas.focus(); }
+    else keys.delete(key);
+  }
   function touchUp(event) { fingers.delete(event.pointerId); }
   function press(event) {
     if (event.target.matches?.('input,select,textarea') || event.ctrlKey || event.altKey || event.metaKey) return;
@@ -152,9 +186,17 @@
     try { muted = await audio.toggle(); }
     catch { error = 'Audio is unavailable in this browser.'; }
   }
+  function progress(write){
+    try {
+      const key=JSON.stringify(['GameWaffle',runtime.save_id(),slot]);
+      if(write)localStorage.setItem(key,runtime.save_game());
+      else {const saved=localStorage.getItem(key);if(!saved)throw Error('This slot is empty');runtime.load_game(saved);clear();show(JSON.parse(runtime.snapshot()));}
+      status=(write?'Saved':'Loaded')+' slot '+slot;error='';
+    }catch(err){error=String(err.message??err);}
+  }
   function localReset() {
     disconnect();
-    if (cart) load(cart, startingRoom).catch(err=>{ error=String(err.message ?? err); });
+    if (cart) load(currentBytes, startingRoom).catch(err=>{ error=String(err.message ?? err); });
   }
   function countChanged() {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({kind:'join',players}));
@@ -163,11 +205,13 @@
     touch = matchMedia('(pointer:coarse)').matches;
     (async () => {
       try {
-        const buffer = embedded
-          ? Uint8Array.from(atob(embedded.textContent.trim()), c=>c.charCodeAt(0))
+        const encoded=embedded?.textContent.trim();
+        if (embedded && !encoded) { status='Choose a cartridge'; return; }
+        const buffer=encoded
+          ? Uint8Array.from(atob(encoded),c=>c.charCodeAt(0))
           : new Uint8Array(await (await fetch('./demo.waffle')).arrayBuffer());
         const room = hosted ? new URLSearchParams(location.search).get('room') : undefined;
-        await load(unpack(buffer), room);
+        await load(buffer, room);
       } catch (err) { error=String(err.message ?? err); status='Choose a cartridge'; }
     })();
     loop = requestAnimationFrame(tick);
@@ -181,7 +225,7 @@
   });
 </script>
 
-<svelte:window onkeydown={press} onkeyup={release} onblur={clear} />
+<svelte:window onkeydown={press} onkeyup={release} onblur={clear} onmousedown={mouseChange} onmouseup={mouseChange} oncontextmenu={event=>{if(event.target===canvas)event.preventDefault();}} />
 <main>
   <header>
     <div class="brand">
@@ -189,7 +233,7 @@
       <div><h1>GameWaffle</h1><small>Cartridge player</small></div>
     </div>
     <div class="row">
-      {#if hosted}<a class="button studio" href="./index.html">Studio</a>{/if}
+      {#if hosted && new URLSearchParams(location.search).has('room')}<a class="button studio" href="./index.html">Studio</a>{/if}
       <input hidden type="file" accept=".waffle" bind:this={fileInput} onchange={chooseFile} aria-label="Cartridge file">
       <button class="primary" onclick={()=>fileInput.click()}>Open cartridge</button>
     </div>
@@ -200,7 +244,7 @@
       <span class="session"><i></i>{status}{#if lanSlots.length} · P{lanSlots.map(slot=>slot+1).join(', P')}{/if}</span>
     </div>
     <div class="screen" bind:this={shell}>
-      <canvas aria-label="Game display" bind:this={canvas} width="672" height="360"></canvas>
+      <canvas tabindex="-1" aria-label="Game display" bind:this={canvas} width="128" height="128"></canvas>
       {#if touch}
         <div role="group" aria-label="Touch controls" class="touch" onpointerdown={touchDown} onpointermove={touchMove} onpointerup={touchUp} onpointercancel={touchUp} onlostpointercapture={touchUp}>
           <div class="dpad">
@@ -215,6 +259,8 @@
       {/if}
     </div>
     <div class="toolbar row">
+      <label>Slot <select bind:value={slot}>{#each [1,2,3] as n}<option value={n}>{n}</option>{/each}</select></label>
+      <button disabled={!cart||status==='LAN game'} onclick={()=>progress(true)}>Save</button><button disabled={!cart||status==='LAN game'} onclick={()=>progress(false)}>Load</button>
       <button onclick={localReset} disabled={!cart}>Reset</button>
       <button onclick={sound} aria-pressed={!muted}>{muted ? 'Enable audio' : 'Mute audio'}</button>
       <button onclick={()=>{touch=!touch;clear();}} aria-pressed={touch}>Touch controls</button>
@@ -226,7 +272,7 @@
     </div>
   </section>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
-  <p class="help">Keyboard <kbd>↑ ↓ ← →</kbd> or <kbd>W A S D</kbd> · <kbd>Z</kbd> A · <kbd>X</kbd> B · <kbd>C</kbd> X · <kbd>Enter</kbd> Start</p>
+  <p class="help">Move: WASD or arrows · A: semicolon, Z or left click · B: quote, X or right click · X: Space or C · Start: Enter</p>
   {#if players > 1}<p class="help">Player 2 keyboard <kbd>I J K L</kbd> · <kbd>N M , .</kbd>. Gamepads fill the available player slots.</p>{/if}
 </main>
 
@@ -238,7 +284,7 @@
   h2{font-size:clamp(1rem,3vw,1.3rem);}
   .session{display:flex;gap:.4rem;align-items:center;font-size:.76rem;color:var(--muted);}
   .session i{width:7px;height:7px;background:var(--mint);border-radius:50%;}
-  .screen{position:relative;background:#11111a;display:grid;place-items:center;}
+  .screen{aspect-ratio:16/9;position:relative;background:#11111a;display:grid;place-items:center;}
   .screen:fullscreen{background:#11111a;}
   canvas{width:100%;max-height:72vh;object-fit:contain;}
   .screen:fullscreen canvas{width:100%;max-height:100vh;}

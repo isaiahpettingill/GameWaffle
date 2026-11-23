@@ -1,9 +1,14 @@
 <script>
+  import { effects, platformGravity, roomBorder } from '../src/schema.mjs';
+  import Sections from './Sections.svelte';
+  import World from './World.svelte';
   import { onMount } from 'svelte';
   import ScriptPanel from './ScriptPanel.svelte';
   import Physics from './Physics.svelte';
+  import { tileSizes, variableName } from '../src/script.mjs';
   import { unpack } from '../src/cartridge.mjs';
   import RoomMap from './RoomMap.svelte';
+  import { instanceNames, newInstanceName, spriteDragType } from '../src/instances.mjs';
 
   let project=$state(null), assets=$state([]), art=$state({}), tab=$state('room'), roomId=$state(''), spriteId=$state(''),
     tileId=$state(''), layerIndex=$state(0), assetKind=$state('sprite'), scriptDirty=$state(false),
@@ -13,14 +18,25 @@
   let historyVersion=$state(0), selectedEntity=$state(-1), roomPanel=$state('layers'), addPreset=$state(false);
   let savedRooms={}, dirtyOutsideRoom=false, history=new Map(), previewUrls=[];
   let dimensions=$state(null);
+  let placementSprite=$state(''), mapTool=$state('paint'), addForm=$state(false);
   let revision=-1, checking=false;
   let sourceError=$state('');
   let room=$derived(project?.rooms[roomId]), layer=$derived(room?.layers?.[layerIndex]);
   let sprite=$derived(project?.sprites?.[spriteId]), tile=$derived(project?.tiles?.[tileId]);
   let inspector=$derived(assetKind==='tile' ? tile : sprite);
-  let artFiles=$derived(assets.filter(file=>/\.(ase|aseprite)$/i.test(file)));
+  let artFiles=$derived(assets.filter(file=>/\.(ase|aseprite|png)$/i.test(file)));
   let audioFiles=$derived(assets.filter(file=>/\.(wav|ogg|oga|opus|qoa)$/i.test(file)));
-  const tabs=[['room','Room'],['blocks','Blocks'],['assets','Assets']];
+  let gameSection=$state('Variables'),spriteSection=$state('Appearance'),roomSection=$state('Size'),instanceSection=$state('Placement'),mobilePane=$state('Editor');
+  const tabs=[['world','World'],['room','Room'],['blocks','Blocks'],['assets','Assets'],['game','Game']];
+  let variableId=$state(''), variableKind=$state('variables');
+  function addVariable() {
+    const id=variableId.trim();
+    if(!variableName(id)){error='Use a name with letters, digits, and underscores.';return;}
+    const table=project[variableKind]??={};
+    if(Object.hasOwn(table,id)){error='This name is already in use.';return;}
+    table[id]=variableKind==='flags' ? false : 0;
+    variableId='';error='';mark();
+  }
   const historyStatus=$derived.by(()=>{
     const revision=historyVersion;
     const edits=history.get(roomId);
@@ -29,10 +45,32 @@
   const sortedLayers=$derived((room?.layers ?? []).map((layer,index)=>({layer,index,order:layer.order??index}))
     .sort((a,b)=>b.order-a.order || b.index-a.index));
   const maxTiles=$derived(Math.floor(4096/(project?.tileSize??24)));
-  const roomView=$derived(room?.view ?? (Math.abs(room?.gravity??24) < .01 ? 'top_down' : 'platformer'));
+  const roomView=$derived(room?.view ?? (Math.abs(room?.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer'));
   const actor=$derived(room?.entities[selectedEntity]);
   const exportName=$derived((project?.name??'game').toLowerCase().replace(/[^a-z0-9]+/g,'-') || 'game');
 
+  let updatesOpen=$state(false),component=$state('runtime'),platform=$state('linux-x64'),release=$state(null);
+  async function checkRelease(install=false){
+    error='';busy=true;
+    try{
+      const result=await request('./api/update','POST',{component,target:component==='runtime'?platform:undefined,install});
+      release=install?null:result;
+      status=install?(component==='studio'?'Restart Studio to finish the update':'Runtime installed'):result.available?'Update available':'Current version installed';
+    }catch(err){release=null;error=err.message;}finally{busy=false;}
+  }
+  async function downloadDesktop(event){
+    event.preventDefault();
+    const href=event.currentTarget.href;
+    if(busy)return;
+    if(scriptDirty){error='Save the script first';return;}
+    if(dirty && !await saveProject())return;
+    try{
+      const res=await fetch(href);
+      if(!res.ok)throw Error((await res.json()).error);
+      const url=URL.createObjectURL(await res.blob()),a=document.createElement('a');
+      a.href=url;a.download=exportName+'.zip';a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);
+    }catch(err){error=err.message;}
+  }
   async function request(path, method='GET', data) {
     const response=await fetch(path,{method,headers:data ? {'Content-Type':'application/json'} : {},body:data ? JSON.stringify(data) : undefined});
     const result=await response.json();
@@ -40,7 +78,7 @@
     return result;
   }
   async function updatePreviews() {
-    const response=await fetch('./demo.waffle',{cache:'no-store'});
+    const response=await fetch('./api/preview',{cache:'no-store'});
     if(!response.ok)throw Error('Could not open project preview');
     const next=unpack(new Uint8Array(await response.arrayBuffer()));
     for(const url of previewUrls) URL.revokeObjectURL(url);
@@ -58,13 +96,20 @@
   async function load() {
     try{
       const value=await request('./api/project');
+      for (const map of Object.values(value.project.rooms)) {
+        map.entities??=[];
+        map.layers??=[];
+        const names=instanceNames(map.entities);
+        map.entities.forEach((entity,index)=>{entity.name=names[index];});
+      }
       project=value.project; assets=value.assets; art=value.art; revision=value.revision;
       savedRooms=JSON.stringify(value.project.rooms);
       audioSource=assets.find(file=>/\.(wav|ogg|oga|opus|qoa)$/i.test(file)) ?? '';
       roomId=project.start ?? Object.keys(project.rooms)[0];
       spriteId=Object.keys(project.sprites ?? {})[0] ?? '';
+      placementSprite=spriteId;
       tileId=Object.keys(project.tiles ?? {})[0] ?? '';
-      newSource=assets.find(file=>/\.(ase|aseprite)$/i.test(file)) ?? '';
+      newSource=assets.find(file=>/\.(ase|aseprite|png)$/i.test(file)) ?? '';
       layerIndex=chooseInitialLayer(project.rooms[roomId]);
       await updatePreviews();
       status='Ready';
@@ -140,8 +185,9 @@
     editRoom(next=>{
       next.view=view;
       next.ySort=view==='top_down';
-      next.closedEdges=view==='top_down';
-      if(view==='platformer' && Math.abs(next.gravity??24)<.01)next.gravity=24;
+      delete next.closedEdges;
+      delete next.border;
+      if(view==='platformer' && Math.abs(next.gravity ?? platformGravity)<.01)next.gravity=platformGravity;
     });
   }
   function resizeRoom(key,input){
@@ -197,22 +243,66 @@
     if(!actor)return;
     const maximum=(key==='x'?room.cols:room.rows)*(project.tileSize??24);
     if((key==='x'||key==='y') && (!Number.isFinite(value)||value<0||value>=maximum))return;
+    if(key==='name'){
+      value=value.trim() || newInstanceName(actor.sprite,room.entities.filter((_,index)=>index!==selectedEntity));
+      if(room.entities.some((entry,index)=>index!==selectedEntity && entry.name===value)){
+        error='Use a different name for each instance in this room.';
+        return;
+      }
+      error='';
+    }
+    if(key==='layer' && value!=='' && (!Number.isInteger(value)||Math.abs(value)>10000))return;
+    if(key==='health' && value!=='' && (!Number.isFinite(value)||value<.001||value>1000000))return;
     editRoom(next=>{
       if(key==='player'&&value!==''){
         const occupied=next.entities.find((entry,index)=>index!==selectedEntity && entry.player===Number(value));
         if(occupied)delete occupied.player;
       }
-      if(value==='')delete next.entities[selectedEntity][key];
-      else next.entities[selectedEntity][key]=key==='player' ? Number(value) : value;
+      const entity=next.entities[selectedEntity];
+      if(key==='health'){
+        if(value!=='') (entity.physics??={}).health=value;
+        else if(entity.physics){
+          delete entity.physics.health;
+          if(!Object.keys(entity.physics).length)delete entity.physics;
+        }
+      }else if(value==='')delete entity[key];
+      else entity[key]=key==='player' ? Number(value) : value;
     });
   }
   function openTab(id){
+    mobilePane='Editor';
     if(scriptDirty && id!=='blocks'){error='Save or discard the current script first.';return;}
     error='';tab=id;
   }
   function selectSprite(id){
     if(scriptDirty && spriteId!==id){error='Save or discard the current script first.';return;}
     spriteId=id;assetKind='sprite';error='';
+  }
+  function chooseDefinition(id){
+    if(tab==='room'){
+      mobilePane='Editor';placementSprite=id;
+      mapTool='spawn';
+      return;
+    }
+    openDefinition(id,tab==='blocks'?'blocks':'assets');
+  }
+  function dragDefinition(event,id){
+    event.dataTransfer.setData(spriteDragType,id);
+    event.dataTransfer.effectAllowed='copy';
+  }
+  function openDefinition(id,view='assets'){
+    if(scriptDirty && (view!=='blocks' || id!==spriteId)){
+      error='Save or discard the current script first.';
+      return;
+    }
+    selectSprite(id);
+    openTab(view);
+  }
+  function openAssets(kind,adding=false){
+    if(scriptDirty){openTab('assets');return;}
+    assetKind=kind;
+    addForm=adding;
+    openTab('assets');
   }
   function chooseInitialLayer(map){
     const layers=(map?.layers??[]).map((item,index)=>({item,index}));
@@ -221,7 +311,7 @@
   }
   function selectRoom(id){
     if(scriptDirty){openTab('room');return;}
-    roomPanel='layers';selectedEntity=-1;dimensions=null;
+    roomPanel='layers';selectedEntity=-1;dimensions=null;mapTool='paint';
     roomId=id;layerIndex=chooseInitialLayer(project.rooms[id]);
     openTab('room');
   }
@@ -241,7 +331,7 @@
     }catch(err){error=err.message;return false;}finally{busy=false;}
   }
   async function saveScript(id){
-    if(!project.sprites[id].script) project.sprites[id].script=`scripts/${id}.cbor`;
+    if(!project.sprites[id].script) project.sprites[id].script=`scripts/sprites/${id}.cbor`;
     await updatePreviews();
     revision=(await request('./api/status')).revision;
     status='Script saved';
@@ -305,7 +395,7 @@
     if(Object.hasOwn(collection,newId)){error='That asset ID already exists.';return;}
     collection[newId]={source:newSource,physics:{}};
     if(assetKind==='tile')tileId=newId;else spriteId=newId;
-    newId='';error='';mark();
+    newId='';addForm=false;error='';mark();
   }
   function addTags(){
     const source=art[newSource];
@@ -331,7 +421,7 @@
     const registry=project.audio??={};
     if(Object.hasOwn(registry,audioId)){error='That audio ID already exists.';return;}
     registry[audioId]={source:audioSource};
-    audioId='';error='';mark();
+    audioId='';addForm=false;error='';mark();
   }
   function toggleCompression(id,enabled){
     const item=project.audio[id];
@@ -358,16 +448,31 @@
     <details class="export-menu">
       <summary>Export</summary>
       <div class="card">
+        <a download={exportName+'.waffleproj'} href="./api/archive" onclick={saveThenOpen}>Editable project</a>
         <a download={exportName+'.html'} href="./export.html" onclick={saveThenOpen}>Standalone web game</a>
+        <a href="./api/desktop?target=linux-x64" onclick={downloadDesktop}>Linux game</a>
+        <a href="./api/desktop?target=windows-x64" onclick={downloadDesktop}>Windows game</a>
+        <button onclick={()=>{updatesOpen=!updatesOpen;release=null;}}>Updates</button>
+        <a download="gamewaffle-player.html" href="./gamewaffle-player.html">Web player</a>
         <a download={exportName+'.waffle'} href="./demo.waffle" onclick={saveThenOpen}>Cartridge</a>
       </div>
     </details>
     <a class="button primary" href="./player.html" onclick={saveThenOpen}>Play game ↗</a>
   </div>
 </header>
+{#if updatesOpen}
+  <section class="row card" aria-label="Release updates">
+    <select aria-label="Update component" bind:value={component} onchange={()=>release=null}><option value="runtime">Desktop runtime</option><option value="studio">Studio</option></select>
+    {#if component==='runtime'}<select aria-label="Runtime platform" bind:value={platform} onchange={()=>release=null}><option value="linux-x64">Linux x64</option><option value="windows-x64">Windows x64</option></select>{/if}
+    <button disabled={busy} onclick={()=>checkRelease()}>Check release</button>
+    {#if release?.available}<button disabled={busy} onclick={()=>checkRelease(true)}>Install {release.tag}</button>{/if}
+    <button onclick={()=>updatesOpen=false}>Close</button>
+  </section>
+{/if}
 {#if error || sourceError}<p role="alert" class="error banner">{error || sourceError}</p>{/if}
 {#if project}
-  <main>
+  <div class="mobile-tabs"><Sections labels={['Editor','Project','Settings']} bind:value={mobilePane}/></div>
+  <main class:wide={tab==='game'||tab==='world'||(tab==='assets'&&assetKind==='audio')} data-pane={mobilePane}>
     <aside class="project card">
       <div class="heading row"><h2>Project</h2></div>
       <div class="category">
@@ -383,15 +488,18 @@
         {/each}
       </div>
       <div class="category">
-        <div class="heading row"><h3>Sprites</h3><button class="small-button" title="Add sprite" aria-label="Add sprite" onclick={()=>{assetKind='sprite';openTab('assets');}}>+</button></div>
+        <div class="heading row"><h3>Sprite definitions</h3><button class="small-button" title="Add sprite definition" aria-label="Add sprite definition" onclick={()=>openAssets('sprite',true)}>+</button></div>
         {#each Object.keys(project.sprites??{}) as id}
-          <button class="item" class:selected={spriteId===id && tab!=='room'} onclick={()=>{selectSprite(id);openTab('blocks');}}>
-            <i class="sprite-icon"></i><span>{id}</span>
+          <button class="item" class:selected={tab==='room' ? mapTool==='spawn' && placementSprite===id : spriteId===id && assetKind==='sprite'}
+            draggable={tab==='room'} ondragstart={event=>dragDefinition(event,id)}
+            title={tab==='room' ? 'Click to place or drag to the map' : 'Select sprite definition'}
+            onclick={()=>chooseDefinition(id)}>
+            {#if spriteArt[id]}<img src={spriteArt[id]} alt="">{:else}<i class="sprite-icon"></i>{/if}<span>{id}</span>
           </button>
         {/each}
       </div>
       {#if tab!=='room'}<div class="category compact">
-        <div class="heading row"><h3>Tiles</h3><button class="small-button" title="Add tile" aria-label="Add tile" onclick={()=>{assetKind='tile';openTab('assets');}}>+</button></div>
+        <div class="heading row"><h3>Tiles</h3><button class="small-button" title="Add tile" aria-label="Add tile" onclick={()=>openAssets('tile',true)}>+</button></div>
         {#each Object.keys(project.tiles??{}) as id}
           <button class="item" class:selected={tileId===id} onclick={()=>{tileId=id;assetKind='tile';if(tab!=='assets')openTab('room');}}>
             {#if tileArt[id]?.[0]}<img src={tileArt[id][0]} alt="">{:else}<i class="room-icon"></i>{/if}<span>{id}</span>
@@ -403,90 +511,177 @@
       <nav class="row" aria-label="Editor views">
         {#each tabs as [id,title]}<button class:active={tab===id} onclick={()=>openTab(id)}>{title}</button>{/each}
       </nav>
-      {#if tab==='room' && room}
+      {#if tab==='world' && room}
+        <World rooms={project.rooms} flags={Object.keys(project.flags??{})} {roomId} onSelect={id=>{roomId=id;layerIndex=chooseInitialLayer(project.rooms[id]);selectedEntity=-1;}} onEdit={replaceRoom}/>
+      {:else if tab==='room' && room}
         {#key roomId}
           <RoomMap {room} {roomId} size={project.tileSize??24} tiles={project.tiles??{}} sprites={project.sprites??{}}
-            {tileArt} {spriteArt} {previewModes} {layerIndex} bind:selectedEntity bind:tileId bind:spriteId {busy}
+            {tileArt} {spriteArt} {previewModes} {layerIndex} bind:selectedEntity bind:tileId bind:spriteId={placementSprite} bind:tool={mapTool} {busy}
             canUndo={historyStatus.canUndo} canRedo={historyStatus.canRedo}
             onUndo={()=>restoreRoom(true)} onRedo={()=>restoreRoom(false)} onEdit={replaceRoom}
-            onLayer={chooseLayer} onSprites={()=>roomPanel='sprites'} onAssets={()=>{assetKind='tile';openTab('assets');}}
+            onLayer={chooseLayer} onSprites={()=>roomPanel='instances'} onAssets={()=>openAssets('tile')}
             onPlay={saveThenOpen} />
         {/key}
       {:else if tab==='blocks'}
         {#if spriteId}
-          {#key spriteId}<ScriptPanel sprite={spriteId} bind:dirty={scriptDirty} onSave={saveScript} />{/key}
+          {#key spriteId}<ScriptPanel sprite={spriteId} sprites={Object.keys(project.sprites??{})} bind:dirty={scriptDirty} onSave={saveScript} />{/key}
         {:else}<p class="empty card">Add a sprite in Assets to give it behavior.</p>{/if}
+      {:else if tab==='game'}
+        <section class="card asseteditor">
+          <h2>Game settings</h2>
+          <Sections labels={['Variables','Display']} bind:value={gameSection}/>
+          {#if gameSection==='Variables'}
+            {#each Object.entries(project.variables??{}) as [id,value]}
+              <label class="row variable">{id}<input type="number" step="1" {value} onchange={e=>{
+                const next=e.currentTarget.valueAsNumber;
+                if(Number.isSafeInteger(next))set(project.variables,id,next);
+                else e.currentTarget.value=value;
+              }}></label>
+            {/each}
+            {#each Object.entries(project.flags??{}) as [id,value]}
+              <label class="check"><input type="checkbox" checked={value} onchange={e=>set(project.flags,id,e.currentTarget.checked)}>{id}</label>
+            {/each}
+            <div class="row add extra">
+              <input aria-label="Variable name" placeholder="Name" bind:value={variableId}>
+              <select aria-label="Value type" bind:value={variableKind}><option value="variables">Variable</option><option value="flags">Flag</option></select>
+              <button onclick={addVariable}>Add</button>
+            </div>
+          {:else}
+            <div class="pair">
+              {#each [['min_width','Minimum width',128,128],['min_height','Minimum height',128,128],['max_width','Maximum width',512,128],['max_height','Maximum height',512,128],['zoom','Pixel zoom',2,1]] as [key,label,fallback,min]}
+                <label class="stack">{label}<input type="number" {min} max={key==='zoom'?8:512} value={project.camera?.[key]??fallback} onchange={e=>{
+                  const value=e.currentTarget.valueAsNumber;
+                  if(Number.isInteger(value)&&value>=min&&value<=(key==='zoom'?8:512))set((project.camera??={}),key,value);
+                  else e.currentTarget.value=project.camera?.[key]??fallback;
+                }}></label>
+              {/each}
+            </div>
+            <label class="stack">Bitmap font<select value={project.font??''} onchange={e=>set(project,'font',e.currentTarget.value)}>
+              <option value="">Built-in</option>{#each artFiles.filter(f=>art[f]?.width===96 && art[f]?.height===48) as file}<option>{file}</option>{/each}
+            </select></label>
+          {/if}
+        </section>
       {:else if tab==='assets'}
         <section class="card asseteditor">
           <div class="row heading">
-            <h2>Asset registry</h2>
-            <div class="row"><button class:selected={assetKind==='sprite'} onclick={()=>assetKind='sprite'}>Sprites</button><button class:selected={assetKind==='tile'} onclick={()=>assetKind='tile'}>Tiles</button></div>
+            <h2>Assets</h2>
+            <div class="row">
+              {#each [['sprite','Sprites'],['tile','Tiles'],['audio','Audio']] as [id,label]}
+                <button class:selected={assetKind===id} aria-pressed={assetKind===id} onclick={()=>openAssets(id)}>{label}</button>
+              {/each}
+            </div>
           </div>
-          <label class="stack">Edit asset
-            {#if assetKind==='sprite'}
-              <select bind:value={spriteId}>{#each Object.keys(project.sprites??{}) as id}<option value={id}>{id}</option>{/each}</select>
-            {:else}
-              <select bind:value={tileId}>{#each Object.keys(project.tiles??{}) as id}<option value={id}>{id}</option>{/each}</select>
-            {/if}
-          </label>
-          {#if inspector}
-            <label class="stack">Source <select value={inspector.source} onchange={e=>{if(assetKind==='tile')delete inspector.tag;set(inspector,'source',e.currentTarget.value);}}>
-              {#each artFiles as file}<option value={file}>{file}</option>{/each}
-            </select></label>
-            {#if assetKind==='tile'}
-              <label class="stack">Aseprite tag
-                <select value={tile.tag??''} onchange={e=>set(tile,'tag',e.currentTarget.value)}>
-                  <option value="">First tag or all frames if untagged</option>
-                  {#each art[tile.source]?.tags??[] as tag}<option value={tag}>{tag}</option>{/each}
-                </select>
-              </label>
-            {:else}
-              <div class="pair">
-                <label class="stack">Visual layer <input type="number" value={sprite.layer??0} onchange={e=>set(sprite,'layer',e.currentTarget.valueAsNumber)}></label>
-                <label class="stack">Team <input type="number" value={sprite.team??0} onchange={e=>set(sprite,'team',e.currentTarget.valueAsNumber)}></label>
-                <label class="stack">Body width <input type="number" min="1" placeholder="From source" value={sprite.width??''} onchange={e=>set(sprite,'width',e.currentTarget.value===''?'':e.currentTarget.valueAsNumber)}></label>
-                <label class="stack">Body height <input type="number" min="1" placeholder="From source" value={sprite.height??''} onchange={e=>set(sprite,'height',e.currentTarget.value===''?'':e.currentTarget.valueAsNumber)}></label>
-                <label class="stack">Initial animation <input value={sprite.animation??''} placeholder="Default" onchange={e=>set(sprite,'animation',e.currentTarget.value)}></label>
-                <label class="stack">Projectile <select value={sprite.projectile??''} onchange={e=>set(sprite,'projectile',e.currentTarget.value)}>
-                  <option value="">Default</option>{#each Object.keys(project.sprites??{}).filter(id=>id!==spriteId) as id}<option value={id}>{id}</option>{/each}
-                </select></label>
+          <label class="stack">Import image or sound<input type="file" accept=".ase,.aseprite,.png,.wav,.qoa,.ogg,.opus" onchange={async e=>{
+            const input=e.currentTarget,file=input.files[0];if(!file)return;
+            try{const response=await fetch('./api/import?name='+encodeURIComponent(file.name)+'&kind='+assetKind,{method:'POST',body:file});
+              if(!response.ok)throw Error((await response.json()).error);const imported=await response.json();await checkAssets();newSource=imported.path;}
+            catch(err){error=err.message;}finally{input.value='';}
+          }}></label>
+          <div class="row asset-bar">
+            <h3>{assetKind==='audio' ? 'Audio files' : assetKind==='tile' ? 'Tile definitions' : 'Sprite definitions'}</h3>
+            <button aria-expanded={addForm} onclick={()=>addForm=!addForm}>{addForm ? 'Cancel' : `Add ${assetKind}`}</button>
+          </div>
+          {#if assetKind==='tile'}
+            <label class="stack">Tile size
+              <select aria-label="Tile size" value={project.tileSize??24} onchange={e=>set(project,'tileSize',Number(e.currentTarget.value))}>
+                {#each tileSizes as size}<option value={size}>{size} × {size}</option>{/each}
+              </select>
+            </label>
+          {/if}
+          {#if addForm}
+            <div class="row add">
+              {#if assetKind==='audio'}
+                <input bind:value={audioId} placeholder="Audio ID" aria-label="Audio ID">
+                <select bind:value={audioSource} aria-label="Audio source">{#each audioFiles as file}<option value={file}>{file}</option>{/each}</select>
+                <button onclick={addAudio}>Add</button>
+              {:else}
+                <input bind:value={newId} placeholder="Asset ID" aria-label="Asset ID">
+                <select bind:value={newSource} aria-label="Source file">{#each artFiles as file}<option value={file}>{file}</option>{/each}</select>
+                <button onclick={addAsset}>Add</button>
+              {/if}
+            </div>
+            {#if assetKind==='tile' && art[newSource]?.tags?.length}<button class="extra" onclick={addTags}>Add all tags as tiles</button>{/if}
+            {#if assetKind!=='audio' && art[newSource]?.error}<p class="error">{art[newSource].error}</p>{/if}
+          {:else if assetKind==='audio'}
+            {#each Object.entries(project.audio??{}) as [id,file]}
+              {@const source=typeof file==='string'?file:file.source}
+              <div class="audio-line"><code>{id}</code> <small>{source}</small>
+                {#if /\.wav$/i.test(source)}<label class="check"><input type="checkbox" checked={typeof file==='string'||file.compress!==false}
+                  onchange={e=>toggleCompression(id,e.currentTarget.checked)}> QOA</label>{/if}
               </div>
+            {:else}<p class="muted">Add an audio file to use it in the game.</p>{/each}
+          {:else}
+            <label class="stack">Definition
+              {#if assetKind==='sprite'}
+                <select bind:value={spriteId} aria-label="Sprite definition">{#each Object.keys(project.sprites??{}) as id}<option value={id}>{id}</option>{/each}</select>
+              {:else}
+                <select bind:value={tileId} aria-label="Tile definition">{#each Object.keys(project.tiles??{}) as id}<option value={id}>{id}</option>{/each}</select>
+              {/if}
+            </label>
+            {#if inspector}
+              <label class="stack">Active flag<select value={inspector.flag??''} onchange={e=>set(inspector,'flag',e.currentTarget.value)}>
+                <option value="">Always active</option>{#each Object.keys(project.flags??{}) as flag}<option>{flag}</option>{/each}
+              </select></label>
+              {#if inspector.flag}<label class="check"><input type="checkbox" checked={inspector.when??true} onchange={e=>set(inspector,'when',e.currentTarget.checked)}> Flag must be on</label>{/if}
+              <label class="stack">Source <select value={inspector.source} onchange={e=>{
+                const previous=inspector.source;
+                if(previous!==e.currentTarget.value){
+                  delete inspector[assetKind==='tile'?'tag':'animation'];
+                  set(inspector,'source',e.currentTarget.value);
+                }
+              }}>
+                {#each artFiles as file}<option value={file}>{file}</option>{/each}
+              </select></label>
+              {#if assetKind==='tile'}
+                <label class="stack">Aseprite tag <select value={tile.tag??''} onchange={e=>set(tile,'tag',e.currentTarget.value)}>
+                  <option value="">Use the first tag</option>
+                  {#each art[tile.source]?.tags??[] as tag}<option value={tag}>{tag}</option>{/each}
+                </select></label>
+              {:else}
+                <button class="extra" onclick={()=>openDefinition(spriteId,'blocks')}>Open script</button>
+                <Sections labels={['Appearance','Combat','Particles']} bind:value={spriteSection}/>
+                {#if spriteSection==='Appearance'}
+                  <div class="pair">
+                    <label class="stack">Visual layer <input type="number" value={sprite.layer??0} onchange={e=>set(sprite,'layer',e.currentTarget.valueAsNumber)}></label>
+                    <label class="stack">Starting animation <select value={sprite.animation??''} onchange={e=>set(sprite,'animation',e.currentTarget.value)}>
+                      <option value="">Default</option>
+                      {#each (art[sprite.source]?.tags??[]).filter(tag=>tag!=='default') as tag}<option value={tag}>{tag}</option>{/each}
+                    </select></label>
+                    <label class="stack">Body width <input type="number" min="1" placeholder="From source" value={sprite.width??''} onchange={e=>set(sprite,'width',e.currentTarget.value===''?'':e.currentTarget.valueAsNumber)}></label>
+                    <label class="stack">Body height <input type="number" min="1" placeholder="From source" value={sprite.height??''} onchange={e=>set(sprite,'height',e.currentTarget.value===''?'':e.currentTarget.valueAsNumber)}></label>
+                  </div>
+                {:else if spriteSection==='Combat'}
+                  <div class="pair">
+                    <label class="stack">Team <input type="number" value={sprite.team??0} onchange={e=>set(sprite,'team',e.currentTarget.valueAsNumber)}></label>
+                    <label class="stack">Projectile <select value={sprite.projectile??''} onchange={e=>set(sprite,'projectile',e.currentTarget.value)}>
+                      <option value="">Default</option>{#each Object.keys(project.sprites??{}).filter(id=>id!==spriteId) as id}<option value={id}>{id}</option>{/each}
+                    </select></label>
+                  </div>
+                  <label class="check"><input type="checkbox" checked={sprite.alwaysActive??false} onchange={e=>set(sprite,'alwaysActive',e.currentTarget.checked)}> Run scripts off camera</label>
+                {:else}
+                  <label class="stack">Emitter<select value={sprite.emitter?.effect??''} onchange={e=>set(sprite,'emitter',e.currentTarget.value?{effect:e.currentTarget.value,rate:sprite.emitter?.rate??16}:'')}>
+                    <option value="">None</option>{#each effects as effect}<option>{effect}</option>{/each}
+                  </select></label>
+                  {#if sprite.emitter}<label class="stack">Particles per second<input type="number" min="1" max="240" value={sprite.emitter.rate} onchange={e=>{
+                    const n=e.currentTarget.valueAsNumber;if(Number.isInteger(n)&&n>=1&&n<=240)set(sprite,'emitter',{...sprite.emitter,rate:n});
+                  }}></label>{/if}
+                {/if}
+              {/if}
             {/if}
           {/if}
-          <h3>Add {assetKind}</h3>
-          <div class="row add">
-            <input bind:value={newId} placeholder="Asset ID" aria-label="Asset ID">
-            <select bind:value={newSource} aria-label="Source file">{#each artFiles as file}<option value={file}>{file}</option>{/each}</select>
-            <button onclick={addAsset}>Add</button>
-          </div>
-          {#if assetKind==='tile' && art[newSource]?.tags?.length}<button class="extra" onclick={addTags}>Add all tags as tiles</button>{/if}
-          {#if art[newSource]?.error}<p class="error">{art[newSource].error}</p>{/if}
-          <p class="muted">Put Aseprite and sound files in the project’s <code>assets/</code> folder. Use Rebuild assets to scan for files.</p>
-          <h3>Audio registry</h3>
-          {#each Object.entries(project.audio??{}) as [id,file]}
-            {@const source=typeof file==='string'?file:file.source}
-            <div class="audio-line"><code>{id}</code> <small>{source}</small>
-              {#if /\.wav$/i.test(source)}<label class="check"><input type="checkbox" checked={typeof file==='string'||file.compress!==false}
-                onchange={e=>toggleCompression(id,e.currentTarget.checked)}> QOA</label>{/if}
-            </div>
-          {/each}
-          <div class="row add extra">
-            <input bind:value={audioId} placeholder="Audio ID" aria-label="Audio ID">
-            <select bind:value={audioSource} aria-label="Audio source">{#each audioFiles as file}<option value={file}>{file}</option>{/each}</select>
-            <button onclick={addAudio}>Add audio</button>
-          </div>
         </section>
       {/if}
     </div>
-    <aside class="inspector card">
+    {#if tab!=='game' && tab!=='world' && (tab!=='assets' || assetKind!=='audio')}<aside class="inspector card">
       {#if tab==='room' && room}
         <div class="panel-tabs row">
-          {#each [['layers','Layers'],['room','Room'],['sprites','Sprites']] as [id,label]}
+          {#each [['layers','Layers'],['room','Room'],['instances','Instances']] as [id,label]}
             <button class:selected={roomPanel===id} aria-pressed={roomPanel===id} onclick={()=>roomPanel=id}>{label}</button>
           {/each}
         </div>
         {#if roomPanel==='room'}
-          <div class="row start-room">
+          <Sections labels={['Size','Physics','Sound & color']} bind:value={roomSection}/>
+          {#if roomSection==='Size'}<div class="row start-room">
             {#if (project.start??Object.keys(project.rooms)[0])===roomId}<small>Starting room</small>
             {:else}<button class="small-button" onclick={()=>set(project,'start',roomId)}>Set as starting room</button>{/if}
           </div>
@@ -497,24 +692,29 @@
           <div class="pair">
             <label class="stack">Columns <input type="number" min="1" max={maxTiles} value={dimensions?.cols??room.cols} onchange={e=>resizeRoom('cols',e.currentTarget)}></label>
             <label class="stack">Rows <input type="number" min="1" max={maxTiles} value={dimensions?.rows??room.rows} onchange={e=>resizeRoom('rows',e.currentTarget)}></label>
-            {#if roomView==='platformer'}
-              <label class="stack">Gravity <input type="number" min="-100" max="100" step="any" value={room.gravity??24} onchange={e=>setRoom('gravity',e.currentTarget.valueAsNumber)}></label>
-            {/if}
-            <label class="stack">Background <input type="color" value={room.background??'#171829'} onchange={e=>setRoom('background',e.currentTarget.value)}></label>
           </div>
           {#if dimensions}
             <p class="crop-note">The new room size cuts off tiles or sprites.</p>
             <div class="row"><button onclick={cropRoom}>Resize and crop</button><button onclick={()=>dimensions=null}>Cancel</button></div>
           {/if}
-          <label class="check"><input type="checkbox" checked={room.closedEdges??roomView==='top_down'} onchange={e=>setRoom('closedEdges',e.currentTarget.checked)}> Solid room edges</label>
-          {#if roomView==='top_down'}
-            <label class="check"><input type="checkbox" checked={room.ySort??true} onchange={e=>setRoom('ySort',e.currentTarget.checked)}> Draw lower sprites in front</label>
-          {/if}
-          {#each [['music','Music'],['ambience','Ambient sound']] as [key,label]}
-            <label class="stack">{label}<select value={room[key]??''} onchange={e=>setRoom(key,e.currentTarget.value)}>
-              <option value="">None</option>{#each Object.keys(project.audio??{}) as id}<option value={id}>{id}</option>{/each}
+          {:else if roomSection==='Physics'}
+            {#if roomView==='platformer'}
+              <label class="stack">Gravity <input type="number" min="-100" max="100" step="any" value={room.gravity ?? platformGravity} onchange={e=>setRoom('gravity',e.currentTarget.valueAsNumber)}></label>
+            {/if}
+            <label class="stack">Room borders <select value={roomBorder(room,roomView==='top_down')} onchange={e=>setRoom('border',e.currentTarget.value)}>
+              <option value="sides">Side walls</option><option value="closed">All four walls</option><option value="open">Open</option>
             </select></label>
-          {/each}
+          {:else}
+            <label class="stack">Background <input type="color" value={room.background??'#171829'} onchange={e=>setRoom('background',e.currentTarget.value)}></label>
+            {#if roomView==='top_down'}
+              <label class="check"><input type="checkbox" checked={room.ySort??true} onchange={e=>setRoom('ySort',e.currentTarget.checked)}> Draw lower sprites in front</label>
+            {/if}
+            {#each [['music','Music'],['ambience','Ambient sound']] as [key,label]}
+              <label class="stack">{label}<select value={room[key]??''} onchange={e=>setRoom(key,e.currentTarget.value)}>
+                <option value="">None</option>{#each Object.keys(project.audio??{}) as id}<option value={id}>{id}</option>{/each}
+              </select></label>
+            {/each}
+          {/if}
         {:else if roomPanel==='layers'}
           <div class="heading row mini"><h3>Draw order</h3><button class="small-button" disabled={busy} onclick={addLayer}>Add layer</button></div>
           {#each sortedLayers as {layer:item,index}}
@@ -525,6 +725,10 @@
           {#if layer}
             <label class="stack">Layer name <input value={layer.name} onchange={e=>changeLayer('name',e.currentTarget.value)}></label>
             <label class="check"><input type="checkbox" checked={layer.collidable} onchange={e=>changeLayer('collidable',e.currentTarget.checked)}> Enable collision</label>
+            <label class="stack">Layer flag<select value={layer.flag??''} onchange={e=>changeLayer('flag',e.currentTarget.value)}>
+              <option value="">Always active</option>{#each Object.keys(project.flags??{}) as flag}<option>{flag}</option>{/each}
+            </select></label>
+            {#if layer.flag}<label class="check"><input type="checkbox" checked={layer.when??true} onchange={e=>changeLayer('when',e.currentTarget.checked)}> Flag must be on</label>{/if}
             <label class="stack">Layer order <input type="number" min="-10000" max="10000" value={layer.order??layerIndex} onchange={e=>{
               const value=e.currentTarget.valueAsNumber;
               if(Number.isInteger(value)&&Math.abs(value)<=10000)changeLayer('order',value);
@@ -536,38 +740,66 @@
             {#if room.layers.length>1}<button class="small-button remove" onclick={removeLayer}>Remove layer</button>{/if}
           {/if}
         {:else}
-          {#if !room.entities.length}<p class="muted">Use Place sprite to add a sprite.</p>{/if}
-          {#each room.entities as entity,index}
-            <button class="item" class:selected={selectedEntity===index} onclick={()=>selectedEntity=index}>
-              <span>{entity.sprite}</span>{#if entity.player!=null}<small>Player {entity.player+1}</small>{/if}
-            </button>
-          {/each}
+          <div class="heading row mini">
+            <h3>Room instances</h3>
+            <button class="small-button" disabled={!placementSprite} onclick={()=>{if(actor)placementSprite=actor.sprite;mapTool='spawn';}}>Place another</button>
+          </div>
+          {#if !room.entities.length}<p class="muted">Choose a sprite definition to add an instance.</p>{/if}
+          <div class="instance-list">
+            {#each room.entities as entity,index}
+              <button class="item" class:selected={selectedEntity===index} onclick={()=>{selectedEntity=index;mapTool='select';}}>
+                <span>{entity.name ?? entity.sprite}</span>{#if entity.player!=null}<small>Player {entity.player+1}</small>{/if}
+              </button>
+            {/each}
+          </div>
           {#if actor}
+            {@const definition=project.sprites[actor.sprite]}
+            <div class="row instance-source">
+              <small>Definition: {actor.sprite}</small>
+              <button class="small-button" onclick={()=>openDefinition(actor.sprite)}>Open definition</button>
+              <button class="small-button" onclick={()=>openDefinition(actor.sprite,'blocks')}>Open script</button>
+            </div>
+            <Sections labels={['Placement','Overrides']} bind:value={instanceSection}/>
+            {#if instanceSection==='Placement'}<label class="stack">Instance name <input maxlength="64" value={actor.name} onchange={e=>changeActor('name',e.currentTarget.value)}></label>
             <div class="pair">
               <label class="stack">X position <input type="number" min="0" value={actor.x} onchange={e=>changeActor('x',e.currentTarget.valueAsNumber)}></label>
               <label class="stack">Y position <input type="number" min="0" value={actor.y} onchange={e=>changeActor('y',e.currentTarget.valueAsNumber)}></label>
             </div>
-            <label class="stack">Player slot <select aria-label="Sprite player slot" value={actor.player==null ? '' : String(actor.player)} onchange={e=>changeActor('player',e.currentTarget.value)}>
+            <label class="stack">Player slot <select aria-label="Instance player slot" value={actor.player==null ? '' : String(actor.player)} onchange={e=>changeActor('player',e.currentTarget.value)}>
               <option value="">None</option>{#each [0,1,2,3] as player}<option value={String(player)}>Player {player+1}</option>{/each}
             </select></label>
-            <button class="small-button remove" onclick={()=>{editRoom(next=>next.entities.splice(selectedEntity,1));selectedEntity=-1;}}>Remove sprite</button>
+            {:else}
+              <div class="pair">
+                <label class="stack">Draw layer <input type="number" min="-10000" max="10000" placeholder={String(definition?.layer??0)} value={actor.layer??''}
+                  onchange={e=>changeActor('layer',e.currentTarget.value===''?'':e.currentTarget.valueAsNumber)}></label>
+                <label class="stack">Health <input type="number" min=".001" max="1000000" step="any" placeholder={String(definition?.physics?.health??1)} value={actor.physics?.health??''}
+                  onchange={e=>changeActor('health',e.currentTarget.value===''?'':e.currentTarget.valueAsNumber)}></label>
+              </div>
+              <label class="stack">Starting animation <select value={actor.animation??''} onchange={e=>changeActor('animation',e.currentTarget.value)}>
+                <option value="">Definition default</option>
+                {#each new Set(['default',...(art[definition?.source]?.tags??[])]) as tag}<option value={tag}>{tag}</option>{/each}
+              </select></label>
+              <label class="check"><input type="checkbox" checked={actor.flipX??false} onchange={e=>changeActor('flipX',e.currentTarget.checked || '')}> Face left at start</label>
+              <label class="stack">Spawn flag<select value={actor.flag??''} onchange={e=>changeActor('flag',e.currentTarget.value)}>
+                <option value="">Always</option>{#each Object.keys(project.flags??{}) as flag}<option>{flag}</option>{/each}
+              </select></label>
+              {#if actor.flag}<label class="check"><input type="checkbox" checked={actor.when??true} onchange={e=>changeActor('when',e.currentTarget.checked)}> Flag must be on</label>{/if}
+            {/if}
+            <button class="small-button remove" onclick={()=>{editRoom(next=>next.entities.splice(selectedEntity,1));selectedEntity=-1;}}>Remove instance</button>
           {/if}
         {/if}
       {:else}
         {@const target=tab==='blocks' ? sprite : inspector}
-        <div class="heading row"><h2>Sprite and tile settings</h2></div>
+        <div class="heading row"><h2>Definition settings</h2></div>
         {#if target}
           <p class="asset-name">{tab==='blocks'||assetKind==='sprite' ? spriteId : tileId}</p>
-          {#if target.physics}
-            <Physics bind:physics={target.physics} fallback={tab==='assets' && assetKind==='tile'
-              ? (tile.tag??art[tile.source]?.tags?.[0]??'').includes(':fluid:') ? 'fluid' : 'static'
-              : 'none'} onChange={mark} />
-          {:else}
-            <button onclick={()=>{target.physics={};mark();}}>Set physics</button>
-          {/if}
+          <Physics physics={target.physics} fallback={tab==='assets' && assetKind==='tile'
+            ? (tile.tag??art[tile.source]?.tags?.[0]??'').includes(':fluid:') ? 'fluid' : 'static'
+            : 'none'} onChange={value=>set(target,'physics',value)} />
         {/if}
+
       {/if}
-    </aside>
+    </aside>{/if}
   </main>
 {/if}
 <style>
@@ -615,7 +847,24 @@
   .add input,.add select{width:min(35%,15rem);}
   .audio-line{display:flex;gap:.5rem;align-items:baseline;margin-top:.32rem;font-size:.78rem;}
   .extra{margin-top:.55rem;}.start-room{margin-bottom:.15rem;}
-  .asset-name{font-size:.85rem;color:var(--accent);}
-  @media(max-width:880px){main{grid-template-columns:140px minmax(0,1fr);}.inspector{grid-column:2;max-height:none;}.status{display:none;}}
-  @media(max-width:570px){.appbar{align-items:start;padding:.55rem;}.actions{justify-content:end;font-size:.72rem;}main{display:flex;flex-direction:column;padding:.55rem;}.project,.work,.inspector{width:100%;}.project{display:grid;grid-template-columns:repeat(3,1fr);gap:.3rem;}.project>.heading{grid-column:1/4;}.category{margin-top:0;}}
+  .asset-name{font-size:.85rem;color:var(--accent);margin-bottom:.6rem;}
+  .variable input{max-width:9rem;margin-left:auto;}
+  .variable{margin-top:.45rem;}
+  .asset-bar{justify-content:space-between;margin-top:.65rem;}
+  .instance-list{max-height:14rem;overflow:auto;}
+  .instance-source{margin-top:.55rem;}
+  .instance-source small{flex-basis:100%;font-size:.72rem;}
+  .mobile-tabs{display:none;}
+  main.wide{grid-template-columns:minmax(155px,185px) minmax(0,1fr);}
+  .pair{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .project,.inspector{min-width:0;}.item span{overflow-wrap:anywhere;}
+  @media(min-width:881px){.project,.inspector{position:sticky;top:.5rem;overflow:auto;max-height:calc(100dvh - 1rem);}}
+  @media(max-width:880px){
+    main,main.wide{display:block;padding:.5rem;}
+    .mobile-tabs{display:block;margin:0 .5rem;}
+    main[data-pane="Editor"]>aside,main[data-pane="Project"]>:not(.project),main[data-pane="Settings"]>:not(.inspector){display:none;}
+    main.wide[data-pane="Settings"]>.work{display:block;}
+    .appbar{flex-wrap:wrap;padding:.6rem;gap:.4rem;}.actions{gap:.3rem;}
+    .inspector,.instance-list{max-height:none;overflow:visible;}
+  }
 </style>

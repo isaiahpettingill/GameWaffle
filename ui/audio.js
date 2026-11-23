@@ -2,9 +2,10 @@ import { decode as decodeQoa } from 'qoa-format';
 
 export function createAudio() {
   let context, master;
-  let muted = true, cart, roomId;
+  let muted = true, cart, roomId, roomGeneration=0;
   const sources = [], decoded = new Map();
   function stopRoom() {
+    roomGeneration++;
     for (const source of sources.splice(0)) { try { source.stop(); } catch { /* Already stopped. */ } }
   }
   function setCart(value) {
@@ -31,10 +32,10 @@ export function createAudio() {
   }
   async function play(id, volume, loop = false) {
     if (muted || !id) return false;
-    const room = roomId, expected = cart;
+    const generation = roomGeneration, expected = cart;
     try {
       const buffer = await decode(id);
-      if (!buffer || muted || cart !== expected || (loop && room !== roomId)) return false;
+      if (!buffer || muted || cart !== expected || (loop && generation !== roomGeneration)) return false;
       const player = context.createBufferSource(), gain = context.createGain();
       player.buffer = buffer;
       player.loop = loop;
@@ -48,9 +49,10 @@ export function createAudio() {
   }
   function setRoom(id) {
     if (roomId === id) return;
+    const previous=cart?.rooms[roomId],room=cart?.rooms[id];
+    roomId=id;
+    if(previous && previous.music===room?.music && previous.ambience===room?.ambience)return;
     stopRoom();
-    roomId = id;
-    const room = cart?.rooms[id];
     play(room?.music,.7,true);
     play(room?.ambience,.45,true);
   }
