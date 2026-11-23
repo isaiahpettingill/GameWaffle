@@ -2,7 +2,7 @@ import {bakeRoomShader} from './room-shaders.mjs';
 import {addSeams} from './seams.mjs';
 import {pack} from './pack.mjs';
 import {defaultFont} from './font.mjs';
-import { effects, platformGravity, roomBorder } from './schema.mjs';
+import { buttons, effects, platformGravity, roomBorder } from './schema.mjs';
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -162,6 +162,14 @@ export async function compileProject(root, { project: draft, scripts = new Map()
   if (!store && root.endsWith('.waffleproj')) store=await (await import('./project-store.mjs')).projectStore(root);
   const read = store?.read ?? ((name,encoding)=>readFile(projectPath(root,name),encoding));
   const project = draft ?? JSON.parse(await read('project.json','utf8'));
+  const controls=Object.fromEntries(buttons.map((name,i)=>[name,1<<i]));
+  const bindings=Object.entries(project.controls??{});
+  if(bindings.length>64)throw Error('Use up to 64 input actions.');
+  for(const [id,keys] of bindings){
+    if(!variableName(id)||Object.hasOwn(controls,id)||!Array.isArray(keys)||!keys.length||keys.some(key=>!buttons.includes(key)))throw Error('Invalid input action: '+id);
+    controls[id]=keys.reduce((mask,key)=>mask|(1<<buttons.indexOf(key)),0);
+  }
+  const registry={controls,items:project.items??{}};
   const frames = new Map(), sources = new Map();
   async function source(file) {
     if (!sources.has(file)) sources.set(file, await readArt(file,read));
@@ -186,7 +194,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     if (sprite.script) {
       try {
         const unit=scripts.get(id) ?? (sprite.script.endsWith('.ws') ? parseScript(await read(sprite.script,'utf8')) : decodeCbor(await read(sprite.script)));
-        script=compileScript(unit,await loadModules(unit,read));
+        script=compileScript(unit,await loadModules(unit,read),undefined,registry);
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
       }
@@ -258,7 +266,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       ? { format: 'qoa', data: wavToQoa(data) } : { format: extension, data };
   }
 
-  const items={},itemIcons=new Map();
+  const items=Object.create(null),itemIcons=new Map();
   for(const [id,item] of Object.entries(project.items??{})){
     if(!variableName(id))throw Error('Invalid item ID '+id);
     if(item.flag && !variableName(item.flag))throw Error('Invalid item flag '+item.flag);
@@ -413,7 +421,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     [id, { mode: tile.physics.mode, variants: tile.variants.map(clip => thumbnail(clip[0])) }]));
   const spritePreviews = Object.fromEntries(Object.entries(sprites).map(([id, sprite]) =>
     [id, thumbnail((sprite.clips[sprite.animation] ?? sprite.clips.default).frames[0])]));
-  return { items,saveId:project.saveId??project.name, name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
+  return { controls,items,saveId:project.saveId??project.name, name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
     tilePreviews, spritePreviews };
 }
 

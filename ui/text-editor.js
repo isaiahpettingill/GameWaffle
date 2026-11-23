@@ -15,7 +15,7 @@ const language=StreamLanguage.define({token(stream){
   if(stream.match(/[a-zA-Z_]\w*/))return 'variableName';
   stream.next();return null;
 }});
-export async function validateText(source,moduleName){
+export async function validateText(source,moduleName,registry){
   const unit=parseScript(source);
   if(moduleName && Object.keys(unit.events).length){
     const from=source.search(/^\s*on\s/m);
@@ -27,11 +27,11 @@ export async function validateText(source,moduleName){
     modules=await res.json();if(!res.ok)throw Error(modules.error);
   }
   try{
-    compileScript(unit,modules);
+    compileScript(unit,modules,undefined,registry);
   }catch(err){Object.assign(err,locations.get(err.node));throw err;}
   return unit;
 }
-export function mountText(parent,source,changed,moduleName){
+export function mountText(parent,source,changed,moduleName,registry){
   const view=new EditorView({parent,state:EditorState.create({doc:source,extensions:[
     lineNumbers(),history(),language,syntaxHighlighting(defaultHighlightStyle),highlightActiveLine(),lintGutter(),
     keymap.of([indentWithTab,...defaultKeymap,...historyKeymap,...lintKeymap]),EditorView.lineWrapping,
@@ -39,7 +39,7 @@ export function mountText(parent,source,changed,moduleName){
     EditorView.updateListener.of(update=>{if(update.docChanged)changed();}),
     linter(async view=>{
       const doc=view.state.doc;
-      try{await validateText(doc.toString(),moduleName);return [];}catch(err){
+      try{await validateText(doc.toString(),moduleName,registry);return [];}catch(err){
         const from=Math.min(doc.length,err.from??0);
         return [{from,to:Math.min(doc.length,err.to??doc.lineAt(from).to),severity:'error',message:err.message}];
       }

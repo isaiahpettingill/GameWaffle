@@ -9,13 +9,13 @@ import { tick } from 'svelte';
 
   let {
     room, roomId, size, tiles, sprites, tileArt, spriteArt, previewModes, layerIndex,
-    selectedEntity = $bindable(-1), tileId = $bindable(''), spriteId = $bindable(''), tool = $bindable('paint'),
+    selectedEntity = $bindable(-1), tileId = $bindable(''), spriteId = $bindable(''), tool = $bindable('paint'),placeAs=$bindable(''),
     canUndo, canRedo, onUndo, onRedo, onEdit, onLayer, onSprites, onAssets, onPlay, busy,
   } = $props();
 
   const tools = [
     ['paint', 'B', 'Brush'], ['erase', 'E', 'Eraser'], ['rect', 'R', 'Rectangle'],
-    ['pick', 'I', 'Pick tile'], ['spawn', 'P', 'Add instance'], ['select', 'V', 'Select instance'],
+    ['pick', 'I', 'Pick tile'], ['spawn', 'P', 'Add Sprite'], ['select', 'V', 'Select instance'],
     ['hand', 'H', 'Pan'],
   ];
   const playerColors = ['#ffc875','#92dac4','#bda6ed','#ee9e9f'];
@@ -43,7 +43,7 @@ import { tick } from 'svelte';
     paint: 'Drag to paint tiles.', erase: 'Drag to erase tiles on the active layer.',
     rect: 'Drag from one corner to the other to fill a rectangle.',
     pick: 'Select a tile on a visible layer to use it as the brush.',
-    spawn: 'Select a sprite definition. Click the map to add an instance.',
+    spawn: 'Choose an actor. Click the map to place an instance.',
     select: 'Select or drag an instance. Press Delete to remove it.',
     hand: 'Drag to move the view.',
   }[tool]);
@@ -318,7 +318,14 @@ import { tick } from 'svelte';
     if (!Object.hasOwn(sprites,id)) return;
     const {px,py} = placement(p);
     const name = newInstanceName(id,room.entities);
-    const entities = [...room.entities,{sprite:id,name,x:px,y:py}];
+    const entity={sprite:id,name,x:px,y:py};
+    if(placeAs!==''){
+      if(room.entities.some(other=>other.player===Number(placeAs)))return;
+      entity.player=Number(placeAs);entity.standardMovement=!sprites[id].script;
+      if(entity.standardMovement&&(!sprites[id].physics?.mode||sprites[id].physics.mode==='none'))entity.physics={mode:'dynamic'};
+      placeAs='';
+    }
+    const entities = [...room.entities,entity];
     onEdit({...room,entities});
     selectedEntity = entities.length-1;
     onSprites();
@@ -422,7 +429,7 @@ import { tick } from 'svelte';
     <div class="row">
       <button class="icon-button" aria-label="Undo room edit" title="Undo (Ctrl+Z)" disabled={!canUndo || busy} onclick={onUndo}><Undo2 size={15}/></button>
       <button class="icon-button" aria-label="Redo room edit" title="Redo (Ctrl+Shift+Z)" disabled={!canRedo || busy} onclick={onRedo}><Redo2 size={15}/></button>
-      <a class="button" title="Play the saved room" aria-disabled={busy} href={busy ? undefined : `./player.html?room=${encodeURIComponent(roomId)}`} target="_blank" rel="noopener" onclick={onPlay}><Play size={14}/>Play room</a>
+      <a class="button" title="Play the saved room" aria-disabled={busy} href={busy ? undefined : `./player.html?room=${encodeURIComponent(roomId)}`} onclick={onPlay}><Play size={14}/>Play room</a>
     </div>
   </header>
   <div class="tools row" aria-label="Map tools">
@@ -461,7 +468,7 @@ import { tick } from 'svelte';
   {#if spriteTool}
     <div class="palette">
       {#if tool==='spawn'}
-        <div class="palette-head row"><strong>Sprites</strong><input type="search" aria-label="Find a sprite" placeholder="Find a sprite" bind:value={spriteFilter}></div>
+        <div class="palette-head row"><strong>Actor</strong><label>Controlled by<select bind:value={placeAs}><option value="">No player</option>{#each [0,1,2,3] as slot}<option disabled={room.entities.some(e=>e.player===slot)} value={String(slot)}>Player {slot+1}</option>{/each}</select></label><input type="search" aria-label="Find an actor" placeholder="Find an actor" bind:value={spriteFilter}></div>
         <div class="tile-list">
           <PagedList items={Object.keys(sprites)} query={spriteFilter} label="sprite choices" size={12}>{#snippet children(id)}
             <button class="swatch" class:selected={spriteId===id} aria-pressed={spriteId===id}

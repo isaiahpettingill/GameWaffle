@@ -55,15 +55,68 @@ fn main() {
                 .next()
                 .ok_or("Missing Studio port")?
                 .parse()?;
+            let host = app.handle().clone();
             WebviewWindowBuilder::new(
                 app,
                 "studio",
                 WebviewUrl::External(format!("http://127.0.0.1:{port}").parse()?),
             )
+            .initialization_script("window.__GAMEWAFFLE_STUDIO__ = true")
+            .on_navigation(move |url| {
+                if url.scheme() != "http"
+                    || !matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
+                    || url.path() != "/__playtest"
+                {
+                    return true;
+                }
+                let mut game = url.clone();
+                game.set_path("/player.html");
+                let app = host.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(window) = app.get_webview_window("playtest") {
+                        let _ = window.navigate(game);
+                        let _ = window.set_focus();
+                        return;
+                    }
+                    let parent = app.clone();
+                    let result =
+                        WebviewWindowBuilder::new(&app, "playtest", WebviewUrl::External(game))
+                            .title("GameWaffle Playtest")
+                            .inner_size(960., 640.)
+                            .on_navigation(move |next| {
+                                if next.path() != "/__stop_playtest" {
+                                    return true;
+                                }
+                                let handle = parent.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    if let Some(window) = handle.get_webview_window("playtest") {
+                                        let _ = window.close();
+                                    }
+                                    if let Some(editor) = handle.get_webview_window("studio") {
+                                        let _ = editor.set_focus();
+                                    }
+                                });
+                                false
+                            })
+                            .initialization_script("window.__GAMEWAFFLE_PLAYTEST__ = true")
+                            .build();
+                    if let Err(error) = result {
+                        eprintln!("Could not open playtest: {error}");
+                    }
+                });
+                false
+            })
             .title("GameWaffle Studio")
             .inner_size(1280., 800.)
             .build()?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "studio" && matches!(event, tauri::WindowEvent::Destroyed) {
+                if let Some(game) = window.app_handle().get_webview_window("playtest") {
+                    let _ = game.close();
+                }
+            }
         })
         .run(tauri::generate_context!())
         .expect("Could not start GameWaffle Studio");

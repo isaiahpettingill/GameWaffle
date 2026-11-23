@@ -1,9 +1,10 @@
 <script>
   import {onMount,tick} from 'svelte';
-  import {Folder,FolderOpen,FolderPlus,FileArchive,ArrowUp,House,Search,DoorOpen,ChevronRight,HardDrive} from '@lucide/svelte';
+  import {Folder,FolderOpen,FolderPlus,FileArchive,ArrowUp,House,Search,DoorOpen,ChevronRight,HardDrive,History,X} from '@lucide/svelte';
   import icon from '../packaging/gamewaffle.svg?inline';
+  let recent=$state([]),section=$state('recent'),recentFilter=$state('');
   let parent=$state(''),home=$state(''),sep=$state('/'),name=$state(''),storage=$state('folder'),view=$state('platformer');
-  let dialog, nameInput, mode=$state(''),listing=$state(null),address=$state(''),query=$state(''),page=$state(0);
+  let dialog, nameInput=$state(), mode=$state(''),listing=$state(null),address=$state(''),query=$state(''),page=$state(0);
   let error=$state(''),pickerError=$state(''),busy=$state(false),loading=$state(false),requestId=0;
   const filtered=$derived((listing?.items??[]).filter(x=>(mode==='open'||x.folder)&&(!x.name.startsWith('.')||query.startsWith('.'))&&x.name.toLowerCase().includes(query.toLowerCase())));
   const destination=$derived(parent.replace(/[\\/]$/,'')+sep+(name.trim()||'…')+(storage==='archive'?'.waffleproj':''));
@@ -36,7 +37,7 @@
   async function choose(){
     if(!listing||loading)return;
     if(mode==='open'){await submit('open',{path:listing.folder});return;}
-    try{parent=(await api('location',{path:listing.folder})).location;dialog.close();nameInput.focus();}
+    try{parent=(await api('location',{path:listing.folder})).location;dialog.close();nameInput?.focus();}
     catch(e){pickerError=e.message;}
   }
   function closeMenus(event){
@@ -48,22 +49,43 @@
     if(e.key==='Escape'){for(const m of document.querySelectorAll('.export-menu[open]')){m.open=false;m.querySelector('summary').focus();}}
     if(!dialog.open&&(e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='o'){e.preventDefault();pick('open');}
   }
-  async function newProject(){await tick();nameInput.focus();nameInput.select();}
+  async function newProject(){section='new';await tick();nameInput.focus();nameInput.select();}
   onMount(async()=>{try{const data=await api('settings');parent=data.location;home=data.home;sep=data.sep;
-    if(new URLSearchParams(location.search).get('action')==='open')await pick('open');
+    recent=data.recent;
+    const action=new URLSearchParams(location.search).get('action');
+    section=action==='new'?'new':'recent';
+    if(action==='open')await pick('open');
+    else if(!action&&data.resume&&recent.length)await submit('open',{path:recent[0].path});
+    else if(action==='new')await newProject();
   }catch(e){error=e.message;}});
 </script>
 <svelte:window onclick={closeMenus} onkeydown={keys}/>
 <header class="projectbar"><img src={icon} width="26" height="26" alt=""><strong>GameWaffle Studio</strong></header>
 <nav class="studio-menus" aria-label="Application menu">
   <details class="export-menu" name="menu"><summary>File</summary><div class="card">
-    <button onclick={newProject}>New project</button><button onclick={()=>pick('open')}>Open project…</button>
+    <button onclick={()=>section='recent'}>Recent projects</button><button onclick={newProject}>New project</button><button onclick={()=>pick('open')}>Open project…</button>
   </div></details>
-  <details class="export-menu" name="menu"><summary>Edit</summary><div class="card"><button onclick={()=>{nameInput.focus();nameInput.select();}}>Select project name</button><button disabled={!name} onclick={()=>{name='';nameInput.focus();}}>Clear project name</button></div></details>
+  <details class="export-menu" name="menu"><summary>Edit</summary><div class="card"><button onclick={newProject}>Edit new project name</button><button disabled={!name||section!=='new'} onclick={()=>{name='';nameInput.focus();}}>Clear project name</button></div></details>
   <details class="export-menu" name="menu"><summary>Tools</summary><div class="card"><button onclick={()=>pick('parent')}>Choose projects folder…</button><button onclick={()=>submit('demo')}>Open Basalt Works example</button></div></details>
 </nav>
 <main>
-  <div class="heading"><h1>Projects</h1><button onclick={()=>pick('open')} disabled={!parent||busy}><FolderOpen size={17}/> Open project…</button></div>
+  <div class="heading"><h1>Project Manager</h1><button onclick={()=>pick('open')} disabled={!parent||busy}><FolderOpen size={17}/> Open project…</button></div>
+  <div class="project-tabs"><button aria-pressed={section==='recent'} onclick={()=>section='recent'}><History size={16}/>Recent projects</button>
+    <button aria-pressed={section==='new'} onclick={newProject}><FolderPlus size={16}/>New project</button></div>
+  {#if section==='recent'}
+    {#if recent.length>5}<input type="search" aria-label="Find recent projects" placeholder="Find recent projects" bind:value={recentFilter}>{/if}
+    <div class="recent">
+      {#each recent.filter(p=>(p.name+' '+p.path).toLowerCase().includes(recentFilter.toLowerCase())) as project}
+        <div><button class="recent-open" disabled={busy} onclick={()=>submit('open',{path:project.path})}>
+          {#if project.path.endsWith('.waffleproj')}<FileArchive/>{:else}<Folder/>{/if}
+          <span><strong>{project.name}</strong><small>{project.path}</small></span>
+        </button>
+        <button class="icon-button" aria-label={'Remove '+project.name+' from recent projects'} title="Remove from list" onclick={async()=>{
+          try{recent=(await api('forget',{path:project.path})).recent;}catch(e){error=e.message;}
+        }}><X/></button></div>
+      {:else}<p>{recent.length?'No matching projects.':'No recent projects.'}</p>{/each}
+    </div>
+  {:else}
   <form onsubmit={e=>{e.preventDefault();submit('new',{parent,name,storage,view});}}>
     <h2><FolderPlus size={18}/> New project</h2>
     <label>Project name<input bind:this={nameInput} bind:value={name} required maxlength="80" placeholder="My game"></label>
@@ -74,6 +96,7 @@
     <div class="destination"><small>Create at</small><output>{destination}</output></div>
     <button class="primary" disabled={!parent||busy}>Create project</button>
   </form>
+  {/if}
   <button class="example" disabled={busy} onclick={()=>submit('demo')}><DoorOpen size={16}/> Open Basalt Works example</button>
   {#if error}<p role="alert">{error}</p>{/if}
 </main>
@@ -99,6 +122,9 @@
   <footer><button onclick={()=>dialog.close()}>Cancel</button><button class="primary" disabled={loading||busy||!listing||(mode==='open'&&!listing.project)} onclick={choose}>{mode==='open'?'Open this project':'Use this folder'}</button></footer>
 </dialog>
 <style>
+  .project-tabs{display:flex;gap:2px;margin-bottom:.6rem}.project-tabs [aria-pressed=true]{color:var(--accent);border-color:var(--accent)}
+  .recent{border:1px solid var(--line);background:var(--panel);max-height:55dvh;overflow:auto}.recent>div{display:flex;align-items:center;gap:.5rem;border-bottom:1px solid var(--line);padding:.25rem .5rem}.recent p{padding:1rem;color:var(--muted)}
+  .recent .recent-open{flex:1;min-width:0;justify-content:flex-start;border:0;background:transparent;text-align:left}.recent-open span{min-width:0}.recent-open small{display:block;overflow-wrap:anywhere}
   .projectbar,.heading,h2,.pathrow,.fields,.address,.filter,footer,.paging,.drives{display:flex;align-items:center;gap:.55rem}
   .projectbar{padding:.4rem .75rem;background:var(--panel)}main{margin:clamp(1rem,6vh,4rem) auto;width:min(38rem,calc(100% - 2rem))}
   .heading{justify-content:space-between;margin-bottom:1rem}h1{font-size:1.25rem}h2{font-size:1rem}

@@ -62,7 +62,7 @@
   <form class="row" onsubmit={e=>{e.preventDefault();breakpoint();}}>
     <label>Event<input placeholder="tick" maxlength="64" bind:value={event}></label>
     <label>Instruction<input type="number" min="0" bind:value={pc}></label>
-    <label>Actor (0 = any)<input type="number" min="0" bind:value={actor}></label>
+    <label>Instance ID (0 = any)<input type="number" min="0" bind:value={actor}></label>
     <button disabled={!state}>Set breakpoint</button><button type="button" disabled={!state} onclick={()=>{event='';breakpoint();}}>Clear</button>
   </form>
   {#if state}<p>{state.room} · Tick {state.tick} · {state.sprite??'Actor'} {state.actor}</p>

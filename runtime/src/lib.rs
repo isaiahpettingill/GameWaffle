@@ -33,6 +33,7 @@ struct Bullet {
 }
 
 struct Actor {
+    standard_movement: bool,
     persistence: Option<String>,
     last_spawn: u32,
     answer: i64,
@@ -137,6 +138,8 @@ pub struct Runtime {
     rng: u32,
     camera_actor: Option<u32>,
     group_camera: bool,
+    camera_slot: usize,
+    control_events: Vec<(u8, Rc<str>, Rc<str>)>,
     memory: progress::WorldMemory,
     removed: BTreeMap<String, std::collections::BTreeSet<String>>,
     camera_point: Option<[f32; 2]>,
@@ -269,7 +272,11 @@ impl Runtime {
         self.camera_point.or_else(|| {
             self.camera_actor
                 .and_then(|id| self.actors.get(&id))
-                .or_else(|| self.actors.values().find(|a| a.player == Some(0)))
+                .or_else(|| {
+                    self.actors
+                        .values()
+                        .find(|a| a.player == Some(self.camera_slot))
+                })
                 .map(|a| [a.p.x, a.p.y])
         })
     }
@@ -390,6 +397,20 @@ impl Runtime {
                 return Err("Invalid room dimensions or actor count".into());
             }
         }
+        if game.controls.len() > 72 {
+            return Err("Too many input actions".into());
+        }
+        let control_events = game
+            .controls
+            .iter()
+            .map(|(name, &mask)| {
+                (
+                    mask,
+                    Rc::from(format!("pressed.{name}")),
+                    Rc::from(format!("released.{name}")),
+                )
+            })
+            .collect();
         let mut programs = BTreeMap::new();
         for (id, sprite) in &mut game.sprites {
             let events = std::mem::take(&mut sprite.program)
@@ -431,6 +452,8 @@ impl Runtime {
             rng: 1,
             camera_actor: None,
             group_camera: false,
+            camera_slot: 0,
+            control_events,
             memory: Default::default(),
             removed: Default::default(),
             camera_point: None,
@@ -463,6 +486,7 @@ impl Runtime {
         self.room = id.into();
         self.camera_actor = None;
         self.group_camera = room.group_camera;
+        self.camera_slot = 0;
         self.camera_point = None;
         self.blocked = room.blockers.iter().copied().collect();
         self.static_ids.clear();
@@ -564,6 +588,7 @@ impl Runtime {
             (layer, spawn.player.filter(|slot| *slot < 4)),
         );
         let actor = self.actors.get_mut(&id).unwrap();
+        actor.standard_movement = spawn.standard_movement;
         actor.name = spawn.name;
         actor.persistence = spawn.persistence;
         if let Some(animation) = spawn.animation {
@@ -608,6 +633,7 @@ impl Runtime {
         self.actors.insert(
             id,
             Actor {
+                standard_movement: false,
                 dormant: false,
                 persistence: None,
                 last_spawn: 0,
@@ -741,6 +767,23 @@ impl Runtime {
             .filter(|actor| actor.sprite.is_some() && actor.bullet.is_none() && !actor.dormant)
             .map(|actor| (actor.id, actor.player))
             .collect();
+        let edges: [Vec<Rc<str>>; 4] = std::array::from_fn(|slot| {
+            let now = inputs[slot].bits();
+            let before = self.inputs[slot].bits();
+            if now == before {
+                return Vec::new();
+            }
+            self.control_events
+                .iter()
+                .filter_map(|(mask, pressed, released)| {
+                    match (before & mask != 0, now & mask != 0) {
+                        (false, true) => Some(pressed.clone()),
+                        (true, false) => Some(released.clone()),
+                        _ => None,
+                    }
+                })
+                .collect()
+        });
         for (id, player) in scripted {
             let actor = self.actors.get_mut(&id).unwrap();
             if let Some(emitter) = &mut actor.emitter {
@@ -753,8 +796,17 @@ impl Runtime {
                 }
             }
 
+            if let Some(slot) = player.filter(|_| actor.standard_movement) {
+                self.engine(id, inputs[slot], 0, [4., 0., 0.], "", &mut actions);
+                if inputs[slot].x && !self.inputs[slot].x {
+                    self.engine(id, inputs[slot], 1, [8., 0., 0.], "", &mut actions);
+                }
+            }
             self.run(id, "tick", &inputs, &mut actions);
             if let Some(slot) = player {
+                for event in &edges[slot] {
+                    self.run(id, event, &inputs, &mut actions);
+                }
                 let now = inputs[slot];
                 let before = self.inputs[slot];
                 for (name, pressed) in [
@@ -987,7 +1039,20 @@ impl Runtime {
                 self.camera_actor = None;
                 self.camera_point = Some([args[0], args[1]]);
             }
-            25 => {
+            41 => self
+                .actors
+                .get_mut(&id)
+                .unwrap()
+                .teleport(Vec2::new(args[0], args[1])),
+            25 | 40 => {
+                if opcode == 40 && !(1..=4).contains(&(args[0] as i32)) {
+                    return;
+                }
+                self.camera_slot = if opcode == 40 {
+                    args[0] as usize - 1
+                } else {
+                    0
+                };
                 self.group_camera = false;
                 self.camera_actor = None;
                 self.camera_point = None;

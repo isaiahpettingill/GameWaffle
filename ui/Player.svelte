@@ -1,4 +1,5 @@
 <script>
+  import {Square,RotateCcw,Save,FolderOpen,Volume2,VolumeX,Maximize,Settings2} from '@lucide/svelte';
   import productIcon from '../packaging/gamewaffle.svg?inline';
   import { onMount } from 'svelte';
   import { unpack } from '../src/cartridge.mjs';
@@ -17,6 +18,16 @@
   const keys = new Set(), fingers = new Map(), taps = new Set();
   const embedded = document.getElementById('gamewaffle-cartridge');
   const hosted = !embedded && /^https?:$/.test(location.protocol);
+  const playtest=hosted && new URLSearchParams(location.search).has('playtest');
+  let options=$state(false),stopped=false;
+  function stop(){
+    if(stopped)return;
+    stopped=true;loadVersion++;cancelAnimationFrame(loop);disconnect();clear();audio.dispose();
+    runtime?.free();runtime=null;
+    if(window.__GAMEWAFFLE_PLAYTEST__){location.replace('/__stop_playtest');return;}
+    if(window.opener){window.opener.focus();window.close();}
+    if(!window.closed)location.replace('./index.html');
+  }
   let startingRoom, currentBytes;
   const keyboard = { ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right', KeyZ:'a',Semicolon:'a',Quote:'b',Space:'x',MouseLeft:'a',MouseRight:'b',KeyX:'b',KeyC:'x',Enter:'menu',KeyW:'up',KeyS:'down',KeyA:'left',KeyD:'right' };
   const second = { KeyI:'up',KeyK:'down',KeyJ:'left',KeyL:'right',KeyN:'a',KeyM:'b',Comma:'x',Period:'menu' };
@@ -173,6 +184,12 @@
   }
   function touchUp(event) { fingers.delete(event.pointerId); }
   function press(event) {
+    if(event.code==='Escape'){
+      if(options)options=false;
+      else if(playtest)stop();
+      else return;
+      event.preventDefault();return;
+    }
     if (event.target.matches?.('input,select,textarea') || event.ctrlKey || event.altKey || event.metaKey) return;
     if (event.target.matches?.('button,a') && ['Enter','Space'].includes(event.code)) return;
     const button = keyboard[event.code];
@@ -203,6 +220,7 @@
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({kind:'join',players}));
   }
   onMount(() => {
+    if(playtest && new URLSearchParams(location.search).has('waiting')){status='Saving project…';return;}
     touch = matchMedia('(pointer:coarse)').matches;
     (async () => {
       try {
@@ -227,24 +245,32 @@
 </script>
 
 <svelte:window onkeydown={press} onkeyup={release} onblur={clear} onmousedown={mouseChange} onmouseup={mouseChange} oncontextmenu={event=>{if(event.target===canvas)event.preventDefault();}} />
-<main>
-  <header>
-    <div class="brand">
-      <img src={productIcon} width="32" height="32" alt="">
-      <div><h1>GameWaffle</h1><small>Cartridge player</small></div>
-    </div>
-    <div class="row">
-      {#if hosted && new URLSearchParams(location.search).has('room')}<a class="button studio" href="./index.html">Studio</a>{/if}
-      <input hidden type="file" accept=".waffle" bind:this={fileInput} onchange={chooseFile} aria-label="Cartridge file">
-      <button class="primary" onclick={()=>fileInput.click()}>Open cartridge</button>
+<main bind:this={shell} class="player">
+  <header class="toolbar">
+    <div class="identity"><img src={productIcon} width="24" height="24" alt=""><div><strong>{cart?.name??'GameWaffle'}</strong><small>{cart?.rooms[snapshot?.room]?.title??'Cartridge player'}</small></div></div>
+    <div class="row transport">
+      {#if playtest}<button class="stop" onclick={stop} title="Stop playtest (Esc)"><Square/>Stop</button>{/if}
+      <button onclick={localReset} disabled={!cart} title="Restart game"><RotateCcw/>Reset</button>
+      <label>Slot <select bind:value={slot}>{#each [1,2,3] as n}<option value={n}>{n}</option>{/each}</select></label>
+      <button disabled={!cart||status==='LAN game'} onclick={()=>progress(true)}><Save/>Save</button>
+      <button disabled={!cart||status==='LAN game'} onclick={()=>progress(false)}><FolderOpen/>Load</button>
+      <button class="icon" title={muted?'Enable audio':'Mute audio'} aria-label={muted?'Enable audio':'Mute audio'} onclick={sound} aria-pressed={!muted}>{#if muted}<VolumeX/>{:else}<Volume2/>{/if}</button>
+      {#if document.fullscreenEnabled}<button class="icon" aria-label="Fullscreen" title="Fullscreen" onclick={()=>document.fullscreenElement?document.exitFullscreen():shell.requestFullscreen().catch(()=>{})}><Maximize/></button>{/if}
+      <button class="icon" aria-label="Player options" title="Player options" aria-expanded={options} onclick={()=>options=!options}><Settings2/></button>
+      {#if !playtest}<button onclick={()=>fileInput.click()}>Open cartridge</button>{/if}
     </div>
   </header>
-  <section class="card game">
-    <div class="gamehead">
-      <div><h2>{cart?.name ?? 'GameWaffle'}</h2><small>{cart?.rooms[snapshot?.room]?.title ?? status}</small></div>
-      <span class="session"><i></i>{status}{#if lanSlots.length} · P{lanSlots.map(slot=>slot+1).join(', P')}{/if}</span>
-    </div>
-    <div class="screen" bind:this={shell}>
+  <input hidden type="file" accept=".waffle" bind:this={fileInput} onchange={chooseFile} aria-label="Cartridge file">
+  {#if options}<section class="options">
+    <label>Players <select bind:value={players} onchange={countChanged}>{#each [1,2,3,4] as n}<option value={n}>{n}</option>{/each}</select></label>
+    <button onclick={()=>{touch=!touch;clear();}} aria-pressed={touch}>Touch controls</button>
+    {#if hosted}<button onclick={join}>Join LAN</button>{/if}
+    <small>Move with WASD or arrows. Use Z, X, C, and Enter for A, B, X, and Start.</small>
+    {#if players>1}<small>Player 2 uses IJKL, N, M, comma, and period.</small>{/if}
+  </section>{/if}
+  <div class="feedback" role="status">{status}{#if lanSlots.length} · P{lanSlots.map(n=>n+1).join(', P')}{/if}</div>
+  {#if error}<p class="error" role="alert">{error}</p>{/if}
+    <div class="screen">
       <canvas tabindex="-1" aria-label="Game display" bind:this={canvas} width="128" height="128"></canvas>
       {#if touch}
         <div role="group" aria-label="Touch controls" class="touch" onpointerdown={touchDown} onpointermove={touchMove} onpointerup={touchUp} onpointercancel={touchUp} onlostpointercapture={touchUp}>
@@ -259,43 +285,18 @@
         </div>
       {/if}
     </div>
-    <div class="toolbar row">
-      <label>Slot <select bind:value={slot}>{#each [1,2,3] as n}<option value={n}>{n}</option>{/each}</select></label>
-      <button disabled={!cart||status==='LAN game'} onclick={()=>progress(true)}>Save</button><button disabled={!cart||status==='LAN game'} onclick={()=>progress(false)}>Load</button>
-      <button onclick={localReset} disabled={!cart}>Reset</button>
-      <button onclick={sound} aria-pressed={!muted}>{muted ? 'Enable audio' : 'Mute audio'}</button>
-      <button onclick={()=>{touch=!touch;clear();}} aria-pressed={touch}>Touch controls</button>
-      {#if document.fullscreenEnabled}<button onclick={()=>shell.requestFullscreen().catch(()=>{})}>Fullscreen</button>{/if}
-      <div class="session-actions row">
-        <label>Players <select bind:value={players} onchange={countChanged}>{#each [1,2,3,4] as n}<option value={n}>{n}</option>{/each}</select></label>
-        {#if hosted}<button onclick={join}>Join LAN</button>{/if}
-      </div>
-    </div>
-  </section>
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
-  <p class="help">Move: WASD or arrows · A: semicolon, Z or left click · B: quote, X or right click · X: Space or C · Start: Enter</p>
-  {#if players > 1}<p class="help">Player 2 keyboard <kbd>I J K L</kbd> · <kbd>N M , .</kbd>. Gamepads fill the available player slots.</p>{/if}
 </main>
 
 <style>
-  main{max-width:1050px;margin:0 auto;padding:1.15rem clamp(.6rem,4vw,2.6rem) 2rem;}
-  header{display:flex;justify-content:space-between;align-items:center;gap:.55rem;margin-bottom:1.2rem;}
-  .game{overflow:hidden;}
-  .gamehead{display:flex;justify-content:space-between;align-items:center;gap:.6rem;padding:.8rem 1rem;}
-  h2{font-size:clamp(1rem,3vw,1.3rem);}
-  .session{display:flex;gap:.4rem;align-items:center;font-size:.76rem;color:var(--muted);}
-  .session i{width:7px;height:7px;background:var(--mint);border-radius:50%;}
-  .screen{aspect-ratio:16/9;position:relative;background:#11111a;display:grid;place-items:center;}
-  .screen:fullscreen{background:#11111a;}
-  canvas{width:100%;max-height:72vh;object-fit:contain;}
-  .screen:fullscreen canvas{width:100%;max-height:100vh;}
-  .toolbar{padding:.65rem;gap:.45rem;}
-  .session-actions{margin-left:auto;}
-  label{font-size:.8rem;color:var(--muted);display:flex;align-items:center;gap:.35rem;}
-  select{width:auto;}
-  .help,.error{margin-top:.7rem;font-size:.8rem;color:var(--muted);}
-  .error{color:#ffabaa;}
-  kbd{color:#eee0c9;}
+  main{height:100dvh;min-height:12rem;display:flex;flex-direction:column;background:#11111b;color:#cdd6f4}
+  .toolbar,.options{display:flex;align-items:center;flex-wrap:wrap;gap:.4rem .7rem;padding:.35rem .6rem;background:#181825;border-bottom:1px solid #45475a}
+  .identity{display:flex;align-items:center;gap:.45rem;margin-right:auto;min-width:0}.identity strong,.identity small{display:block}.identity strong{font-size:.92rem}.identity small,.options small{color:#bac2de;font-size:.75rem}
+  .transport{gap:.25rem}.toolbar button,.options button,.toolbar select,.options select{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:.3rem;height:2rem;padding:0 .55rem;border:1px solid #45475a;border-radius:1px;background:#1e1e2e;color:inherit;font:500 .8125rem/1.2 system-ui}
+  .toolbar button :global(svg){width:15px;height:15px}.toolbar button.icon{width:2rem;padding:0}.toolbar .stop{color:#f38ba8}
+  label{display:inline-flex;align-items:center;gap:.3rem;font-size:.8rem;color:#bac2de}select{width:auto}
+  .feedback,.error{font-size:.75rem;padding:.22rem .6rem;background:#181825}.feedback{color:#bac2de}.error{color:#f38ba8}
+  .screen{flex:1;min-height:0;position:relative;display:grid;place-items:center;overflow:hidden}
+  canvas{width:100%;height:100%;position:absolute;inset:0;object-fit:contain}
   .touch{position:absolute;inset:0;pointer-events:none;touch-action:none;display:flex;align-items:end;justify-content:space-between;padding:clamp(.35rem,2vw,1rem);}
   .touch button{pointer-events:auto;touch-action:none;user-select:none;background:#292537d9;border-color:#9d819ccc;color:#fff1d6;min-width:34px;min-height:34px;padding:.2rem;}
   .dpad{display:grid;grid-template:repeat(3,clamp(25px,7vw,47px))/repeat(3,clamp(25px,7vw,47px));gap:1px;}
@@ -308,5 +309,5 @@
   .actions button:first-child{grid-column:1/3;justify-self:center;}
   .actions button{border-radius:50%;aspect-ratio:1;font-weight:750;}
   .start{font-size:.73rem;}
-  @media(max-width:520px){main{padding:.65rem .45rem 1rem;}header{margin-bottom:.65rem;}.studio{display:none;}.gamehead{padding:.5rem .6rem;}.toolbar{font-size:.8rem;}.session-actions{margin-left:0;}}
+  @media(pointer:coarse){.toolbar button,.options button,.toolbar select,.options select{height:2.75rem}.toolbar button.icon{width:2.75rem}}
 </style>

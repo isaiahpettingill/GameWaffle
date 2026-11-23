@@ -11,7 +11,9 @@ const body = name => ({type:'input_statement',name,check:'waffle'});
 const definitions = {
   function_call:['Function %1 %2 %3',[text('name','score'),input('a'),input('b')],true],
   param:['Parameter %1',[text('name','amount')],true],
-  call:['Run procedure %1',[text('name','celebrate')]],
+  call:['Call %1 %2 %3',[text('name','apply'),input('a'),input('b')]],
+  player:['%1',[options('value',['1','2','3','4'])],true],
+  action:['Action %1 is held',[text('action','jump')],true],
   item:['Count of %1',[text('item','coin')],true],
   integer:['Number %1',[number('value',0)],true],
   bool:['%1',[options('value',['true','false'])],true],
@@ -28,7 +30,7 @@ const definitions = {
 
 export function logicDefinitions() {
   return Object.entries(definitions).map(([id,[message0,args0,value]])=>({
-    type:prefix+id,message0,args0,colour:value?156:276,
+    type:prefix+id,message0,args0,inputsInline:!['if','while'].includes(id),colour:value?156:276,
     ...(value ? {output:'WaffleValue'} : {previousStatement:'waffle',nextStatement:'waffle'}),
   }));
 }
@@ -44,6 +46,8 @@ export function readValue(block) {
       return {call:field('name'),args};
     }
     case 'param': return {param:field('name')};
+    case 'player': return Number(field('value'));
+    case 'action': return {action:field('action')};
     case 'item': return {item:field('item')};
     case 'integer': return Number(field('value'));
     case 'bool': return field('value') === 'true';
@@ -59,6 +63,7 @@ export function readValue(block) {
 export function writeValue(value) {
   if (typeof value === 'boolean') return {type:prefix+'bool',fields:{value:String(value)}};
   if (typeof value === 'number') return {type:prefix+'integer',fields:{value}};
+  if(value.action)return {type:prefix+'action',fields:{action:value.action}};
   if(value.param)return {type:prefix+'param',fields:{name:value.param}};
   if(value.call)return {type:prefix+'function_call',fields:{name:value.call},inputs:Object.fromEntries(value.args.map((arg,i)=>[['a','b'][i],{block:writeValue(arg)}]))};
   if (value.item != null) return {type:prefix+'item',fields:{item:value.item}};

@@ -206,6 +206,7 @@ await writeFile('demo/scripts/sprites/key.cbor',encodeCbor({events:{begin_contac
     {op:'counter',label:'Keys',value:{item:'key'}},{op:'say',text:'You found the courtyard key!'},{op:'remove_self'}
   ]}
 ]}}));
+project.items={key:{icon:'assets/sprites/key.png'},pump_key:{icon:'assets/sprites/key.png'}};
 project.sprites.guardian={...sprites.drone,script:'scripts/sprites/guardian.ws',width:36,height:36,alwaysActive:true,physics:{...sprites.drone.physics,health:12}};
 project.rooms.arena=room('Pump Hall','#182b31',[],360);
 project.rooms.arena.groupCamera=true;

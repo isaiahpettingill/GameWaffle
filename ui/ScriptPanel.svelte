@@ -7,7 +7,8 @@
   let modules=$state([]),selected=$state(''),newModule=$state(''),adding=$state(false);
   const endpoint=()=>selected?'./api/module/'+encodeURIComponent(selected):'./api/script/'+encodeURIComponent(sprite);
   let mode=$state('blocks'),textHost,textEditor,original;
-  let { sprite, sprites, dirty = $bindable(false), onSave,onFileEdit } = $props();
+  let { sprite, sprites, items, actions, onBeforeSave, dirty = $bindable(false), onSave,onFileEdit } = $props();
+  const registry=()=>({items:Object.fromEntries(items.map(id=>[id,true])),controls:Object.fromEntries(actions.map(id=>[id,true]))});
   let draft,recovered=$state(false);
   function changed(){
     if(!ready)return;
@@ -17,7 +18,7 @@
   let host, blockEditor, version=0;
   let error=$state(''), ready=$state(false), busy=$state(false);
   onMount(()=>{
-    blockEditor=mountBlocks(host,changed,sprites);
+    blockEditor=mountBlocks(host,changed,sprites,items,actions);
     fetch('./api/modules').then(r=>r.json()).then(data=>{if(Array.isArray(data))modules=data;}).catch(err=>error=err.message);
     open(sprite);
     return ()=>{version++;blockEditor.dispose();textEditor?.dispose();};
@@ -29,9 +30,9 @@
       if(next==='text'){
         const unit=blockEditor.save();
         const source=original?.source && formatScript(original)===formatScript(unit)?original.source:formatScript(unit);
-        mode=next;await tick();textEditor=mountText(textHost,source,changed,selected);textEditor.focus();
+        mode=next;await tick();textEditor=mountText(textHost,source,changed,selected,registry());textEditor.focus();
       }else{
-        const source=textEditor.source(),unit=await validateText(source,selected);
+        const source=textEditor.source(),unit=await validateText(source,selected,registry());
         unit.layout=original?.layout;original={...unit,source};blockEditor.load(unit);
         textEditor.dispose();textEditor=null;mode=next;
       }
@@ -53,16 +54,17 @@
       recovered=!!previous;dirty=recovered;
       if(previous?.mode==='text'){
         mode='text';await tick();if(current!==version)return;
-        textEditor=mountText(textHost,previous.source,changed,selected);
+        textEditor=mountText(textHost,previous.source,changed,selected,registry());
       }else if(previous)blockEditor.restoreDraft(previous.workspace);
       ready=true;
     }catch(err){if(current===version)error=err.message;}
   }
   async function save(){
+    if(!await onBeforeSave())return;
     busy=true;
     error='';
     try{
-      const data=mode==='text'?await validateText(textEditor.source(),selected):blockEditor.save();
+      const data=mode==='text'?await validateText(textEditor.source(),selected,registry()):blockEditor.save();
       if(mode==='text'){data.layout=original?.layout;data.source=textEditor.source();}
       else if(original?.source && formatScript(original)===formatScript(data))data.source=original.source;
       const result=await fetch(endpoint(),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
@@ -76,7 +78,7 @@
   <div class="top row">
     <div><select aria-label="Script file" bind:value={selected} disabled={dirty || busy} onchange={()=>open(sprite)}>
       <option value="">{sprite}</option>{#each modules as name}<option value={name}>{name}.ws</option>{/each}
-    </select><small>{recovered ? 'Recovered script draft' : dirty ? 'Unsaved script' : 'Sprite behavior'}</small></div>
+    </select><small>{recovered ? 'Recovered script draft' : dirty ? 'Unsaved script' : 'Actor script'}</small></div>
     <div class="row options">
       <button disabled={dirty||busy} onclick={()=>adding=!adding}>New module</button>
       <button aria-pressed={mode==='blocks'} disabled={!ready || busy} onclick={()=>switchMode('blocks')}>Blocks</button>
