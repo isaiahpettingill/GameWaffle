@@ -79,7 +79,7 @@
 </script>
 <section class="card">
   <div class="top row">
-    <div><select aria-label="Script file" bind:value={selected} disabled={dirty || busy} onchange={()=>open(sprite)}>
+    <div><h2>{sprite} · Code</h2><select aria-label="Script file" bind:value={selected} disabled={dirty || busy} onchange={()=>open(sprite)}>
       <option value="">{sprite}</option>{#each modules as name}<option value={name}>{name}.ws</option>{/each}
     </select><small>{recovered ? 'Recovered script draft' : dirty ? 'Unsaved script' : 'Actor script'}</small></div>
     <div class="row options">
@@ -104,6 +104,7 @@
 </section>
 <style>
   section{overflow:hidden;}
+  h2{font-size:1rem;margin-bottom:.35rem}
   .top{justify-content:space-between;padding:.7rem .8rem;}
   .workspace{height:clamp(400px,65vh,780px);width:100%;}
   .error{padding:0 .8rem .6rem;}

@@ -50,7 +50,7 @@
   let newItem=$state(''),itemId=$state(''),sourceFilter=$state(''),placeAs=$state(''),sourcePicker=$state();
   let initialNumber=$state(0),initialFlag=$state(false);
   let gameSection=$state('Variables'),spriteSection=$state('Appearance'),roomSection=$state('Size'),instanceSection=$state('Placement'),mobilePane=$state('Editor');
-  const tabs=[['world','World'],['room','Room'],['actors','Actors'],['blocks','Blocks'],['assets','Assets'],['game','Game']];
+  const tabs=[['world','World'],['room','Room'],['actors','Actors'],['blocks','Code'],['assets','Assets'],['game','Game']];
   let variableId=$state(''), variableKind=$state('variables');
   function addVariable() {
     const id=variableId.trim();
@@ -72,14 +72,24 @@
   const actor=$derived(room?.entities[selectedEntity]);
   const exportName=$derived((project?.name??'game').toLowerCase().replace(/[^a-z0-9]+/g,'-') || 'game');
 
-  let updatesOpen=$state(false),component=$state('runtime'),platform=$state('linux-x64'),release=$state(null);
-  async function checkRelease(install=false){
-    error='';busy=true;
+  let updatesOpen=$state(false),releases=$state([]),checkingUpdates=$state(false);
+  const components=[['studio','Studio'],['runtime','Desktop runtime']];
+  async function checkReleases(){
+    if(checkingUpdates)return;
+    checkingUpdates=true;error='';
     try{
-      const result=await request('./api/update','POST',{component,target:component==='runtime'?platform:undefined,install});
-      release=install?null:result;
-      status=install?(component==='studio'?'Restart Studio to finish the update':'Runtime installed'):result.available?'Update available':'Current version installed';
-    }catch(err){release=null;error=err.message;}finally{busy=false;}
+      releases=await Promise.all(components.map(async ([component,label])=>({
+        component,label,...await request('./api/update','POST',{component})
+      })));
+    }catch(err){error=err.message;}finally{checkingUpdates=false;}
+  }
+  async function installRelease(release){
+    busy=true;error='';
+    try{
+      const info=await request('./api/update','POST',{component:release.component,install:true});
+      releases=releases.map(r=>r.component!==release.component?r:{...r,available:false,installed:info.tag});
+      status=release.component==='studio'?'Restart Studio to finish the update':'Runtime installed';
+    }catch(err){error=err.message;}finally{busy=false;}
   }
   async function downloadDesktop(event){
     event.preventDefault();
@@ -142,10 +152,7 @@
       placementSprite=spriteId;
       tileId=Object.keys(project.tiles ?? {})[0] ?? '';
       layerIndex=chooseInitialLayer(project.rooms[roomId]);
-      for(const path of Object.keys(groupTiles(project.tiles??{}))){
-        if(art[path]?.tags?.length)addTags(path,setName(path).toLowerCase().replace(/[^a-z0-9_-]+/g,'-'));
-      }
-      if(JSON.stringify(project)!==savedProject && !recovery)mark();
+      if(!recovery)importNewTags();
       await updatePreviews();
       status=dirty?'Unsaved project':'Ready';
     }catch(err){error=err.message;status='Project unavailable';}
@@ -164,7 +171,9 @@
       if(state.revision!==revision){
         const current=await request('./api/project');
         if(busy)return;
+        const previousArt=art;
         assets=current.assets;art=current.art;
+        if(!recovery)importNewTags(previousArt);
         await updatePreviews();
         revision=current.revision;
         if(!dirty)status='Assets rebuilt';
@@ -343,7 +352,7 @@
       mapTool='spawn';
       return;
     }
-    openDefinition(id,tab==='blocks'?'blocks':'actors');
+    openDefinition(id,tab==='actors'?'actors':'blocks');
   }
   function dragDefinition(event,id){
     event.dataTransfer.setData(spriteDragType,id);
@@ -383,7 +392,6 @@
     try{
       await request('./api/project','PUT',JSON.parse(saved));
       await updatePreviews();
-      revision=(await request('./api/status')).revision;
       savedProject=saved;
       updateDirty();
       if(!dirty)status='Project saved';
@@ -399,7 +407,6 @@
       savedProject=JSON.stringify(baseline);updateDirty(false);
     }
     await updatePreviews();
-    revision=(await request('./api/status')).revision;
     status='Script saved';
   }
   async function rebuild(){
@@ -408,6 +415,7 @@
       await request('./api/rebuild','POST');
       const current=await request('./api/project');
       assets=current.assets; art=current.art; revision=current.revision;
+      importNewTags();
       await updatePreviews();
       status=dirty ? 'Unsaved project' : 'Assets rebuilt';
     }catch(err){error=err.message;}finally{busy=false;}
@@ -504,12 +512,15 @@
   }
   async function createAsset(){
     if(busy)return;
-    const id=newId.trim();
+    let id=newId.trim();
     if(!newSource||!id)return;
     if(!/^[a-zA-Z0-9_-]+$/.test(id)||['__proto__','constructor','prototype'].includes(id)){
       assetError='Use letters, numbers, underscores, or hyphens in the name.';return;
     }
-    if(Object.hasOwn(assetCollection()??{},id)){assetError='This name is in use. Choose another name.';return;}
+    if(assetKind!=='tile'){
+      const stem=id;
+      for(let suffix=2;Object.hasOwn(assetCollection()??{},id);suffix++)id=stem+'_'+suffix;
+    }
     busy=true;assetError='';
     try{
       if(importFile){
@@ -523,7 +534,7 @@
       if(assetKind==='tile'){
         const source=art[newSource],size=project.tileSize??24;
         if(source?.width!==size||source?.height!==size)throw Error(`Tile art must be ${size}×${size} pixels.`);
-        tileId=addTags(newSource,id);
+        tileId=addTags(newSource,id).first;
       }else if(assetKind==='audio'){
         (project.audio??={})[id]={source:newSource};
       }else{
@@ -536,21 +547,49 @@
     }catch(err){assetError=String(err.message??err);}
     finally{busy=false;}
   }
+  function tagSlug(tag){return tag.split(':')[0].toLowerCase().replace(/[^a-z0-9_-]+/g,'-');}
+  function importNewTags(previousArt){
+    let added=false;
+    for(const [path,ids] of Object.entries(groupTiles(project.tiles??{}))){
+      const tags=art[path]?.tags;
+      if(!tags?.length)continue;
+      const previous=previousArt?.[path]?.tags;
+      if(previous && previous[0]!==tags[0]){
+        for(const id of ids){
+          const tile=project.tiles[id];
+          if(tile.tag==null && (!previous.length || tags.includes(previous[0]))){
+            tile.tag=previous[0]??'';
+            added=true;
+          }
+        }
+      }
+      const first=project.tiles[ids[0]];
+      const suffix=first.tag && '-'+tagSlug(first.tag);
+      const stem=first.setPrefix ?? (suffix && ids[0].endsWith(suffix)
+        ? ids[0].slice(0,-suffix.length) : ids[0]);
+      const result=addTags(path,stem);
+      if(result.added)added=true;
+    }
+    if(added)mark();
+    return added;
+  }
   function addTags(path,stem){
     const tags=art[path]?.tags??[];
     const collection=project.tiles??={};
     const existing=Object.entries(collection).filter(([,tile])=>tile.source===path);
     let first=existing[0]?.[0];
+    let added=false;
     for(const [index,tag] of (tags.length?tags:['']).entries()){
       if(existing.some(([,tile])=>(tile.tag??tags[0]??'')===tag))continue;
-      const slug=tag.split(':')[0].toLowerCase().replace(/[^a-z0-9_-]+/g,'-');
+      const slug=tagSlug(tag);
       const base=tag?stem+'-'+(slug||String(index+1)):stem;
       let id=base,n=2;
       while(Object.hasOwn(collection,id))id=base+'-'+n++;
-      collection[id]={source:path,...(tag?{tag}:{}),physics:{}};
+      collection[id]={source:path,setPrefix:stem,tag,physics:{}};
+      added=true;
       first??=id;
     }
-    return first;
+    return {first,added};
   }
   function toggleCompression(id,enabled){
     const item=project.audio[id];
@@ -600,23 +639,24 @@
       <button onclick={()=>{gameSection='Items';openTab('game');}}>Item registry</button>
       <button onclick={debugRoom} disabled={busy||!project}>Debug room</button>
       <button onclick={rebuild} disabled={busy||!project}>Rebuild assets</button>
-        <button onclick={()=>{updatesOpen=!updatesOpen;release=null;}}>Updates</button>
+        <button onclick={()=>{updatesOpen=!updatesOpen;if(updatesOpen)checkReleases();}}>Updates</button>
     </div></details>
 </nav>
 {#if updatesOpen}
-  <section class="field-row card" aria-label="Release updates">
-    <select aria-label="Update component" bind:value={component} onchange={()=>release=null}><option value="runtime">Desktop runtime</option><option value="studio">Studio</option></select>
-    {#if component==='runtime'}<select aria-label="Runtime platform" bind:value={platform} onchange={()=>release=null}><option value="linux-x64">Linux x64</option><option value="windows-x64">Windows x64</option></select>{/if}
-    <button disabled={busy} onclick={()=>checkRelease()}>Check release</button>
-    {#if release?.available}<button disabled={busy} onclick={()=>checkRelease(true)}>Install {release.tag}</button>{/if}
-    <button onclick={()=>updatesOpen=false}>Close</button>
+  <section class="card update-panel" aria-label="Release updates">
+    {#each releases as release}
+      <div class="row"><strong>{release.label}</strong><span>{release.installed}</span>
+        {#if release.available}<button disabled={busy||checkingUpdates} onclick={()=>installRelease(release)}>Install {release.tag}</button>{:else}<small>Current</small>{/if}
+      </div>
+    {/each}
+    <div class="row"><button disabled={busy||checkingUpdates} onclick={checkReleases}>{checkingUpdates?'Checking…':'Check again'}</button><button onclick={()=>updatesOpen=false}>Close</button></div>
   </section>
 {/if}
 {#if error || sourceError}<p role="alert" class="error banner">{error || sourceError}</p>{/if}
 {#if debugging}<Debugger room={roomId} onClose={()=>debugging=false}/>
 {:else if recovery}
   <section class="row card" role="alert"><strong>Unsaved project edits</strong>
-    <button onclick={()=>{applyProject(recovery,true);recovery=null;}}>Recover edits</button>
+    <button onclick={()=>{applyProject(recovery,true);recovery=null;if(importNewTags())updatePreviews().catch(err=>error=err.message);}}>Recover edits</button>
     <button onclick={()=>{recovery=null;draft.write(null);}}>Discard draft</button>
   </section>
 {:else if project}
@@ -641,12 +681,12 @@
       <div class="category">
         <div class="heading row"><h3>Actors</h3><button class="small-button icon-button" title="Create actor" aria-label="Create actor" onclick={()=>openAssets('sprite',true)}><Plus size={14}/></button></div>
         <PagedList items={Object.keys(project.sprites??{})} label="sprites" query={filter}>{#snippet children(id)}
-          <button class="item" class:selected={tab==='room' ? mapTool==='spawn' && placementSprite===id : spriteId===id && (tab==='actors'||tab==='blocks')}
+          <div class="actor-entry"><button class="item" class:selected={tab==='room' ? mapTool==='spawn' && placementSprite===id : spriteId===id && (tab==='actors'||tab==='blocks')}
             draggable={tab==='room'} ondragstart={event=>dragDefinition(event,id)}
             title={tab==='room' ? 'Click to place or drag to the map' : 'Select actor'}
             onclick={()=>chooseDefinition(id)}>
             {#if spriteArt[id]}<img src={spriteArt[id]} alt="">{:else}<SquareUserRound size={14}/>{/if}<span>{id}</span>
-          </button>
+          </button><button class="script-link" title={'Open script for '+id} aria-label={'Open script for '+id} onclick={()=>openDefinition(id,'blocks')}>Code</button></div>
         {/snippet}</PagedList>
       </div>
       {#if tab!=='room'}<div class="category compact">
@@ -661,7 +701,7 @@
     {/if}</aside>
     <div class="work">
       <nav class="row" aria-label="Editor views">
-        {#each tabs as [id,title]}{@const Icon=viewIcons[id]}<button class:active={tab===id} onclick={()=>openTab(id)}><Icon size={15}/>{title}</button>{/each}
+        {#each tabs as [id,title]}{@const Icon=viewIcons[id]}<button class:active={tab===id} onclick={()=>{if(id==='blocks' && tab==='room')openDefinition((mapTool==='spawn'?placementSprite:actor?.sprite)||spriteId,id);else openTab(id);}}><Icon size={15}/>{title}</button>{/each}
       </nav>
       {#if tab==='world' && room}
         <World rooms={project.rooms} flags={Object.keys(project.flags??{})} {roomId} onSelect={id=>{roomId=id;layerIndex=chooseInitialLayer(project.rooms[id]);selectedEntity=-1;}} onEdit={replaceRoom}/>
@@ -671,7 +711,7 @@
             {tileArt} {spriteArt} {previewModes} {layerIndex} bind:selectedEntity bind:tileId bind:spriteId={placementSprite} bind:tool={mapTool} bind:placeAs {busy}
             canUndo={historyStatus.canUndo} canRedo={historyStatus.canRedo}
             onUndo={()=>restoreRoom(true)} onRedo={()=>restoreRoom(false)} onEdit={replaceRoom}
-            onLayer={chooseLayer} onSprites={()=>roomPanel='instances'} onAssets={()=>openAssets('tile')}
+            onPlayer={value=>changeActor('player',value)} onLayer={chooseLayer} onSprites={()=>roomPanel='instances'} onAssets={()=>openAssets('tile')}
             onPlay={playtest} />
         {/key}
       {:else if tab==='blocks'}
@@ -790,7 +830,8 @@
             {:else}<p class="muted">Add an audio file to use it in the game.</p>{/each}
           {:else}
             {#if assetKind==='sprite'}
-              <label class="stack">Actor<select bind:value={spriteId}>{#each Object.keys(project.sprites??{}) as id}<option value={id}>{id}</option>{/each}</select></label>
+              <div class="field-row"><label>Actor<select bind:value={spriteId}>{#each Object.keys(project.sprites??{}) as id}<option value={id}>{id}</option>{/each}</select></label>
+                {#if spriteId}<button onclick={()=>openDefinition(spriteId,'blocks')}><Blocks size={15}/>Open script</button>{/if}</div>
             {:else}
               <label class="stack">Tile set<select value={tile?.source??''} onchange={e=>tileId=tileSets[e.currentTarget.value][0]}>{#each Object.keys(tileSets) as path}<option value={path}>{setName(path)}</option>{/each}</select></label>
               <label class="stack">Tile<select bind:value={tileId} aria-label="Tile definition">{#each tileSets[tile?.source]??[] as id}<option value={id}>{project.tiles[id].tag??id}</option>{/each}</select></label>
@@ -816,7 +857,6 @@
               {:else}
                 <div class="record-form"><label>Player<select bind:value={placeAs}><option value="">Choose a player</option>{#each [0,1,2,3] as slot}<option disabled={room?.entities.some(e=>e.player===slot)} value={String(slot)}>Player {slot+1}</option>{/each}</select></label>
                 <button disabled={placeAs===''||!room||room.entities.some(e=>e.player===Number(placeAs))} onclick={()=>{placementSprite=spriteId;mapTool='spawn';openTab('room');}}>Place player in room</button></div>
-                <button class="extra" onclick={()=>openDefinition(spriteId,'blocks')}>Open script</button>
                 <Sections labels={['Appearance','Combat','Particles']} bind:value={spriteSection}/>
                 {#if spriteSection==='Appearance'}
                   <div class="pair">
@@ -1004,6 +1044,8 @@
   </main>
 {/if}
 <style>
+  .actor-entry{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center}.script-link{color:var(--accent);background:transparent}
+  .update-panel{display:grid;gap:.45rem;padding:.55rem .75rem}.update-panel strong{min-width:8rem}
   .project-path{display:block;overflow-wrap:anywhere;font-size:.69rem;margin-bottom:.4rem}.project-filter{display:flex;align-items:center;gap:.3rem}.project-filter input{min-width:0}.actions{flex:1;}
   .actions .status{margin-left:auto;}
   .appbar{display:flex;justify-content:space-between;align-items:center;gap:1rem;border-bottom:1px solid var(--line);padding:.4rem .65rem;}

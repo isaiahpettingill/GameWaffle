@@ -11,7 +11,7 @@ import { createServer } from 'node:http';
 import { watch } from 'node:fs';
 import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
 import { dirname, extname, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import { compileProject, previewTiles, discoverAssets, describeArt, projectPath } from './compiler.mjs';
 import { encodeCbor, decodeCbor } from './cartridge.mjs';
@@ -151,13 +151,23 @@ const server = createServer(async (req, res) => {
         const chunks=[];let size=0;
         for await(const chunk of req){if((size+=chunk.length)>32*1024*1024)throw Error('File exceeds 32 MiB');chunks.push(chunk);}
         const group=/\.(wav|ogg|opus|qoa)$/i.test(name)?'audio':url.searchParams.get('kind')==='tile'?'tiles':'sprites';
-        const path='assets/'+group+'/'+name;
-        const edit=await change(async()=>{
-          if((await store.list('assets')).includes(path))throw Error('An asset with this name exists');
-          const data=Buffer.concat(chunks);
-          return history.save(path,data,async()=>{await store.save([[path,data]]);revision++;});
+        const data=Buffer.concat(chunks);
+        const result=await change(async()=>{
+          const files=new Map((await store.list('assets')).map(path=>[path.toLowerCase(),path]));
+          const base='assets/'+group+'/'+name;
+          let path=base,index=0,digest;
+          while(files.has(path.toLowerCase())){
+            const existing=files.get(path.toLowerCase());
+            if(data.equals(await store.read(existing)))return {path:existing};
+            digest??=createHash('sha256').update(data).digest('hex').slice(0,12);
+            const ext=extname(base);
+            path=base.slice(0,-ext.length)+'-'+digest+(index?'-'+index:'')+ext;
+            index++;
+          }
+          const edit=await history.save(path,data,async()=>{await store.save([[path,data]]);revision++;});
+          return {path,edit};
         });
-        return send(res,200,{path,edit});
+        return send(res,200,result);
       }
       if(url.pathname==='/api/tile-previews' && req.method==='POST'){
         const {tiles,size}=await jsonBody(req);
