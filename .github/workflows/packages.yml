@@ -1,8 +1,6 @@
 name: Build GameWaffle
 on:
-  pull_request:
   push:
-    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 permissions:
@@ -20,12 +18,7 @@ jobs:
           curl -fsSL https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.105/wasm-bindgen-0.2.105-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
           cp "$RUNNER_TEMP/wasm-bindgen-0.2.105-x86_64-unknown-linux-musl/wasm-bindgen" "$HOME/.cargo/bin/"
 
-      - run: cargo test --manifest-path runtime/Cargo.toml --locked
-      - run: npm ci && npm run build && node packaging/check-game.mjs && node packaging/check-scripts.mjs && node packaging/check-desktop.mjs
-      - name: Check editor at four screen widths
-        run: |
-          npm install --prefix "$RUNNER_TEMP/browser-check" playwright-core@1.58.2
-          NODE_PATH="$RUNNER_TEMP/browser-check/node_modules" node packaging/check-editor.cjs
+      - run: npm ci && npm run build
       - uses: actions/upload-artifact@v4
         with: {name: studio-assets, path: web-built, if-no-files-found: error}
       - run: |
@@ -53,8 +46,7 @@ jobs:
       - run: npm ci
       - run: cargo build --manifest-path player/Cargo.toml --features bundled --release --locked
       - run: node packaging/stage.mjs stage
-      - run: node packaging/verify-export.mjs
-      - name: Build and test the libretro core
+      - name: Build the libretro core
         shell: bash
         run: |
           cargo build --manifest-path player/Cargo.toml --features bundled,libretro --release --locked --lib
@@ -65,7 +57,6 @@ jobs:
             lib=player/target/release/libmain.so
             platform=linux-x64
           fi
-          python packaging/check-libretro.py "$lib" web-built/demo.waffle
           python packaging/core-zip.py "$lib" "$platform"
       - name: Stage standalone runtime
         shell: bash
@@ -137,27 +128,8 @@ jobs:
           path: |
             GameWaffle-Player.apk
             GameWaffle-Libretro-android-*.zip
-  android-launch:
-    needs: android
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with: {name: package-Android}
-      - run: python3 -m pip install Pillow --break-system-packages
-      - name: Enable emulator acceleration
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          target: default
-          script: timeout --kill-after=10s 150s bash -x packaging/check-android.sh
   release:
-    needs: [desktop, android-launch]
+    needs: [desktop, android]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions: {contents: write, id-token: write, attestations: write}

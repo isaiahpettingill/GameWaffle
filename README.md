@@ -249,3 +249,13 @@ cargo build --manifest-path player/Cargo.toml --locked --release --lib --feature
 On Linux, rename player/target/release/libmain.so to gamewaffle_libretro.so.
 On Windows, rename player/target/release/main.dll to gamewaffle_libretro.dll.
 The core information file is in player/libretro.
+
+## Run local checks
+
+Run `npm run check` to test the Rust runtime, build the players, and check game
+logic, WaffleScript, and desktop export. To test the editor at four screen
+widths, install playwright-core 1.58.2 and set CHROME_BIN to your Chromium
+executable. Run `npm run check:editor`.
+
+GitHub builds packages when you start the workflow manually or push a version
+tag such as v2.0.0. A version tag also publishes a release.

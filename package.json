@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "description": "Sprite game studio and Rust cartridge runtime",
   "scripts": {
+    "check": "cargo test --manifest-path runtime/Cargo.toml --locked && npm run build && node packaging/check-game.mjs && node packaging/check-scripts.mjs && node packaging/check-desktop.mjs",
+    "check:editor": "node packaging/check-editor.cjs",
     "build:native": "node src/build.mjs --native",
     "build:player": "node src/build.mjs --player-only",
     "build": "node src/compiler.mjs && node src/build.mjs",
