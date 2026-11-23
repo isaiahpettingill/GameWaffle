@@ -26,7 +26,20 @@ if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
     apt+=(-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=-)
 fi
 install=(install -y --no-install-recommends "${missing[@]}")
-if ! "${apt[@]}" "${install[@]}"; then
+# Fetch independent archives together. Verify each archive before APT uses it.
+# The runner deletes its APT archive directory at the end of the job.
+prefetch() {
+    local plan
+    plan=$("${apt[@]}" --print-uris "${install[@]}") || return 1
+    awk -F "'" '/^\047/ {print $2, $3}' <<<"$plan" |
+        xargs -r -n 4 -P 12 bash -ec '
+            url=$1 file=$2 digest=$4
+            [[ "$file" != */* && "$digest" == *:* ]]
+            sudo /usr/lib/apt/apt-helper download-file "$url" "/var/cache/apt/archives/$file" "$digest"
+        ' _
+}
+if ! prefetch; then
     "${apt[@]}" update
-    "${apt[@]}" "${install[@]}"
+    prefetch || true
 fi
+"${apt[@]}" "${install[@]}"
