@@ -1,5 +1,7 @@
 mod mapping;
 mod media;
+#[cfg(feature = "libretro")]
+mod retro;
 mod sound;
 
 use gamewaffle_runtime::{Input, Runtime, viewport};
@@ -33,7 +35,10 @@ impl Game {
         sdl3::iostream::IOStream::from_file(path, "rb")?
             .take(256 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)?;
-        let mut runtime = Runtime::from_cartridge(&bytes, None)?;
+        Self::from_cartridge(&bytes)
+    }
+    fn from_cartridge(bytes: &[u8]) -> Result<Self, Error> {
+        let mut runtime = Runtime::from_cartridge(bytes, None)?;
         runtime.set_seed(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)?
@@ -129,8 +134,8 @@ fn request_file(window: &Window, sender: &mpsc::Sender<PathBuf>) -> Result<(), E
     Ok(())
 }
 
-fn draw(
-    canvas: &mut Canvas<Window>,
+fn draw<T: sdl3::render::RenderTarget>(
+    canvas: &mut Canvas<T>,
     game: &Game,
     snapshot: &gamewaffle_runtime::Snapshot<'_>,
     atlas: &Texture<'_>,
@@ -266,21 +271,20 @@ fn draw(
         canvas.fill_rects(rectangles)?;
     }
     if let Some(font) = source.rect("ui/font") {
-        let text =
-            |canvas: &mut Canvas<Window>, line: &str, mut x: f32, y: f32| -> Result<(), Error> {
-                for ch in line.chars() {
-                    let i = if (' '..='~').contains(&ch) {
-                        ch as i32
-                    } else {
-                        63
-                    } - 32;
-                    let glyph =
-                        sdl3::rect::Rect::new(font.x() + i % 16 * 6, font.y() + i / 16 * 8, 6, 8);
-                    canvas.copy(atlas, glyph, FRect::new(x, y, 6., 8.))?;
-                    x += 6.;
-                }
-                Ok(())
-            };
+        let text = |canvas: &mut Canvas<T>, line: &str, mut x: f32, y: f32| -> Result<(), Error> {
+            for ch in line.chars() {
+                let i = if (' '..='~').contains(&ch) {
+                    ch as i32
+                } else {
+                    63
+                } - 32;
+                let glyph =
+                    sdl3::rect::Rect::new(font.x() + i % 16 * 6, font.y() + i / 16 * 8, 6, 8);
+                canvas.copy(atlas, glyph, FRect::new(x, y, 6., 8.))?;
+                x += 6.;
+            }
+            Ok(())
+        };
         canvas.set_draw_color(Color::RGB(38, 35, 52));
         let mut y = 2.;
         for (label, value) in snapshot.counters {

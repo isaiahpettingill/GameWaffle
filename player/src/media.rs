@@ -3,7 +3,6 @@ use sdl3::{
     pixels::PixelFormat,
     rect::Rect,
     render::{BlendMode, ScaleMode, Texture, TextureCreator},
-    video::WindowContext,
 };
 use serde::Deserialize;
 use std::{collections::BTreeMap, io::Cursor};
@@ -84,10 +83,7 @@ impl Atlas {
         Some(Rect::new(x, y, w as u32, h as u32))
     }
 
-    pub fn texture<'a>(
-        &self,
-        creator: &'a TextureCreator<WindowContext>,
-    ) -> Result<Texture<'a>, Error> {
+    pub fn texture<'a, T>(&self, creator: &'a TextureCreator<T>) -> Result<Texture<'a>, Error> {
         let mut decoder = png::Decoder::new(Cursor::new(&self.png));
         decoder.set_transformations(png::Transformations::normalize_to_color8());
         let mut reader = decoder.read_info()?;

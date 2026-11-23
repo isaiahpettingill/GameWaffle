@@ -11,10 +11,10 @@ use symphonia::core::{
 
 const SAMPLE_LIMIT: usize = 32 * 1024 * 1024;
 type Error = Box<dyn std::error::Error>;
-struct Samples {
-    channels: u8,
-    rate: u32,
-    pcm: Vec<f32>,
+pub(super) struct Samples {
+    pub(super) channels: u8,
+    pub(super) rate: u32,
+    pub(super) pcm: Vec<f32>,
 }
 
 fn decode_opus(bytes: &[u8]) -> Result<Samples, Error> {
@@ -66,7 +66,7 @@ fn decode_opus(bytes: &[u8]) -> Result<Samples, Error> {
     })
 }
 
-fn decode(sound: &Sound) -> Result<Samples, Error> {
+pub(super) fn decode(sound: &Sound) -> Result<Samples, Error> {
     if sound.format == "qoa" {
         let input = &sound.data;
         let first = input.get(8..16).ok_or("Missing QOA frame")?;

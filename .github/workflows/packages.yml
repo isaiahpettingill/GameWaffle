@@ -54,6 +54,19 @@ jobs:
       - run: cargo build --manifest-path player/Cargo.toml --features bundled --release --locked
       - run: node packaging/stage.mjs stage
       - run: node packaging/verify-export.mjs
+      - name: Build and test the libretro core
+        shell: bash
+        run: |
+          cargo build --manifest-path player/Cargo.toml --features bundled,libretro --release --locked --lib
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            lib=player/target/release/main.dll
+            platform=windows-x64
+          else
+            lib=player/target/release/libmain.so
+            platform=linux-x64
+          fi
+          python packaging/check-libretro.py "$lib" web-built/demo.waffle
+          python packaging/core-zip.py "$lib" "$platform"
       - name: Stage standalone runtime
         shell: bash
         run: |
@@ -79,6 +92,7 @@ jobs:
           name: package-${{ runner.os }}
           if-no-files-found: error
           path: |
+            GameWaffle-Libretro-*.zip
             GameWaffle-Player-*
             GameWaffle-Setup.exe
             GameWaffle-x86_64.AppImage
@@ -116,9 +130,13 @@ jobs:
           export ANDROID_BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
           export RELEASE_VERSION_CODE="$GITHUB_RUN_NUMBER" RELEASE_VERSION_NAME="${GITHUB_REF_NAME#v}"
           export SDL_SOURCE="$RUNNER_TEMP/SDL"
-          bash player/android/build.sh web-built/demo.waffle GameWaffle-Player.apk
+          BUILD_LIBRETRO=1 bash player/android/build.sh web-built/demo.waffle GameWaffle-Player.apk
       - uses: actions/upload-artifact@v4
-        with: {name: package-Android, path: GameWaffle-Player.apk}
+        with:
+          name: package-Android
+          path: |
+            GameWaffle-Player.apk
+            GameWaffle-Libretro-android-*.zip
   android-launch:
     needs: android
     runs-on: ubuntu-24.04

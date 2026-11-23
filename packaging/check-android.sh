@@ -31,3 +31,11 @@ sleep 1
 adb shell pidof "$app" >/dev/null
 adb logcat -b crash -d > android-crashes.txt
 if grep -F "$app" android-crashes.txt; then exit 1; fi
+
+ndk=${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:?Set the Android NDK directory}}
+"$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang" \
+    packaging/check-android-core.c -ldl -o android-core-check
+unzip -p GameWaffle-Libretro-android-x86_64.zip gamewaffle_libretro.so > gamewaffle_libretro.so
+unzip -p GameWaffle-Player.apk assets/demo.waffle > android-demo.waffle
+adb push android-core-check gamewaffle_libretro.so android-demo.waffle /data/local/tmp/
+adb shell 'cd /data/local/tmp && chmod 755 android-core-check && ./android-core-check ./gamewaffle_libretro.so android-demo.waffle'

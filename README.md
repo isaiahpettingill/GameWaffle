@@ -222,3 +222,30 @@ Use **Particles** in Blockly for bursts, continuous effects, and stop commands. 
 Use an active flag on a sprite, tile, instance, or map layer to control when it exists. A flag change also updates collision and pathfinding for conditional solid tiles. Combine conditions on a definition and its placement to require both.
 
 See [Edit a script](docs/wafflescript.md) for text mode, modules, and desktop export.
+
+## Play in RetroArch
+
+1. Export a **Cartridge** from Studio.
+2. Get the GameWaffle libretro ZIP for your platform. Use **android-arm64-v8a** for a Pixel 8.
+3. Extract the ZIP. Put the .info file in the RetroArch core information directory. Use **Load Core → Install or Restore a Core** to install the .so or .dll.
+4. Select **Load Core → GameWaffle**. Select **Load Content** and open the .waffle file.
+
+Connect up to four RetroPads. Use the D-pad to move. The south, east, and west
+buttons operate A, B, and X. Use Start for the game menu. RetroArch supplies
+keyboard mapping and the Android touch overlay.
+
+RetroArch saves game progress in its save RAM file. Save states use GameWaffle
+checkpoints. A checkpoint restores the room, player positions, inventory, flags,
+counters, and global variables. Moving bodies and running scripts restart in
+the restored room.
+
+To build a desktop core from source, run this command. Use the same SDL build
+dependencies as the desktop player.
+
+```sh
+cargo build --manifest-path player/Cargo.toml --locked --release --lib --features bundled,libretro
+```
+
+On Linux, rename player/target/release/libmain.so to gamewaffle_libretro.so.
+On Windows, rename player/target/release/main.dll to gamewaffle_libretro.dll.
+The core information file is in player/libretro.
