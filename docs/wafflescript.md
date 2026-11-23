@@ -24,7 +24,7 @@ on a
 end
 ```
 
-Use `local.name` for a sprite instance and `global.name` for the game.
+Use `local.name` for a actor instance and `global.name` for the game.
 Use `flag.name` for a game flag. Read a button with `button.a`.
 
 ## Modules and routines
@@ -40,7 +40,7 @@ end
 
 Select the sprite again. Import the module with `use`. Call a module routine
 with its qualified name. A procedure contains a stack of commands and takes
-no parameters.
+up to two parameters.
 
 ```ruby
 use score
@@ -67,7 +67,7 @@ and circular module imports cause a build error.
 | `assets/sprites/` | Sprite sources in PNG or Aseprite format |
 | `assets/tiles/` | Tile sources |
 | `assets/audio/` | Sound and music sources |
-| `scripts/sprites/` | One CBOR script per sprite definition |
+| `scripts/sprites/` | One CBOR script per actor |
 | `scripts/modules/` | Shared WaffleScript modules with the .ws extension |
 
 A sprite can use a .ws file as its source. Set its script path in project.json.
@@ -85,3 +85,23 @@ the runtime for another platform, select **Export**, then **Updates**. Select
 the platform, check the release, and install the runtime. Export the game again
 to include a newer runtime. Select **Studio** to update the application. Close
 the current Studio session before you use the new version.
+
+## Input actions
+
+Register `jump` in **Game → Controls**. Use an event for each change of state. Read `action.jump` in an expression to test whether the action is held. When two controls map to the same action, the release event starts after both controls are released.
+
+```ruby
+proc launch(speed)
+  jump(speed)
+end
+
+on pressed.jump
+  launch(8)
+end
+
+on released.jump
+  local.jump_finished = true
+end
+```
+
+Use `follow_player(2)` to follow player 2. Use `set_position(x, y)` to move the current instance to a room position in pixels and clear its velocity.

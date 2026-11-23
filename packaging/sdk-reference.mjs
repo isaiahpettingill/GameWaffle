@@ -6,4 +6,4 @@ const rows=Object.keys(Blocks).sort().map(key=>{
   const label=Blocks[key][0].replace(/%(\d+)/g,(_,n)=>fields[Number(n)-1][0]);
   return '| `'+call+'` | '+label+' | '+Opcodes[key]+' |';
 });
-await writeFile('docs/blocks.md',['# WaffleScript engine commands','','| Command | Block | Opcode |','| --- | --- | --- |',...rows,'','## Events','',Events.map(e=>'`'+e+'`').join(', '),'','## Actor readings','',readings.map(e=>'`actor.'+e+'`').join(', '),''].join('\n'));
+await writeFile('docs/blocks.md',['# WaffleScript engine commands','','| Command | Block | Opcode |','| --- | --- | --- |',...rows,'','## Events','',Events.map(e=>'`'+e+'`').join(', '),'','Use `pressed.name` or `released.name` for an input action. Read `action.name` to test whether a control for that action is held.','','## Actor readings','',readings.map(e=>'`actor.'+e+'`').join(', '),''].join('\n'));

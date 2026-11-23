@@ -148,6 +148,8 @@ pub struct Sprite {
 
 #[derive(Clone, Default, Deserialize)]
 pub struct Spawn {
+    #[serde(default, rename = "standardMovement")]
+    pub standard_movement: bool,
     #[serde(default)]
     pub persistence: Option<String>,
     #[serde(default)]
@@ -233,6 +235,8 @@ pub struct Item {
 #[derive(Deserialize)]
 pub struct Game {
     #[serde(default)]
+    pub controls: BTreeMap<String, u8>,
+    #[serde(default)]
     pub items: BTreeMap<String, Item>,
     #[serde(default)]
     pub id: String,
@@ -259,6 +263,16 @@ pub struct Input {
 }
 
 impl Input {
+    pub fn bits(self) -> u8 {
+        (self.up as u8)
+            | ((self.down as u8) << 1)
+            | ((self.left as u8) << 2)
+            | ((self.right as u8) << 3)
+            | ((self.a as u8) << 4)
+            | ((self.b as u8) << 5)
+            | ((self.x as u8) << 6)
+            | ((self.menu as u8) << 7)
+    }
     pub fn from_bits(bits: u8) -> Self {
         let on = |index: u32| bits & (1u8 << index) != 0;
         Self {

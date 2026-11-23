@@ -1,4 +1,5 @@
 {
+  "items": {"key": {"icon":"assets/sprites/key.png"}, "pump_key": {"icon":"assets/sprites/key.png"}},
   "name": "Basalt Works",
   "start": "yard",
   "tileSize": 24,

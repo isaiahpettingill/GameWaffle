@@ -10,18 +10,24 @@ export async function launch(port,open){
   const home=join(homedir(),'GameWaffle');
   await mkdir(home,{recursive:true});
   const settings=join(home,'.studio-location.json');
-  let location=home;
+  let location=home,recent=[],resume=true,writes=Promise.resolve();
   try {
     const saved=JSON.parse(await readFile(settings,'utf8'));
+    if(Array.isArray(saved.recent))recent=saved.recent.filter(entry=>typeof entry?.path==='string'&&isAbsolute(entry.path)&&typeof entry.name==='string').slice(0,20);
     if(isAbsolute(saved.folder)&&(await stat(saved.folder)).isDirectory())location=saved.folder;
   } catch {}
-  async function remember(folder){
+  function remember(folder,project){
     location=folder;
+    if(project)recent=[project,...recent.filter(entry=>entry.path!==project.path)].slice(0,20);
+    const data=JSON.stringify({folder,recent});
+    writes=writes.catch(()=>{}).then(async()=>{
     const tmp=settings+'.'+crypto.randomUUID();
-    await writeFile(tmp,JSON.stringify({folder}));
+    await writeFile(tmp,data);
     await rename(tmp,settings);
+    });
+    return writes;
   }
-  const children=new Set();
+  const children=new Set(),sessions=new Map();
   for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>process.exit());
   process.on('exit',()=>{for(const child of children)child.kill();});
   const site=resolve('web-built/site');
@@ -40,9 +46,13 @@ export async function launch(port,open){
       }
       if(req.method!=='POST'||req.headers.origin!==`http://127.0.0.1:${server.address().port}` && req.headers.origin!==`http://localhost:${server.address().port}`)throw Error('Open Studio on this computer');
       let body='';for await(const chunk of req){body+=chunk;if(body.length>8192)throw Error('Project path too long');}
-      const form=new URLSearchParams(body),action=form.get('action');let project;
+      const form=new URLSearchParams(body),action=form.get('action');let project,title;
       function json(value){res.setHeader('Content-Type','application/json');res.end(JSON.stringify(value));}
-      if(action==='settings'){json({location,home:homedir(),sep});return;}
+      if(action==='settings'){json({location,home:homedir(),sep,recent,resume});resume=false;return;}
+      if(action==='forget'){
+        recent=recent.filter(entry=>entry.path!==form.get('path'));
+        await remember(location);json({recent});return;
+      }
       if(action==='browse'){
         const path=form.get('path')||location;
         if(!isAbsolute(path))throw Error('Enter a full folder path.');
@@ -67,15 +77,16 @@ export async function launch(port,open){
       }
       if(action==='open'){
         if(!isAbsolute(form.get('path')||''))throw Error('Select a project folder or file.');
-        project=resolve(form.get('path'));await (await projectStore(project)).read('project.json');
+        project=resolve(form.get('path'));title=JSON.parse(await (await projectStore(project)).read('project.json','utf8')).name;
       }else{
 
-        if(action==='demo'){project=await mkdtemp(join(home,'Basalt Works-'));await cp('demo',project,{recursive:true});}
+        if(action==='demo'){project=await mkdtemp(join(home,'Basalt Works-'));await cp('demo',project,{recursive:true});title=JSON.parse(await readFile(join(project,'project.json'),'utf8')).name;}
         else{
           const name=form.get('name')?.trim();
           if(action!=='new'||!name||!/^[-\p{L}\p{N} _]{1,80}$/u.test(name))throw Error('Use letters, numbers, spaces, underscores, or hyphens');
           const destination=form.get('parent')||location;
           if(!isAbsolute(destination)||!(await stat(destination)).isDirectory())throw Error('Select a project location.');
+          title=name;
           const view=form.get('view')==='top_down'?'top_down':'platformer';
           const room={title:'First room',cols:24,rows:16,view,entities:[],layers:[{name:'Ground',order:0,collidable:true,cells:[]}]};
           const manifest=JSON.stringify({name,start:'room',tileSize:16,sprites:{},tiles:{},audio:{},rooms:{room}},null,2);
@@ -89,16 +100,17 @@ export async function launch(port,open){
           }
         }
       }
-      const url=await new Promise((ok,fail)=>{
+      if(!sessions.has(project))sessions.set(project,new Promise((ok,fail)=>{
         const child=spawn(process.execPath,['src/server.mjs','--project',project,'--port','0'],{stdio:['pipe','pipe','pipe'],env:{...process.env,GW_PARENT_PIPE:"1",GAMEWAFFLE_LAUNCHER:`http://127.0.0.1:${server.address().port}/`}});
         children.add(child);let log='';
         child.stderr.on('data',b=>log=(log+b).slice(-2000));
-        child.on('error',fail);child.on('exit',()=>{children.delete(child);fail(Error(log||'Could not open project'));});
+        child.on('error',err=>{children.delete(child);sessions.delete(project);fail(err);});child.on('exit',()=>{children.delete(child);sessions.delete(project);fail(Error(log||'Could not open project'));});
         child.stdout.on('data',b=>{const m=String(b).match(/localhost:(\d+)/);if(m)ok('http://127.0.0.1:'+m[1]);});
-      });
-      if(action!=='demo')await remember(dirname(project)).catch(()=>{});
+      }));
+      const url=await sessions.get(project);
+      await remember(action==='demo'?location:dirname(project),{path:project,name:title||project.split(sep).at(-1)});
       json({url});
-    }catch(err){res.writeHead(400,{'Content-Type':'text/plain; charset=utf-8'});res.end(err.code==='EEXIST'?'A project with this name already exists.':err.message);}
+    }catch(err){res.writeHead(400,{'Content-Type':'text/plain; charset=utf-8'});res.end(err.code==='EEXIST'?'A project with this name already exists.':err.code==='ENOENT'?'The file or folder is missing. Browse to its current location.':err.message);}
   });
   return new Promise((ready,fail)=>server.once('error',fail).listen(port,'127.0.0.1',()=>{const url='http://127.0.0.1:'+server.address().port;console.log('GameWaffle listening on '+url);
     if(open){const win=process.platform==='win32';spawn(win?'rundll32.exe':process.env.TERMUX_VERSION?'termux-open-url':'xdg-open',win?['url.dll,FileProtocolHandler',url]:[url]).on('error',()=>{});}

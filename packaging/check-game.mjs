@@ -123,3 +123,34 @@ for(const [kind,passes] of Object.entries({
 startRoom.shader={kind:'ripple',wavelength:0};
 await assert.rejects(compileProject('demo',{project:shaderProject}),/wavelength/);
 console.log('Passed room shader cartridge and parameter checks');
+
+// Two physical controls can hold one action across several input frames.
+const {parseScript}=await import('../src/wafflescript.mjs');
+const inputProject=structuredClone(arena);
+inputProject.controls={dash:['a','x']};
+const inputScript=parseScript(`proc count(amount)
+  global.presses = global.presses + amount
+end
+on pressed.dash
+  count(1)
+  follow_player(2)
+end
+on released.dash
+  global.releases = global.releases + 1
+end
+on tick
+  global.held = action.dash
+end`);
+const inputScripts=new Map([['maker',inputScript]]);
+const inputRuntime=Runtime.from_cartridge(pack(await compileProject(resolve('demo'),{project:inputProject,scripts:inputScripts})));
+for(const bits of [0,16,80,64,0,16])inputRuntime.step_buttons(bits);
+const inputSave=JSON.parse(inputRuntime.save_game());
+assert.equal(Number(inputSave.globals.presses),2);
+assert.equal(Number(inputSave.globals.releases),1);
+assert.equal(Number(inputSave.globals.held),1);
+const scene=JSON.parse(inputRuntime.snapshot()),second=scene.actors.find(a=>a.player===1);
+assert.deepEqual(scene.focus,[second.x,second.y]);
+inputRuntime.free();
+await assert.rejects(compileProject('demo',{project:inputProject,scripts:new Map([['maker',parseScript('on a\n give("unknown_item", 1)\nend')]])}),/Register item/);
+await assert.rejects(compileProject('demo',{project:inputProject,scripts:new Map([['maker',parseScript('on pressed.typo\n jump(8)\nend')]])}),/Map action/);
+console.log('Passed input action edges, held input, procedure arguments, camera target, and registry checks');

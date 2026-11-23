@@ -18,11 +18,11 @@ for(const width of [1280,800,390,320]){
   page.on('pageerror',err=>console.error(err));
   await page.goto(url+'/');
   const nav=page.getByRole('navigation',{name:'Editor views'});
-  for(const tab of ['Room','World','Game','Assets','Blocks']){
+  for(const tab of ['Room','World','Game','Assets','Actors','Blocks']){
     await nav.getByText(tab,{exact:true}).click();
     if(tab==='World')await page.getByRole('button',{name:'right exit'}).click();
     if(tab==='Game')await page.getByRole('button',{name:'Display',exact:true}).click();
-    if(tab==='Assets')await page.getByRole('button',{name:'Combat',exact:true}).click();
+    if(tab==='Actors')await page.getByRole('button',{name:'Combat',exact:true}).click();
     if(tab==='Blocks'){
       await page.locator('.blocklySvg').first().waitFor();
       await page.getByRole('button',{name:'Text',exact:true}).click();

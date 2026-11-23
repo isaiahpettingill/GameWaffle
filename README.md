@@ -14,7 +14,7 @@ npm run build
 npm start
 ```
 
-Studio opens a Tauri window. Select **Browse** to choose a location for a new project. Check the path under **Create at**. Select **Open project** to browse for a project folder or a `.waffleproj` file. Studio remembers your last project location. Select **Open Basalt Works example** to open a copy of the demo. On Linux, install the WebKitGTK 4.1 and GTK 3 development packages before building Studio. Use `npm run studio:browser` for the browser edition. Select **Top-down Courtyard**, then select **Play room** to try the top-down controls.
+Studio opens a Tauri window. Select **Browse** to choose a location for a new project. Check the path under **Create at**. Select **Open project** to browse for a project folder or a `.waffleproj` file. Studio opens your most recent project at startup. Use **File → Project Manager** to open another recent project. Select **Open Basalt Works example** to open a copy of the demo. On Linux, install the WebKitGTK 4.1 and GTK 3 development packages before building Studio. Use `npm run studio:browser` for the browser edition. Select **Top-down Courtyard**, then select **Play room** to try the top-down controls.
 
 To open a different project, run this command.
 
@@ -27,7 +27,7 @@ npm start -- --project path/to/project
 1. In **Project**, select **New room** (+). Select **New platformer room** or **New top-down room**.
 2. Select the layer that you want to edit. Use **Terrain** or **Walls** for collision. Use **Background** or **Ground** for decoration.
 3. Select a tile from the palette. Select **Brush**. Drag across the map to paint tiles. Use **Rectangle** to fill an area. Use **Pick tile** to select a tile from the map.
-4. Select a sprite definition in **Project**. Click the map to add an instance. You can also drag the definition to the map.
+4. Select a actor in **Project**. Click the map to add an instance. You can also drag the definition to the map.
 5. Select **Play room** to save and test the room.
 
 Use **Grid** to show tile boundaries. Use **Collision** to show collision tiles. Use **Pan**, the zoom controls, and **Fit** to change the view. Use **Undo** to reverse a complete brush stroke or room edit. Use **Redo** to apply the change again.
@@ -35,7 +35,7 @@ Use **Grid** to show tile boundaries. Use **Collision** to show collision tiles.
 | Task | Shortcut |
 |---|---|
 | Brush, eraser, rectangle, pick tile | B, E, R, I |
-| Add instance, select instance, pan | P, V, H |
+| Add Sprite, select instance, pan | P, V, H |
 | Pan temporarily | Hold Space or drag with the middle mouse button |
 | Remove the selected sprite | Delete |
 | Undo and redo | Ctrl+Z and Ctrl+Shift+Z |
@@ -43,13 +43,13 @@ Use **Grid** to show tile boundaries. Use **Collision** to show collision tiles.
 
 On macOS, use Command in place of Ctrl.
 
-### Use sprite instances
+### Use actor instances
 
-Add a sprite definition once. Add as many instances of that definition as necessary. Instances use the same art and script. Each instance has its own name, position, and game state.
+Add a actor once. Add as many instances of that definition as necessary. Instances use the same art and script. Each instance has its own name, position, and game state.
 
-Select an instance on the map or in the **Instances** panel. Set its player slot if it needs player controls. Open **Instance overrides** to change its starting health, animation, draw layer, or facing. Leave a field empty to use the definition value where applicable. Select **Open definition** or **Open script** to make a change for all instances.
+Select an instance on the map or in the **Instances** panel. Set its player slot if it needs player controls. Open **Instance overrides** to change its starting health, animation, draw layer, or facing. Leave a field empty to use the definition value where applicable. Select **Open actor** or **Open script** to make a change for all instances.
 
-To create an instance during play, use **Add instance of** in a Blockly script. Select the sprite definition. Set the X and Y offsets in pixels from the instance that runs the block. The new instance runs the **Start** event before its first physics step.
+To create an instance during play, use **Create instance of** in a Blockly script. Select the actor. Set the X and Y offsets in pixels from the instance that runs the block. The new instance runs the **Start** event before its first physics step.
 
 ### Platformer and top-down settings
 
@@ -77,7 +77,7 @@ The player applies the effect to the room, sprites, and particles before it draw
 
 Use [demo/project.json](demo/project.json) as an example. Put art and audio files in the project's `assets/` directory. Studio rebuilds the saved project when these files change. Select **Rebuild assets** to start a rebuild manually.
 
-- **Sprites.** Register the Aseprite file in **Assets**. Set the physics mode. Open **Collision filter** to set the category, mask, and group. Open **Appearance** to set the visual layer. Use **Blocks** to attach behavior to events. Studio saves each sprite script as CBOR. The compiler converts the blocks to operation codes and operands.
+- **Actors.** Choose a sprite file in **Actors → New actor**. Set the physics mode. Open **Collision filter** to set the category, mask, and group. Open **Appearance** to set the visual layer. Use **Blocks** to attach behavior to events. Studio saves each sprite script as CBOR. The compiler converts the blocks to operation codes and operands.
 - **Tiles.** Set the project tile size to 8 × 8, 16 × 16, 24 × 24, or 32 × 32 pixels. Use the same size for all tile frames. Register the Aseprite file and select a tag. Each frame in the tag is a variant. Use `:animated:` or `:fluid:` to play the frames in sequence. Use `:mirror-x:`, `:mirror-y:`, or `:rot-90:` to transform the frames. Set tile properties in Studio.
 - **Art.** Studio reads `.ase`, `.aseprite`, and `.png` files. It uses indexed palettes, transparency, frame times, and tag playback direction. Flatten native Aseprite tilemap layers and layers with non-normal blend modes before import.
 - **Collision.** Enable collision on a room layer to use its tile physics. Available tile types include solid tiles, one-way platforms, ladders, breakable tiles, fluid zones, and rigid bodies. The compiler combines adjacent static collision tiles and makes a separate texture atlas for each room.
@@ -89,7 +89,7 @@ Open **Blocks** and select **Logic**. The **Set** and **Get** blocks use a scope
 
 | Scope | Duration | Initial value |
 |---|---|---|
-| Local | One sprite instance | Zero |
+| Local | One actor instance | Zero |
 | Global | One game session | Value in **Game**, or zero |
 | Flag | One game session | Value in **Game**, or false |
 
@@ -177,7 +177,7 @@ The Box2D Rust port uses its [upstream license](runtime/vendor/box2d-rs/LICENSE)
 
 ## Edit a project
 
-Open a folder to work on its source files. In **Assets**, select **Sprites**, **Tiles**, or **Audio**. Select **New sprite**, **New tile**, or **New sound**. Choose a project file, or select **Browse device**. Check the name and select **Create**. A PNG supplies one frame.
+Open a folder to work on its source files. Select **Actors → New actor**, **Assets → Tiles → New tile**, or **Assets → Sounds → New sound**. Choose a project file, or select **Browse device**. Check the name and select **Create**. A PNG supplies one frame.
 
 Select **File → Editable project** to copy the project to a single `.waffleproj` file. Studio keeps its files in a virtual filesystem. A save replaces the archive. Use this command to open an archive or a folder after you build Studio.
 
@@ -201,7 +201,7 @@ Select **World**. Select a room and an exit. Select a destination. Use **Once pe
 
 For a continuous crossing, connect opposite edges in both directions. Select **Fixed** and **Connect opposite edges** on both exits. Use equal edge lengths. The camera shows terrain from the next room before the player crosses. Sprites and physics start when the player enters the next room.
 
-Use a camera block to follow a sprite, show a position, or return to player 1. Normal enemy scripts and bodies pause outside the camera and player activity areas. Enable **Assets → Combat → Run scripts off camera** for a boss.
+Use a camera block to follow an instance, show a position, or follow a selected player. Normal enemy scripts and bodies pause outside the camera and player activity areas. Enable **Actors → Combat → Run scripts off camera** for a boss.
 
 ## Items, dialogue, and saves
 
@@ -229,7 +229,7 @@ GameWaffle uses the [0BSD license](LICENSE).
 
 ## Add particle effects
 
-Select a sprite in **Assets → Particles**. Select an effect and set the rate in particles per second. Each instance has its own emitter. The presets include sparks, dust, smoke, flame, bubbles, rain, and snow.
+Select an actor in **Actors → Particles**. Select an effect and set the rate in particles per second. Each instance has its own emitter. The presets include sparks, dust, smoke, flame, bubbles, rain, and snow.
 
 Use **Particles** in Blockly for bursts, continuous effects, and stop commands. Emitted particles finish their movement after the source disappears. The runtime limits a room to 2,048 live particles and 256 new particles per tick. Particles use a separate random sequence from room connections.
 
@@ -283,10 +283,31 @@ Use **Edit → Undo project edit** or **Redo project edit** for room edits, game
 
 Select **Tools → Debug room**. Studio starts a separate simulation and pauses before its first script instruction. Select **Step instruction** to execute one register instruction. Select **Continue** to run the game. Click the game display to send keyboard input.
 
-To set a breakpoint, enter the event name and its instruction number. Use actor 0 to match any instance, or enter one instance ID. Select **Set breakpoint**, then **Continue**. The inspector shows the active script, local variables, global variables, and set flags. For a block script, the displayed line refers to its WaffleScript text form.
+To set a breakpoint, enter the event name and its instruction number. Use instance ID 0 to match any instance, or enter one instance ID. Select **Set breakpoint**, then **Continue**. The inspector shows the active script, local variables, global variables, and set flags. For a block script, the displayed line refers to its WaffleScript text form.
 
 ## HD pixel smoothing
 
 Select **HD pixel smoothing** in the room shader tab. The player draws the scene at twice the width and height. **Strength** controls the blend across diagonal edges. The HUD keeps sharp pixels. The logical viewport, collisions, and input coordinates use the original resolution.
 
 This preset uses the contrast-sensitive edge reconstruction used by Lemuroid's HD shader family as a design reference. GameWaffle uses its own fixed 2× Rust filter. See the [Lemuroid shader selection](https://github.com/Swordfish90/Lemuroid/blob/3625bc121d5d79fd4b80ce930fb0f3236c9334e8/lemuroid-app/src/main/java/com/swordfish/lemuroid/app/shared/game/ShaderChooser.kt) and the [LibretroDroid CUT shaders](https://github.com/Swordfish90/LibretroDroid/blob/8835c3098514390a271e36983957f7bb5f40abf1/libretrodroid/src/main/cpp/shadermanager.cpp).
+
+## Stop a playtest
+
+**Play game** and **Play room** open a separate window. Select **Stop** or press **Esc** to close it and return to Studio.
+
+## Studio terms
+
+| Term | Meaning |
+| --- | --- |
+| Asset | A project resource, such as an image, tile, or sound. |
+| Sprite | The image or animation that an actor displays. |
+| Actor | A reusable definition with a sprite, script, and physics properties. |
+| Instance | One occurrence of an actor in a room. |
+| Player | One of four input slots assigned to an instance. |
+| Control | A D-pad direction or a console button. |
+| Action | A named input bound to one or more controls. |
+| Item | A registered inventory entry. |
+
+To make an actor playable, select it in **Actors**. Select a player and **Place player in room**. Click the map to place the instance. To assign an existing instance, select it and set **Controlled by**. An actor without a script starts with built-in movement. Clear **Built-in movement** to control movement from its script.
+
+In **Game → Controls**, create an action such as `jump` and select its controls. In **Blocks → Events**, select the action and **pressed** or **released**. Each player receives input on its own instance. Register inventory items in **Game → Items** before you use them in scripts.

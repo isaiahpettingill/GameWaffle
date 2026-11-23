@@ -14,7 +14,8 @@
 | `damage(amount, range, height)` | Deal amount damage in a range × height attack box | 2 |
 | `emit(effect, rate)` | Emit effect at rate per second | 28 |
 | `fire(aim, speed, amount)` | Fire aim at speed speed with amount damage | 3 |
-| `follow()` | Follow this sprite | 23 |
+| `follow()` | Follow this instance | 23 |
+| `follow_player(player)` | Follow player player | 40 |
 | `give(item, count)` | Give item × count | 18 |
 | `give_player(item, player, count)` | Give item to player player count count | 34 |
 | `group_camera()` | Follow all players | 30 |
@@ -26,8 +27,9 @@
 | `retry_checkpoint()` | Return to checkpoint | 32 |
 | `room(room)` | Go to room room | 8 |
 | `say(text)` | Say text | 20 |
+| `set_position(x, y)` | Set position X x Y y | 41 |
 | `sound(sound)` | Play sound sound | 5 |
-| `spawn(sprite, x, y)` | Add instance of sprite at offset X x Y y | 9 |
+| `spawn(sprite, x, y)` | Create instance of sprite at offset X x Y y | 9 |
 | `stop_fx()` | Stop particle emitter | 29 |
 | `take(item, count)` | Remove item × count | 19 |
 | `take_player(item, player, count)` | Take item from player player count count | 35 |
@@ -38,6 +40,8 @@
 ## Events
 
 `start`, `use_item`, `restored`, `tick`, `a`, `b`, `x`, `menu`, `begin_contact`, `end_contact`, `damage`, `destroy`
+
+Use `pressed.name` or `released.name` for an input action. Read `action.name` to test whether a control for that action is held.
 
 ## Actor readings
 

@@ -1,4 +1,4 @@
-import {Blocks,Events} from './schema.mjs';
+import {Blocks,Events,inputEvent} from './schema.mjs';
 
 const symbols = {or:'or',and:'and','==':'equal','<':'less','<=':'less_equal','+':'add','-':'subtract','*':'multiply','/':'divide','%':'remainder'};
 const precedence = {or:1,and:2,'==':3,'<':3,'<=':3,'+':4,'-':4,'*':5,'/':5,'%':5};
@@ -40,7 +40,7 @@ export function parseScript(source){
       const name=qualified(),[scope,key]=name.split('.');
       if(peek()==='(')value={call:name,args:args()};
       else if(key && ['local','global','flag'].includes(scope))value={scope,get:key};
-      else if(key && ['item','button','actor'].includes(scope))value={[scope]:key};
+      else if(key && ['item','button','actor','action'].includes(scope))value={[scope]:key};
       else if(!key)value={param:name};
       else fail('Unknown name '+name);
     }
@@ -85,13 +85,13 @@ export function parseScript(source){
     const start=tokens[i].at;
     if(eat('use')){imports.push(id());eol();continue;}
     if(eat('on')){
-      const name=id();
-      if(!Events.includes(name)||Object.hasOwn(events,name))error('Unknown or duplicate event '+name,start,tokens[i-1].at+name.length);
+      const name=qualified();
+      if(!Events.includes(name)&&!inputEvent(name)||Object.hasOwn(events,name))error('Unknown or duplicate event '+name,start,tokens[i-1].at+name.length);
       eol();events[name]=body();
     }else if(eat('def') || eat('proc')){
       const kind=tokens[i-1].s,name=id(),params=[];need('(');
       if(!eat(')')){do{params.push(id());}while(eat(','));need(')');}
-      if(Object.hasOwn(routines,name) || params.length>2 || new Set(params).size!==params.length || (kind==='proc' && params.length))fail('Use a unique name, up to two function parameters, or a procedure with no parameters');
+      if(Object.hasOwn(routines,name) || params.length>2 || new Set(params).size!==params.length)fail('Use a unique name, up to two parameters');
       eol();let routine;
       if(kind==='def'){need('return');routine={params,result:expr()};eol();}
       else routine={params,body:body()};
@@ -108,6 +108,7 @@ function value(v){
   if(v.param)return v.param;
   if(v.get)return v.scope+'.'+v.get;
   if(v.actor)return "actor."+v.actor;
+  if(v.action)return 'action.'+v.action;
   if(v.button || v.item)return v.button?'button.'+v.button:'item.'+v.item;
   if(v.calc==='not')return '(not '+value(v.left)+')';
   return '('+value(v.left)+' '+operators[v.calc]+' '+value(v.right)+')';
