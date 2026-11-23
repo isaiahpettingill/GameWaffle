@@ -57,6 +57,8 @@ pub type Programs = BTreeMap<String, Rc<Program>>;
 
 const REGISTERS: usize = 64;
 const SLICE: usize = 1024;
+// Bound the host stack on targets that do not eliminate indirect tail calls.
+const DISPATCH_BATCH: usize = 16;
 const INTEGER_BITS: u64 = 8192;
 const VARIABLE_LIMIT: usize = 4096;
 
@@ -70,7 +72,8 @@ pub struct Encoded {
     f: Vec<String>,
 }
 
-type Handler = fn(&Instruction, &mut Machine, &mut Context<'_>) -> Result<(), &'static str>;
+type Handler =
+    fn(&Instruction, &Program, &mut Machine, &mut Context<'_>, usize) -> Result<(), &'static str>;
 
 struct Instruction {
     handler: Handler,
@@ -108,6 +111,7 @@ impl Program {
         }
         let mut code = Vec::new();
         let mut positions = BTreeMap::new();
+        let mut jumps = Vec::new();
         let mut registers = 0;
         let mut pc = 0;
         while pc < raw.b.len() {
@@ -169,63 +173,19 @@ impl Program {
                 }
                 args[slot] = value;
             }
-            let handler = match opcode {
-                0 => engine::<0>,
-                1 => engine::<1>,
-                2 => engine::<2>,
-                3 => engine::<3>,
-                4 => engine::<4>,
-                5 => engine::<5>,
-                6 => engine::<6>,
-                7 => engine::<7>,
-                8 => engine::<8>,
-                9 => engine::<9>,
-                10 => constant,
-                11 => load,
-                12 => store,
-                13 => calculate,
-                14 => branch,
-                15 => jump,
-                16 => wait,
-                17 => real,
-                18 => engine::<18>,
-                19 => engine::<19>,
-                20 => engine::<20>,
-                21 => engine::<21>,
-                22 => engine::<22>,
-                23 => engine::<23>,
-                24 => engine::<24>,
-                25 => engine::<25>,
-                26 => engine::<26>,
-                27 => engine::<27>,
-                28 => engine::<28>,
-                29 => engine::<29>,
-                30 => engine::<30>,
-                31 => engine::<31>,
-                32 => engine::<32>,
-                33 => engine::<33>,
-                34 => engine::<34>,
-                35 => engine::<35>,
-                36 => engine::<36>,
-                37 => engine::<37>,
-                38 => engine::<38>,
-                39 => engine::<39>,
-
-                _ => unreachable!(),
-            };
+            let handler = HANDLERS[usize::from(opcode)];
             code.push(Instruction { handler, args });
+            match opcode {
+                14 => jumps.push((code.len() - 1, 1)),
+                15 => jumps.push((code.len() - 1, 0)),
+                _ => {}
+            }
         }
         positions.insert(pc, code.len());
-        for instruction in &mut code {
-            let index = if std::ptr::fn_addr_eq(instruction.handler, branch as Handler) {
-                1
-            } else if std::ptr::fn_addr_eq(instruction.handler, jump as Handler) {
-                0
-            } else {
-                continue;
-            };
-            instruction.args[index] = *positions
-                .get(&usize::from(instruction.args[index]))
+        for (index, operand) in jumps {
+            let target = &mut code[index].args[operand];
+            *target = *positions
+                .get(&usize::from(*target))
                 .ok_or("Jump target is outside an instruction boundary")?
                 as u16;
         }
@@ -284,19 +244,91 @@ impl Machine {
             actions,
         };
         let budget = cx.runtime.script_fuel.min(SLICE);
-        for _ in 0..budget {
-            let Some(instruction) = program.code.get(self.pc) else {
-                return Ok(true);
+        let floor = cx.runtime.script_fuel - budget;
+        while cx.runtime.script_fuel > floor && self.wake <= cx.runtime.tick {
+            let Some(first) = program.code.get(self.pc) else {
+                break;
             };
-            self.pc += 1;
-            cx.runtime.script_fuel -= 1;
-            (instruction.handler)(instruction, self, &mut cx)?;
-            if self.wake > cx.runtime.tick {
-                return Ok(false);
-            }
+            let count = (cx.runtime.script_fuel - floor).min(DISPATCH_BATCH);
+            (first.handler)(first, &program, self, &mut cx, count)?;
+        }
+        if self.wake > cx.runtime.tick {
+            return Ok(false);
         }
         Ok(self.pc == program.code.len())
     }
+}
+
+// The loader resolves each opcode once. Each handler reads the next handler
+// address directly from the decoded instruction stream.
+const HANDLERS: [Handler; 40] = [
+    execute::<0>,
+    execute::<1>,
+    execute::<2>,
+    execute::<3>,
+    execute::<4>,
+    execute::<5>,
+    execute::<6>,
+    execute::<7>,
+    execute::<8>,
+    execute::<9>,
+    execute::<10>,
+    execute::<11>,
+    execute::<12>,
+    execute::<13>,
+    execute::<14>,
+    execute::<15>,
+    execute::<16>,
+    execute::<17>,
+    execute::<18>,
+    execute::<19>,
+    execute::<20>,
+    execute::<21>,
+    execute::<22>,
+    execute::<23>,
+    execute::<24>,
+    execute::<25>,
+    execute::<26>,
+    execute::<27>,
+    execute::<28>,
+    execute::<29>,
+    execute::<30>,
+    execute::<31>,
+    execute::<32>,
+    execute::<33>,
+    execute::<34>,
+    execute::<35>,
+    execute::<36>,
+    execute::<37>,
+    execute::<38>,
+    execute::<39>,
+];
+fn execute<const OP: u8>(
+    i: &Instruction,
+    program: &Program,
+    m: &mut Machine,
+    cx: &mut Context<'_>,
+    count: usize,
+) -> Result<(), &'static str> {
+    m.pc += 1;
+    cx.runtime.script_fuel -= 1;
+    match OP {
+        10 => constant(i, m, cx),
+        11 => load(i, m, cx),
+        12 => store(i, m, cx),
+        13 => calculate(i, m, cx),
+        14 => branch(i, m, cx),
+        15 => jump(i, m, cx),
+        16 => wait(i, m, cx),
+        17 => real(i, m, cx),
+        _ => engine::<OP>(i, m, cx),
+    }?;
+    if count > 1 && m.wake <= cx.runtime.tick {
+        if let Some(next) = program.code.get(m.pc) {
+            return (next.handler)(next, program, m, cx, count - 1);
+        }
+    }
+    Ok(())
 }
 
 fn constant(i: &Instruction, m: &mut Machine, _: &mut Context<'_>) -> Result<(), &'static str> {

@@ -81,7 +81,7 @@ Call `reset()` to restore the starting room and initial values. A script error i
 | 14 | Varies | Raw DEFLATE data for the CBOR simulation section |
 | After simulation data | Varies | CBOR media section with PNG atlases and audio |
 
-Compiled instructions use 8-bit opcodes, 8-bit registers where applicable, and little-endian 16-bit indexes. Repeated names and constants use a pool for each program. The runtime resolves each instruction handler and jump target when it loads the cartridge. The dispatch loop calls each pre-resolved handler. It has no opcode lookup in the dispatch loop.
+Compiled instructions use 8-bit opcodes, 8-bit registers where applicable, and little-endian 16-bit indexes. Repeated names and constants use a pool for each program. The runtime resolves each instruction handler and jump target when it loads the cartridge. Each handler calls the next handler directly. After at most 16 instructions, control returns to the scheduler loop. This limit bounds stack use on targets that keep tail-call frames.
 
 Media remains compressed in its source format. The player loads the active room atlas when necessary. The compiler puts occupied static tile chunks into the room atlas. A playable cartridge contains no editor thumbnail data.
 
