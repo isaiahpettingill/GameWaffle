@@ -1,6 +1,7 @@
 name: Build GameWaffle
 on:
   push:
+    branches: [codex/measure-package-time]
     tags: ['v*']
   workflow_dispatch:
     inputs:
