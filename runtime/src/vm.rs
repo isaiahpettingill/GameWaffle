@@ -128,11 +128,11 @@ impl Program {
             let opcode = raw.b[pc];
             pc += 1;
             let layout = match opcode {
-                0 | 1 | 4 | 40 => "W",
+                0 | 1 | 4 | 40 | 42 | 43 => "W",
                 2 => "WWW",
                 3 | 9 => "NWW",
                 5 | 7 | 8 => "N",
-                6 | 41 => "WW",
+                6 | 41 | 44 | 45 => "WW",
                 10 => "rk",
                 11 => "rsn",
                 12 => "snr",
@@ -173,7 +173,7 @@ impl Program {
                     b'n' if opcode == 11 && args[1] == 5 => index < 14,
                     b'n' if opcode == 11 && args[1] == 3 => index < 8,
                     b'n' => index < raw.n.len(),
-                    b's' => index < if opcode == 11 { 7 } else { 3 },
+                    b's' => index < if opcode == 11 { 9 } else { 3 },
                     b'o' => index < 11,
                     _ => true,
                 };
@@ -279,7 +279,7 @@ impl Machine {
 
 // The loader resolves each opcode once. Each handler reads the next handler
 // address directly from the decoded instruction stream.
-const HANDLERS: [Handler; 42] = [
+const HANDLERS: [Handler; 46] = [
     execute::<0>,
     execute::<1>,
     execute::<2>,
@@ -322,6 +322,10 @@ const HANDLERS: [Handler; 42] = [
     execute::<39>,
     execute::<40>,
     execute::<41>,
+    execute::<42>,
+    execute::<43>,
+    execute::<44>,
+    execute::<45>,
 ];
 fn execute<const OP: u8>(
     i: &Instruction,
@@ -402,7 +406,7 @@ fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'
                 .and_then(|a| a.player)
                 .map_or(0, |p| p as i64 + 1),
         })
-    } else if scope == 6 {
+    } else if (6..=8).contains(&scope) {
         let mask = cx
             .runtime
             .game
@@ -410,7 +414,15 @@ fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'
             .get(m.program.names[key as usize].as_ref())
             .copied()
             .unwrap_or(0);
-        Integer::from(i64::from(cx.input.bits() & mask != 0))
+        let now = cx.input.bits() & mask != 0;
+        let before = cx.runtime.actors[&cx.id]
+            .player
+            .is_some_and(|slot| cx.runtime.prior_buttons[slot] & mask != 0);
+        Integer::from(i64::from(match scope {
+            7 => now && !before,
+            8 => before && !now,
+            _ => now,
+        }))
     } else if scope == 4 {
         Integer::from(i64::from(
             *cx.runtime

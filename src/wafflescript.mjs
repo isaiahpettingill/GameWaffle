@@ -34,13 +34,14 @@ export function parseScript(source){
     else if(eat('-')){if(!/^\d/.test(peek()??''))fail('Expected a number');value=-Number(tokens[i++].s);}
     else if(/^\d/.test(peek()??''))value=Number(tokens[i++].s);
     else if(peek()?.startsWith('"')){try{value=JSON.parse(tokens[i].s);}catch{fail('Invalid string');}i++;}
+    else if(eat('none'))value=null;
     else if(eat('true'))value=true;
     else if(eat('false'))value=false;
     else {
       const name=qualified(),[scope,key]=name.split('.');
       if(peek()==='(')value={call:name,args:args()};
       else if(key && ['local','global','flag'].includes(scope))value={scope,get:key};
-      else if(key && ['item','button','actor','action'].includes(scope))value={[scope]:key};
+      else if(key && ['item','button','actor','action','pressed','released'].includes(scope))value={[scope]:key};
       else if(!key)value={param:name};
       else fail('Unknown name '+name);
     }
@@ -48,7 +49,7 @@ export function parseScript(source){
       const op=tokens[i++].s;
       value={calc:symbols[op],left:value,right:expr(precedence[op])};
     }
-    return typeof value==='object'?mark(value,start):value;
+    return value!==null && typeof value==='object'?mark(value,start):value;
   }
   function body(){
     const rows=[];
@@ -70,8 +71,8 @@ export function parseScript(source){
           if(name==='wait' && values.length===1)row={op:'wait',ticks:values[0]};
           else if(Object.hasOwn(Blocks,name)){
             const fields=Blocks[name][1];
-            if(values.length!==fields.length)error(name+' takes '+fields.length+' arguments',start,tokens[i-1].at+1);
-            row={op:name,...Object.fromEntries(fields.map(([key],j)=>[key,values[j]]))};
+            if(values.length>fields.length || fields.slice(values.length).some(f=>f[3]!=='optional'))error(name+' takes '+fields.length+' arguments',start,tokens[i-1].at+1);
+            row={op:name,...Object.fromEntries(fields.map(([key],j)=>[key,values[j]??null]))};
           }else row={op:'call',name,args:values};
         }
       }
@@ -103,11 +104,14 @@ export function parseScript(source){
 }
 
 function value(v){
+  if(v===null)return 'none';
   if(typeof v!=='object')return JSON.stringify(v);
   if(v.call)return v.call+'('+v.args.map(value).join(', ')+')';
   if(v.param)return v.param;
   if(v.get)return v.scope+'.'+v.get;
   if(v.actor)return "actor."+v.actor;
+  if(v.pressed)return 'pressed.'+v.pressed;
+  if(v.released)return 'released.'+v.released;
   if(v.action)return 'action.'+v.action;
   if(v.button || v.item)return v.button?'button.'+v.button:'item.'+v.item;
   if(v.calc==='not')return '(not '+value(v.left)+')';
@@ -127,7 +131,7 @@ export function formatScript(script){
       if(b.op==='set')line=b.scope+'.'+b.name+' = '+value(b.value);
       else if(b.op==='wait')line='wait('+value(b.ticks)+')';
       else if(b.op==='call')line=b.name+'('+b.args.map(value).join(', ')+')';
-      else line=b.op+'('+Blocks[b.op][1].map(([key,,fallback])=>value(b[key]??fallback)).join(', ')+')';
+      else line=b.op+'('+Blocks[b.op][1].map(([key,,fallback,optional])=>value(Object.hasOwn(b,key)?b[key]:optional?null:fallback)).join(', ')+')';
       lines.push(pad+line);
     }
   }

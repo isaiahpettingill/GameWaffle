@@ -63,7 +63,8 @@ for(const width of [1280,800,390,320]){
     }
     if(tab==='Actors')await page.getByRole('button',{name:'Combat',exact:true}).click();
     if(tab==='Code'){
-      await page.locator('.blocklySvg').first().waitFor();
+      await page.getByRole('button',{name:'Blocks',exact:true}).click();
+      await page.locator('.blocklySvg:visible').first().waitFor();
       await page.getByRole('button',{name:'Text',exact:true}).click();
       const source=page.locator('.cm-content');
       const original=await source.innerText();
@@ -85,6 +86,9 @@ for(const width of [1280,800,390,320]){
       const discard=page.getByRole('button',{name:'Discard',exact:true});
       if(await discard.isVisible()){await discard.click();await discard.waitFor({state:'hidden'});}
     }
+    const codePane=await page.locator('.code-pane').boundingBox(),mapPane=await page.locator('.map-pane').boundingBox();
+    assert.ok(codePane?.height>0 && mapPane?.height>0,'Both authoring panes must stay visible in '+tab);
+    assert.ok(width<=620 ? mapPane.y>=codePane.y+codePane.height-1 : mapPane.x>=codePane.x+codePane.width-1,'Authoring pane position');
     await checkFormRows(page,tab);
     const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);
     if(overflow)throw Error('Horizontal overflow '+width+' '+tab);
@@ -93,11 +97,8 @@ for(const width of [1280,800,390,320]){
     await nav.getByText('Room',{exact:true}).click();
     await page.locator('.inspector').getByRole('button',{name:'Room',exact:true}).click();
     const name=page.getByLabel('Room name'), before=await name.inputValue();
-    await name.fill('Recovered room');await name.press('Tab');
-    await page.waitForFunction(async()=>Boolean(await(await fetch('./api/recovery/project')).json()));
-    await page.reload();await page.getByRole('button',{name:'Recover edits'}).click();
-    await page.locator('.inspector').getByRole('button',{name:'Room',exact:true}).click();
-    assert.equal(await name.inputValue(),'Recovered room');
+    await name.fill('Saved room');await name.press('Tab');
+    await page.waitForFunction(async()=>Object.values((await(await fetch('./api/project')).json()).project.rooms).some(r=>r.title==='Saved room'));
     await page.locator('summary').filter({hasText:'Edit'}).click();
     await page.getByRole('button',{name:'Undo project edit'}).click();assert.equal(await name.inputValue(),before);
     await page.locator('summary').filter({hasText:'Tools'}).click();
@@ -110,6 +111,15 @@ for(const width of [1280,800,390,320]){
     await page.getByText(/^Paused at tick · instruction 0/).waitFor();
     await page.locator('.debugger code').waitFor();
     await page.getByRole('button',{name:'Close',exact:true}).click();
+    await page.getByRole('button',{name:'Open script for maker',exact:true}).click();
+    await page.getByRole('button',{name:'Text',exact:true}).click();
+    const code='on tick\n  apply_gravity(none)\n  if pressed.x and actor.grounded\n    animate("idle")\n    jump_force(240)\n  end\nend\n';
+    await page.locator('.cm-content').fill(code);
+    await page.waitForFunction(async code=>(await(await fetch('./api/script/maker')).json()).source===code,code);
+    await page.waitForFunction(()=>document.querySelector('.code-pane button.primary')?.disabled);
+    await page.getByRole('button',{name:'Blocks',exact:true}).click();
+    await page.waitForFunction(()=>[...document.querySelectorAll('.blocklyText')].some(el=>el.textContent.replaceAll('\u00a0',' ')==='On tick'));
+
   }
   await page.goto(url+'/player.html');
   await page.getByText('Local game',{exact:true}).waitFor();

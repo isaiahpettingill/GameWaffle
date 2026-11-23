@@ -31,3 +31,7 @@ assert.throws(()=>compileScript(parseScript('proc spin()\nspin()\nend')),/Recurs
 assert.throws(()=>compileScript(parseScript('def invalid(n)\nreturn typo\nend')),/parameter/);
 assert.throws(()=>parseScript('on tick\n jump(\nend'),e=>e.from===14);
 console.log('Passed WaffleScript round trips, module expansion, and diagnostics');
+const gravity=compileScript(parseScript('on tick\n apply_gravity(none)\nend'));
+for(const argument of ['','1'])assert.deepEqual(compileScript(parseScript('on tick\n apply_gravity('+argument+')\nend')),gravity);
+assert.notDeepEqual(compileScript(parseScript('on tick\n apply_gravity(0)\nend')),gravity);
+assert.throws(()=>compileScript(parseScript('on tick\n jump_force(none)\nend')),/optional/);

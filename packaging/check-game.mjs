@@ -140,6 +140,9 @@ on released.dash
 end
 on tick
   global.held = action.dash
+  if released.dash
+    global.tick_releases = global.tick_releases + 1
+  end
 end`);
 const inputScripts=new Map([['maker',inputScript]]);
 const inputRuntime=Runtime.from_cartridge(pack(await compileProject(resolve('demo'),{project:inputProject,scripts:inputScripts})));
@@ -147,6 +150,7 @@ for(const bits of [0,16,80,64,0,16])inputRuntime.step_buttons(bits);
 const inputSave=JSON.parse(inputRuntime.save_game());
 assert.equal(Number(inputSave.globals.presses),2);
 assert.equal(Number(inputSave.globals.releases),1);
+assert.equal(Number(inputSave.globals.tick_releases),1);
 assert.equal(Number(inputSave.globals.held),1);
 const scene=JSON.parse(inputRuntime.snapshot()),second=scene.actors.find(a=>a.player===1);
 assert.deepEqual(scene.focus,[second.x,second.y]);
@@ -154,3 +158,33 @@ inputRuntime.free();
 await assert.rejects(compileProject('demo',{project:inputProject,scripts:new Map([['maker',parseScript('on a\n give("unknown_item", 1)\nend')]])}),/Register item/);
 await assert.rejects(compileProject('demo',{project:inputProject,scripts:new Map([['maker',parseScript('on pressed.typo\n jump(8)\nend')]])}),/Map action/);
 console.log('Passed input action edges, held input, procedure arguments, camera target, and registry checks');
+
+const jumpSource=`on tick
+  if not flag.float
+    apply_gravity(none)
+  end
+  if pressed.x and actor.grounded
+    global.jumps = global.jumps + 1
+    animate("idle")
+    jump_force(240)
+  end
+end`;
+const jumpProject=structuredClone(source);
+jumpProject.rooms.yard.entities.find(e=>e.player===0).standardMovement=true;
+jumpProject.flags={...jumpProject.flags,float:false};
+const jumpCart=await compileProject(resolve('demo'),{project:jumpProject,scripts:new Map([['maker',parseScript(jumpSource)]])});
+const jumpRuntime=Runtime.from_cartridge(pack(jumpCart));
+const stepJump=bits=>player(JSON.parse(jumpRuntime.step_buttons(bits)));
+for(let i=0;i<90;i++)stepJump(0);
+const rest=stepJump(0).y;
+stepJump(64);
+assert.ok(stepJump(64).y<rest,'Jump force must move the grounded player upward');
+for(let i=0;i<240;i++)stepJump(64);
+assert.equal(Number(JSON.parse(jumpRuntime.save_game()).globals.jumps),1);
+const floatSave=JSON.parse(jumpRuntime.save_game());
+floatSave.flags.push('float');floatSave.players={0:[62,150]};
+jumpRuntime.load_game(JSON.stringify(floatSave));
+const high=stepJump(0).y;
+assert.ok(Math.abs(stepJump(0).y-high)<.01,'Skipping gravity must suspend a dynamic actor');
+jumpRuntime.free();
+console.log('Passed conditional gravity, grounded jump, and one press while held');

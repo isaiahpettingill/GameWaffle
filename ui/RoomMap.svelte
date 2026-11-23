@@ -280,6 +280,7 @@ import { tick } from 'svelte';
 
   function down(event) {
     const erase = event.button === 2 && ['paint','rect','erase'].includes(tool);
+    canvas.focus({preventScroll:true});
     if (busy || gesture || (event.button !== 0 && event.button !== 1 && !erase)) return;
     const p = point(event);
     hover = p;
@@ -401,7 +402,7 @@ import { tick } from 'svelte';
   }
 
   function keydown(event) {
-    if (event.target.matches?.('input,select,textarea') || event.target.isContentEditable || busy || gesture) return;
+    if (!event.target.closest?.('.map-pane') || event.target.matches?.('input,select,textarea') || event.target.isContentEditable || busy || gesture) return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.code === 'Space' && !event.target.closest?.('button,a')) {
       space = true;
@@ -454,7 +455,7 @@ import { tick } from 'svelte';
   </div>
   <div class="viewport" bind:this={viewport} bind:clientWidth={viewportWidth} bind:clientHeight={viewportHeight}>
     <div class="canvas-space">
-      <canvas aria-label="Room map" class:hand={tool==='hand' || space} class:select={tool==='pick' || tool==='select'}
+      <canvas tabindex="0" aria-label="Room map" class:hand={tool==='hand' || space} class:select={tool==='pick' || tool==='select'}
         bind:this={canvas} {width} {height} style:width={`${width*scale}px`} style:height={`${height*scale}px`}
         ondragover={dragOver} ondrop={drop}
         oncontextmenu={event=>{if(['paint','rect','erase'].includes(tool))event.preventDefault();}} onpointerdown={down} onpointermove={move} onpointerup={event=>finish(event,true)}
@@ -548,5 +549,6 @@ import { tick } from 'svelte';
   .brush-options{margin-top:.4rem;}
   label{display:flex;gap:.35rem;align-items:center;color:var(--muted);}
   select{width:auto;padding:.3rem .35rem;max-width:10rem;}
+  @media(max-width:620px){.map{display:flex;flex-direction:column}.maphead{order:-2}.viewport{order:-1;flex:none}}
   @media(max-width:560px){.viewport{height:clamp(225px,42vh,390px);}.tools{gap:.32rem;}}
 </style>

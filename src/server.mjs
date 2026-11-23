@@ -15,7 +15,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import { compileProject, previewTiles, discoverAssets, describeArt, projectPath } from './compiler.mjs';
 import { encodeCbor, decodeCbor } from './cartridge.mjs';
-import { buttons,Opcodes } from './schema.mjs';
+import { initialScript,buttons,Opcodes } from './schema.mjs';
 import { embedCartridge, playerTemplate } from './web-export.mjs';
 import { Runtime, initSync } from '../web-built/runtime/runtime.js';
 
@@ -223,7 +223,7 @@ const server = createServer(async (req, res) => {
           if (!Object.hasOwn(project.sprites,id)) return send(res, 404, {error:'Unknown sprite'});
           const file = project.sprites[id].script ?? `scripts/sprites/${id}.cbor`;
           const data = await store.read(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
-          const script=data ? (file.endsWith('.ws') ? {...parseScript(data.toString()),source:data.toString()} : decodeCbor(data)) : {events:{}};
+          const script=data ? (file.endsWith('.ws') ? {...parseScript(data.toString()),source:data.toString()} : decodeCbor(data)) : initialScript(project.sprites[id]);
           if(url.searchParams.has('debug')){
             const labels=new WeakMap();
             function index(source,name){

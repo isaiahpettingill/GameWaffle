@@ -1,13 +1,25 @@
 # Edit a script
 
-Open **Blocks** in Studio. Select a sprite. Select **Text** to open CodeMirror.
-Select an error marker to read the message. Correct each error before you select
-**Blocks** or **Save script**. You can switch views before you save.
+Open **Code** beside an actor. The room map stays open while you edit. Select **Text** to open CodeMirror. Studio saves valid edits automatically. If a script is incomplete, Studio keeps a draft for that actor.
 
 Both views use one compiler. The cartridge contains register bytecode. Studio
 keeps comments with the text until you change the program in Blocks.
 
 ## Events and data
+
+New actors start with an **On tick** block that applies room gravity. Put the gravity block inside a condition to control when the actor falls. A dynamic body uses its gravity scale and the room gravity once per physics step. A modifier of `none` uses a multiplier of 1. A modifier of 0 disables gravity for that step. Existing actors use automatic gravity until their script uses `apply_gravity`.
+
+```ruby
+on tick
+  apply_gravity(none)
+  if pressed.x and actor.grounded
+    animate("jump")
+    jump_force(240)
+  end
+end
+```
+
+Select a tag from the actor's animation menu. This example uses a tag named `jump`. Force uses newtons. For direct control, use `force(x, y)` or `impulse(x, y)`. A negative Y value pushes the actor up. `pressed.x` is true on the first tick of a press. Use `action.x` for held input. Optional inputs accept `none` or an omitted trailing argument. Zero is a numeric value.
 
 Start an event with `on`. End it with `end`. Use `if`, `else`, and `while`
 for control flow. Use `wait(1)` to resume on the next tick. Use a number,

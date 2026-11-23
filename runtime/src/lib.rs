@@ -34,6 +34,7 @@ struct Bullet {
 
 struct Actor {
     standard_movement: bool,
+    tick_gravity: Option<f32>,
     persistence: Option<String>,
     last_spawn: u32,
     answer: i64,
@@ -122,6 +123,7 @@ pub struct Runtime {
     tick: u64,
     next: u32,
     inputs: [Input; 4],
+    prior_buttons: [u8; 4],
     blocked: HashSet<usize>,
     gates: Vec<(Spawn, Option<u32>)>,
     gates_dirty: bool,
@@ -436,6 +438,7 @@ impl Runtime {
             tick: 0,
             next: 1,
             inputs: [Input::default(); 4],
+            prior_buttons: [0; 4],
             blocked: HashSet::new(),
             gates: Vec::new(),
             gates_dirty: false,
@@ -634,6 +637,7 @@ impl Runtime {
             id,
             Actor {
                 standard_movement: false,
+                tick_gravity: definition.filter(|s| s.script_gravity).map(|_| 0.0),
                 dormant: false,
                 persistence: None,
                 last_spawn: 0,
@@ -711,6 +715,7 @@ impl Runtime {
     }
 
     pub fn step_inputs(&mut self, inputs: [Input; 4]) -> Result<(), String> {
+        self.prior_buttons = self.inputs.map(Input::bits);
         self.sounds.clear();
         self.events.clear();
         if !self.dialog.is_empty() {
@@ -796,9 +801,13 @@ impl Runtime {
                 }
             }
 
+            let script_jump = actor
+                .sprite
+                .as_ref()
+                .is_some_and(|s| self.game.sprites[s].script_jump);
             if let Some(slot) = player.filter(|_| actor.standard_movement) {
                 self.engine(id, inputs[slot], 0, [4., 0., 0.], "", &mut actions);
-                if inputs[slot].x && !self.inputs[slot].x {
+                if !script_jump && inputs[slot].x && !self.inputs[slot].x {
                     self.engine(id, inputs[slot], 1, [8., 0., 0.], "", &mut actions);
                 }
             }
@@ -1128,6 +1137,24 @@ impl Runtime {
                 };
                 actor.velocity(velocity);
             }
+            43 => self.actors.get_mut(&id).unwrap().tick_gravity = Some(arg(1)),
+            44 | 45 => {
+                if let Some(body) = &self.actors[&id].body {
+                    let vector = Vec2::new(arg(1), arg(2));
+                    if opcode == 44 {
+                        body.borrow_mut().apply_force_to_center(vector, true);
+                    } else {
+                        body.borrow_mut()
+                            .apply_linear_impulse_to_center(vector, true);
+                    }
+                }
+            }
+            42 if !top_down && self.grounded(id) => {
+                if let Some(body) = &self.actors[&id].body {
+                    body.borrow_mut()
+                        .apply_force_to_center(Vec2::new(0.0, -arg(1).max(0.0)), true);
+                }
+            }
             1 if !top_down && !input.down && self.grounded(id) => {
                 let actor = self.actors.get_mut(&id).unwrap();
                 actor.velocity(Vec2::new(actor.v.x, -arg(1)));
@@ -1348,7 +1375,11 @@ impl Runtime {
             .values_mut()
             .filter(|a| !a.dormant && a.physics.mode == Mode::Dynamic)
         {
-            let mut gravity = actor.physics.gravity;
+            let base_gravity = actor.physics.gravity * actor.tick_gravity.unwrap_or(1.0);
+            if let Some(scale) = actor.tick_gravity.as_mut() {
+                *scale = 0.0;
+            }
+            let mut gravity = base_gravity;
             let mut fluid_drag = 0.0_f32;
             let mut submerged = 0.0;
             let body_density = actor.physics.mass.map_or(actor.physics.density, |mass| {
@@ -1373,8 +1404,7 @@ impl Runtime {
                         * submerged_axis(actor.p.y, actor.height, p.y, *h);
                     let portion = fraction.min(1.0 - submerged);
                     submerged += portion;
-                    gravity -= actor.physics.gravity * portion * zone.buoyancy * zone.density
-                        / body_density;
+                    gravity -= base_gravity * portion * zone.buoyancy * zone.density / body_density;
                     fluid_drag += portion * zone.drag;
                     if portion > 0.0 && zone.damage > 0.0 && actor.sprite.is_some() {
                         actions.push(Action::Damage {

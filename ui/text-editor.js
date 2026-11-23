@@ -11,7 +11,7 @@ const language=StreamLanguage.define({token(stream){
   if(stream.match(/#.*/))return 'comment';
   if(stream.match(/"(?:\\.|[^"\\])*"?/))return 'string';
   if(stream.match(/\d+(?:\.\d+)?/))return 'number';
-  if(stream.match(/(?:on|end|if|else|while|return|proc|def|use|true|false|not|and|or)\b/))return 'keyword';
+  if(stream.match(/(?:on|end|if|else|while|return|proc|def|use|true|false|none|not|and|or)\b/))return 'keyword';
   if(stream.match(/[a-zA-Z_]\w*/))return 'variableName';
   stream.next();return null;
 }});

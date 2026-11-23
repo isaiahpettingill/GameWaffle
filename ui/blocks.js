@@ -15,7 +15,7 @@ function blockDefinition(id) {
   const [message,fields] = Blocks[id];
   return {
     type:`waffle_${id}`, message0:message, colour:colors[id]??218,
-    args0:fields.map(([name,type,fallback])=> type === 'number' ? {type:'input_value',name,check:'WaffleValue'}
+    args0:fields.map(([name,type,fallback,optional])=> type === 'number' ? {type:'input_value',name,check:optional?['WaffleValue','WaffleNone']:'WaffleValue'}
       : Array.isArray(type) ? {type:'field_dropdown',name,options:type.map(value=>[value.replaceAll('_',' '),value])}
       : {type:'field_input',name,text:fallback}),
     inputsInline:true,previousStatement:'waffle', nextStatement:'waffle',
@@ -26,6 +26,7 @@ Blockly.defineBlocksWithJsonArray([
     nextStatement:'waffle',colour:41,tooltip:'Starts a stack of blocks when this event occurs.' },
   ...Object.keys(Blocks).filter(id=>id!=='spawn').map(blockDefinition),
   ...logicDefinitions(),
+  {type:'waffle_tick',message0:'On tick',nextStatement:'waffle',colour:41},
   {type:'waffle_use',message0:'Use module %1',args0:[{type:'field_input',name:'name',text:'common'}],colour:200},
   {type:'waffle_proc',message0:'Procedure %1 parameters %2',args0:[{type:'field_input',name:'name',text:'apply'},{type:'field_input',name:'params',text:''}],nextStatement:'waffle',colour:200},
   {type:'waffle_fn',message0:'Function %1 parameters %2 return %3',args0:[
@@ -40,17 +41,18 @@ function menu(field,values,empty){
 function registry(block){return registries.get(block.workspace.targetWorkspace??block.workspace)??{items:[],actions:buttons,sprites:[]};}
 Blockly.Blocks[inputHat]={init(){this.jsonInit({type:inputHat,message0:'When %1 is %2',args0:[menu('action',registry(this).actions,'Select action'),{type:'field_dropdown',name:'edge',options:[['pressed','pressed'],['released','released']]}],nextStatement:'waffle',colour:41});}};
 for(const [id,[,fields]] of Object.entries(Blocks)){
-  if(!fields.some(([key])=>key==='sprite'||key==='item'))continue;
+  if(!fields.some(([key])=>key==='sprite'||key==='item'||key==='tag'))continue;
   Blockly.Blocks['waffle_'+id]={init(){
     const spec=blockDefinition(id),data=registry(this);
     fields.forEach(([key],i)=>{
       if(key==='sprite')spec.args0[i]=menu(key,data.sprites,'Create an actor');
+      if(key==='tag')spec.args0[i]={type:'field_dropdown',name:key,options:()=>data.animations.map(name=>[name,name])};
       if(key==='item')spec.args0[i]=menu(key,data.items,'Register an item');
     });
     this.jsonInit(spec);
   }};
 }
-for(const [id,key] of [['action','actions'],['item','items']]){
+for(const [id,key] of [['pressed','actions'],['released','actions'],['action','actions'],['item','items']]){
   Blockly.Blocks['waffle_'+id]={init(){const spec=logicDefinitions().find(spec=>spec.type==='waffle_'+id);
     spec.args0[0]=menu(id,registry(this)[key],id==='item'?'Register an item':'Select action');this.jsonInit(spec);
   }};
@@ -68,28 +70,33 @@ const theme = Blockly.Theme.defineTheme('gamewaffle',{
 const blocks = ids=>ids.map(id=>({
   kind:'block',type:`waffle_${id}`,
   inputs:Object.fromEntries((Blocks[id]?.[1]??[]).filter(([,type])=>type==='number')
-    .map(([key,,value])=>[key,{shadow:id==='follow_player'?playerShadow(value):writeValue(value)}])),
+    .map(([key,,value,optional])=>[key,{shadow:optional?writeValue(null):id==='follow_player'?playerShadow(value):writeValue(value)}])),
 }));
-export function mountBlocks(node, onChange, sprites, items, actions) {
+export function mountBlocks(node, onChange, sprites, items, actions, animations) {
   const workspace = Blockly.inject(node,{
     theme, renderer:'geras', trashcan:true, media:'./blockly-media/',
     grid:{spacing:22,length:2,colour:'#454052',snap:false},
     move:{scrollbars:{horizontal:true,vertical:true},drag:true,wheel:true},
     zoom:{controls:true,wheel:false,startScale:.65,minScale:.3,maxScale:1.6,scaleSpeed:1.15},
     toolbox:{kind:'categoryToolbox',contents:[
-      {kind:'category',name:'Events',colour:41,contents:[{kind:'block',type:inputHat},{kind:'block',type:eventBlock}]},
+      {kind:'category',name:'Events',colour:41,contents:[{kind:'block',type:'waffle_tick'},{kind:'block',type:inputHat},{kind:'block',type:eventBlock}]},
       {kind:'category',name:'Routines',colour:200,contents:blocks(['proc','fn','call','function_call','param','use'])},
-      {kind:'category',name:'Programming',colour:276,contents:blocks(['set','if','while','wait','get','integer','bool','actor','action','button','calc','not'])},
+      {kind:'category',name:'Input & sensing',colour:156,contents:[...blocks(['pressed','released','action','grounded','actor'])]},
+      {kind:'category',name:'Logic',colour:276,contents:[...blocks(['if','while']),{kind:'block',type:'waffle_calc',fields:{operation:'and'}},...blocks(['not','bool','none'])]},
+      {kind:'category',name:'Programming',colour:276,contents:blocks(['set','wait','get','integer','button','calc'])},
       {kind:'category',name:'Items',colour:45,contents:blocks(['give','take','item','give_player','take_player','count_player','use_player_item','item_icon'])},
       {kind:'category',name:'Dialogue & HUD',colour:286,contents:blocks(['say','ask','counter','bar','hide'])},
       {kind:'category',name:'Particles',colour:24,contents:blocks(['burst','emit','stop_fx'])},
-      {kind:'category',name:'Motion',colour:218,contents:blocks(['velocity','set_position','walk','jump','chase'])},
+      {kind:'category',name:'Motion',colour:218,contents:blocks(['apply_gravity','force','impulse','velocity','set_position','jump_force'])},
       {kind:'category',name:'Camera',colour:218,contents:blocks(['follow_player','follow','group_camera','camera'])},
+      {kind:'category',name:'Movement helpers',colour:218,contents:blocks(['walk','jump','chase'])},
       {kind:'category',name:'Combat',colour:354,contents:blocks(['damage','fire'])},
       {kind:'category',name:'Room & media',colour:159,contents:blocks(['spawn','remove_self','animate','sound','room','checkpoint','retry_checkpoint'])},
     ]},
   });
-  registries.set(workspace,{sprites,items,actions});
+  const data={sprites,items,actions,animations:[...animations]};
+  registries.set(workspace,data);
+  const registryData=data,extraTags=new Set();
   let changing = false;
   workspace.addChangeListener(event=>{
     if (!changing && !event.isUiEvent && [Blockly.Events.BLOCK_CREATE,Blockly.Events.BLOCK_DELETE,Blockly.Events.BLOCK_CHANGE,Blockly.Events.BLOCK_MOVE].includes(event.type)) onChange();
@@ -104,7 +111,7 @@ export function mountBlocks(node, onChange, sprites, items, actions) {
         const position = script.layout?.[event] ?? [34+(index%2)*390,25+Math.floor(index/2)*155];
         const next = encodeStack(items);
         const input=inputEvent(event),[edge,action]=event.split('.');
-        return {type:input?inputHat:eventBlock,x:position[0],y:position[1],fields:input?{edge,action}:{event},...(next ? {next:{block:next}} : {})};
+        return {type:input?inputHat:event==='tick'?'waffle_tick':eventBlock,x:position[0],y:position[1],fields:input?{edge,action}:event==='tick'?{}:{event},...(next ? {next:{block:next}} : {})};
       });
       const add=(key,data)=>{
         const [x,y]=script.layout?.[key]??[34+(savedBlocks.length%2)*390,25+Math.floor(savedBlocks.length/2)*155];
@@ -122,6 +129,7 @@ export function mountBlocks(node, onChange, sprites, items, actions) {
   function encodeStack(items) {
     let next;
     for (const {op,...data} of [...items].reverse()) {
+      if(op==='animate' && data.tag){extraTags.add(data.tag);if(!registryData.animations.includes(data.tag))registryData.animations.push(data.tag);}
       if(op==='release_camera'){
         next={type:'waffle_follow_player',inputs:{player:{shadow:playerShadow(1)}},...(next?{next:{block:next}}:{})};continue;
       }
@@ -135,8 +143,9 @@ export function mountBlocks(node, onChange, sprites, items, actions) {
         if (op==='if' || op==='while') { value('condition',0); stack('body'); }
         if (op==='if') stack('otherwise');
       } else if (Object.hasOwn(Blocks,op)) {
-        for (const [key,type,fallback] of Blocks[op][1]) {
+        for (const [key,type,fallback,optional] of Blocks[op][1]) {
           if(op==='follow_player' && typeof (data[key]??fallback)==='number')inputs[key]={shadow:playerShadow(data[key]??fallback)};
+          else if(optional)inputs[key]={shadow:writeValue(null),...(data[key]!=null?{block:writeValue(data[key])}:{})};
           else if (type==='number') value(key,fallback);
           else fields[key]=data[key]??fallback;
         }
@@ -160,8 +169,8 @@ export function mountBlocks(node, onChange, sprites, items, actions) {
       else if (op==='wait') result.push({op,ticks:value('ticks',1)});
       else if (op==='if' || op==='while') result.push({op,condition:value('condition',0),body:stack('body'),
         ...(op==='if' ? {otherwise:stack('otherwise')} : {})});
-      else result.push({op,...Object.fromEntries(Blocks[op][1].map(([key,type,fallback])=>
-        [key,type==='number' ? value(key,fallback) : field(key)]))});
+      else result.push({op,...Object.fromEntries(Blocks[op][1].map(([key,type,fallback,optional])=>
+        [key,type==='number' ? value(key,optional?null:fallback) : field(key)]))});
     }
     return result;
   }
@@ -176,8 +185,8 @@ export function mountBlocks(node, onChange, sprites, items, actions) {
           {params:hat.getFieldValue('params').split(',').map(s=>s.trim()).filter(Boolean),result:readValue(hat.getInputTargetBlock('result'))};
         layout['routine:'+name]=[position.x,position.y];continue;
       }
-      if (hat.type !== eventBlock && hat.type!==inputHat) throw Error('Connect each loose block to an event before saving');
-      const event = hat.type===inputHat?hat.getFieldValue('edge')+'.'+hat.getFieldValue('action'):hat.getFieldValue('event');
+      if (hat.type !== eventBlock && hat.type!==inputHat && hat.type!=='waffle_tick') throw Error('Connect each loose block to an event before saving');
+      const event = hat.type==='waffle_tick'?'tick':hat.type===inputHat?hat.getFieldValue('edge')+'.'+hat.getFieldValue('action'):hat.getFieldValue('event');
       if (Object.hasOwn(events,event)) throw Error(`Use one stack for “${labels[event]??event}”`);
       const p = hat.getRelativeToSurfaceXY();
       layout[event] = [p.x,p.y];
@@ -185,7 +194,7 @@ export function mountBlocks(node, onChange, sprites, items, actions) {
     }
     return {events,layout,routines,imports};
   }
-  return {load,save,draft:()=>Blockly.serialization.workspaces.save(workspace),
+  return {load,save,updateRegistry(sprites,items,actions,tags){Object.assign(data,{sprites,items,actions,animations:[...new Set([...tags,...extraTags])]});},draft:()=>Blockly.serialization.workspaces.save(workspace),
     restoreDraft(value){Blockly.Events.disable();try{Blockly.serialization.workspaces.load(value,workspace);}finally{Blockly.Events.enable();}},
     dispose:()=>{observer.disconnect();workspace.dispose();}};
 }
