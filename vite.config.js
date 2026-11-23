@@ -23,7 +23,7 @@ export default defineConfig(() => {
       emptyOutDir: true,
       assetsInlineLimit: standalone ? Number.POSITIVE_INFINITY : 4096,
       rolldownOptions: {
-        input: standalone ? resolve('player.html') : { editor: resolve('index.html'), player: resolve('player.html') },
+        input: standalone ? resolve('player.html') : { editor: resolve('index.html'), projects: resolve('projects.html'), player: resolve('player.html') },
       },
     },
   };

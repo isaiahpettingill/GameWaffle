@@ -35,11 +35,12 @@ prefetch() {
         xargs -r -n 4 -P 12 bash -ec '
             url=$1 file=$2 digest=$4
             [[ "$file" != */* && "$digest" == *:* ]]
-            sudo /usr/lib/apt/apt-helper download-file "$url" "/var/cache/apt/archives/$file" "$digest"
+            # Each apt-helper process would otherwise rewrite the same mirror list.
+            case "$url" in mirror+file:*/pool/*) url="https://archive.ubuntu.com/ubuntu/pool/${url#*/pool/}";; esac
+            sudo /usr/lib/apt/apt-helper -o Acquire::https::Timeout=20 download-file "$url" "/var/cache/apt/archives/$file" "$digest"
         ' _
 }
-if ! prefetch; then
-    "${apt[@]}" update
-    prefetch || true
-fi
+# Hosted runner indices can point to package versions that Ubuntu has removed.
+"${apt[@]}" update
+prefetch || true
 "${apt[@]}" "${install[@]}"

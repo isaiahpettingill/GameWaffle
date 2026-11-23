@@ -29,4 +29,9 @@ await writeFile('web-built/standalone/gamewaffle-player.html',template.replace(c
 if (!process.argv.includes('--player-only')) {
   const demo = await readFile('web-built/demo.waffle');
   await writeFile(player,embedCartridge(template,demo));
+  const {Runtime,initSync}=await import('../web-built/runtime/runtime.js');
+  initSync({module:await readFile('web-built/runtime/runtime_bg.wasm')});
+  Runtime.from_cartridge(demo).free();
+  const {studioBuildId}=await import('./studio-build-state.mjs');
+  await writeFile('web-built/studio-build-id',await studioBuildId());
 }

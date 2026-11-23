@@ -14,7 +14,7 @@ npm run build
 npm start
 ```
 
-Studio opens a Tauri window. Select **Create project**, **Open project**, or **Open Basalt Works example**. On Linux, install the WebKitGTK 4.1 and GTK 3 development packages before building Studio. Use `npm run studio:browser` for the browser edition. Select **Top-down Courtyard**, then select **Play room** to try the top-down controls.
+Studio opens a Tauri window. Select **Browse** to choose a location for a new project. Check the path under **Create at**. Select **Open project** to browse for a project folder or a `.waffleproj` file. Studio remembers your last project location. Select **Open Basalt Works example** to open a copy of the demo. On Linux, install the WebKitGTK 4.1 and GTK 3 development packages before building Studio. Use `npm run studio:browser` for the browser edition. Select **Top-down Courtyard**, then select **Play room** to try the top-down controls.
 
 To open a different project, run this command.
 

@@ -308,8 +308,11 @@ jobs:
             current=missing
           }
           if [[ "$current" == false ]]; then exit 0; fi
-          refs=$(git ls-remote "https://github.com/$GH_REPO.git" "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")
-          if [[ -n "$refs" && $(awk 'END {print $1}' <<<"$refs") != "$GITHUB_SHA" ]]; then
+          tag_sha=$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq .sha 2>"$RUNNER_TEMP/tag-error") || {
+            grep -Eq 'HTTP (404|422)' "$RUNNER_TEMP/tag-error" || { cat "$RUNNER_TEMP/tag-error" >&2; exit 1; }
+            tag_sha=
+          }
+          if [[ -n "$tag_sha" && "$tag_sha" != "$GITHUB_SHA" ]]; then
             echo "The tag points to a different commit." >&2
             exit 1
           fi
