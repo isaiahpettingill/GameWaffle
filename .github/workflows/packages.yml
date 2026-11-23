@@ -155,7 +155,7 @@ jobs:
           api-level: 35
           arch: x86_64
           target: default
-          script: bash packaging/check-android.sh
+          script: timeout --kill-after=10s 150s bash -x packaging/check-android.sh
   release:
     needs: [desktop, android-launch]
     if: startsWith(github.ref, 'refs/tags/v')

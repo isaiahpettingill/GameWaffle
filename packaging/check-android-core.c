@@ -32,6 +32,8 @@ static int16_t input(unsigned port, unsigned device, unsigned index, unsigned id
 }
 int main(int argc, char **argv) {
     if (argc != 3) return 1;
+    setbuf(stdout, NULL);
+    puts("Load the core library");
     void *lib = dlopen(argv[1], RTLD_NOW|RTLD_LOCAL);
     if (!lib) { fprintf(stderr,"%s\n",dlerror()); return 1; }
     FILE *cart = fopen(argv[2], "rb");
@@ -54,8 +56,11 @@ int main(int argc, char **argv) {
     retro_set_environment(environment); retro_set_video_refresh(video);
     retro_set_audio_sample_batch(audio); retro_set_input_state(input); retro_init();
     struct game_info info={NULL,bytes,(size_t)length,NULL};
+    puts("Load the cartridge");
     if (!retro_load_game(&info)) return 1;
+    puts("Run 120 frames");
     for (unsigned i=0;i<120;++i) retro_run();
+    puts("Unload the cartridge");
     retro_unload_game(); retro_deinit(); free(bytes); dlclose(lib);
     printf("%u frames, %u audible frames, ports %x\n",frames,audible_frames,ports);
     return !(frames==120 && audible_frames && ports==15);
