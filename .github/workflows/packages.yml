@@ -1,7 +1,7 @@
 name: Build GameWaffle
 on:
   push:
-    branches: [codex/measure-package-time]
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
     inputs:
@@ -11,8 +11,50 @@ on:
         default: false
 permissions:
   contents: read
+concurrency:
+  group: packages-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        name: Select the release version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=
+          build=true
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag=$GITHUB_REF_NAME
+          elif [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            version=$(node -p 'require("./package.json").version')
+            tag="v$version"
+          fi
+          if [[ -n "$tag" ]]; then
+            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            # Only a missing release can start publication.
+            status=$(curl -sS -o "$RUNNER_TEMP/release.json" -w '%{http_code}' \
+              -H "Authorization: Bearer $GH_TOKEN" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/$tag")
+            case "$status" in
+              200)
+                if [[ $(jq -r .draft "$RUNNER_TEMP/release.json") == false ]]; then
+                  tag=
+                  if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then build=false; fi
+                fi ;;
+              404) ;;
+              *) echo "Release lookup failed with HTTP $status" >&2; exit 1 ;;
+            esac
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
   studio:
+    needs: version
+    if: needs.version.outputs.build == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +75,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: {name: package-Android-Studio, path: GameWaffle-Android-Studio.tar.gz, compression-level: 0, retention-days: 7}
   desktop-native:
+    needs: version
+    if: needs.version.outputs.build == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -63,7 +107,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: {name: 'desktop-native-${{ runner.os }}', path: desktop-native.tgz, compression-level: 0, retention-days: 1}
   desktop:
-    needs: [studio, desktop-native]
+    needs: [version, studio, desktop-native]
+    env:
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -147,6 +193,8 @@ jobs:
             GameWaffle-Setup.exe
             GameWaffle-x86_64.AppImage
   android-native:
+    needs: version
+    if: needs.version.outputs.build == 'true'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -174,7 +222,7 @@ jobs:
           compression-level: 0
           retention-days: 1
   android:
-    needs: [studio, android-native]
+    needs: [version, studio, android-native]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -195,9 +243,10 @@ jobs:
           git -C "$RUNNER_TEMP/SDL" sparse-checkout set android-project/app/src/main/java
       - name: Build and verify APK
         env:
-          SIGNING: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.ANDROID_SIGNING || '' }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+          SIGNING: ${{ needs.version.outputs.tag && secrets.ANDROID_SIGNING || '' }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          if [[ -n "$RELEASE_TAG" ]]; then
             : "${SIGNING:?Configure the ANDROID_SIGNING repository secret}"
             export ANDROID_KEYSTORE="$RUNNER_TEMP/release.p12"
             umask 077
@@ -210,7 +259,8 @@ jobs:
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
           export ANDROID_PLATFORM_JAR="$ANDROID_HOME/platforms/android-35/android.jar"
           export ANDROID_BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
-          export RELEASE_VERSION_CODE="$GITHUB_RUN_NUMBER" RELEASE_VERSION_NAME="${GITHUB_REF_NAME#v}"
+          version=${RELEASE_TAG:-$GITHUB_REF_NAME}
+          export RELEASE_VERSION_CODE="$GITHUB_RUN_NUMBER" RELEASE_VERSION_NAME="${version#v}"
           export SDL_SOURCE="$RUNNER_TEMP/SDL"
           USE_PREBUILT_ANDROID_LIBS=1 bash player/android/build.sh web-built/demo.waffle GameWaffle-Player.apk
       - if: inputs.launch_packages
@@ -237,14 +287,35 @@ jobs:
             GameWaffle-Player.apk
             GameWaffle-Libretro-android-*.zip
   release:
-    needs: [desktop, android]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [version, desktop, android]
+    if: needs.version.outputs.tag != ''
     runs-on: ubuntu-24.04
+    concurrency: publish-${{ needs.version.outputs.tag }}
     permissions: {contents: write, id-token: write, attestations: write}
     steps:
       - uses: actions/download-artifact@v4
         with: {pattern: 'package-*', merge-multiple: true, path: dist}
       - uses: actions/attest-build-provenance@v3
         with: {subject-path: 'dist/*'}
-      - env: {GH_TOKEN: '${{ github.token }}'}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          export GH_REPO="$GITHUB_REPOSITORY"
+          current=$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq '.draft' 2>"$RUNNER_TEMP/release-error") || {
+            grep -q 'HTTP 404' "$RUNNER_TEMP/release-error" || { cat "$RUNNER_TEMP/release-error" >&2; exit 1; }
+            current=missing
+          }
+          if [[ "$current" == false ]]; then exit 0; fi
+          refs=$(git ls-remote "https://github.com/$GH_REPO.git" "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")
+          if [[ -n "$refs" && $(awk 'END {print $1}' <<<"$refs") != "$GITHUB_SHA" ]]; then
+            echo "The tag points to a different commit." >&2
+            exit 1
+          fi
+          if [[ "$current" == true ]]; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+            gh release edit "$RELEASE_TAG" --target "$GITHUB_SHA" --draft=false
+          else
+            gh release create "$RELEASE_TAG" dist/* --target "$GITHUB_SHA" --generate-notes
+          fi

@@ -20,7 +20,8 @@ if(!prebuilt){
   for(const name of packages)await dependency(name);
 }
 if(process.argv.includes('--android-editor'))process.exit(0);
-if(/^v\d+\.\d+\.\d+$/.test(process.env.GITHUB_REF_NAME??''))await writeFile(join(target,'release-version'),process.env.GITHUB_REF_NAME);
+const releaseTag=process.env.RELEASE_TAG??process.env.GITHUB_REF_NAME??'';
+if(/^v\d+\.\d+\.\d+$/.test(releaseTag))await writeFile(join(target,'release-version'),releaseTag);
 const ext=windows?'.exe':'';
 if(!prebuilt){
   await copyFile('studio/target/release/gamewaffle-studio'+ext,join(target,'gamewaffle-studio'+ext));

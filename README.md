@@ -215,7 +215,7 @@ Each save includes the current room, player positions, global variables, flags, 
 
 ## Build release packages
 
-Manual runs and release tags build a Linux AppImage, a Windows NSIS installer, an Android player APK, and an Android Studio archive. Desktop packages include Studio and the SDL3 player. To start only the Linux player, use `GameWaffle-x86_64.AppImage --player`.
+The package workflow builds a Linux AppImage, a Windows NSIS installer, an Android player APK, and an Android Studio archive. Desktop packages include Studio and the SDL3 player. To start only the Linux player, use `GameWaffle-x86_64.AppImage --player`.
 
 Run this command from the checkout with Bash, Python 3, the JDK, and an authenticated GitHub CLI. Use a new path. Keep the key and its password for future Android updates.
 
@@ -223,7 +223,7 @@ Run this command from the checkout with Bash, Python 3, the JDK, and an authenti
 bash packaging/signing-key.sh "$HOME/GameWaffle-release.p12"
 ```
 
-Push a version tag such as `v0.1.0` to publish a GitHub Release. Tagged builds require the Android signing secret. GitHub issues build provenance for the release files.
+Set the version in `package.json` and merge to `main`. If that version has no published release, GitHub builds the packages, signs the APK, and publishes the files under the matching tag. For example, version `0.1.0` uses tag `v0.1.0`. You can also push a version tag or run **Build GameWaffle** on `main` to retry. Publication requires the `ANDROID_SIGNING` secret.
 
 GameWaffle uses the [0BSD license](LICENSE).
 
@@ -271,8 +271,7 @@ logic, WaffleScript, and desktop export. To test the editor at four screen
 widths, install playwright-core 1.58.2 and set CHROME_BIN to your Chromium
 executable. Run `npm run check:editor`.
 
-GitHub builds packages when you start the workflow manually or push a version
-tag such as v2.0.0. A version tag also publishes a release.
+To test the packages without publishing a release, run **Build GameWaffle** on a development branch.
 
 ## Recover an edit
 
