@@ -1,5 +1,6 @@
 <script>
-  import { tick } from 'svelte';
+  import { platformGravity, roomBorder } from '../src/schema.mjs';
+import { tick } from 'svelte';
   import { newInstanceName, spriteDragType } from '../src/instances.mjs';
 
   let {
@@ -75,7 +76,7 @@
     ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = view.background ?? '#171829';
     ctx.fillRect(0,0,width,height);
-    const topDown = (view.view ?? (Math.abs(view.gravity ?? 24) < .01 ? 'top_down' : 'platformer')) === 'top_down';
+    const topDown = (view.view ?? (Math.abs(view.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer')) === 'top_down';
     const entries = [
       ...orderedLayers(view).filter(({index})=>!hidden[index]).map(entry=>({...entry, sprite:false})),
       ...view.entities.map((actor,index)=>({actor,index,sprite:true,order:actor.layer ?? sprites[actor.sprite]?.layer ?? 0})),
@@ -114,11 +115,13 @@
       ctx.stroke();
     }
     if (collisionView) {
-      if (view.closedEdges ?? topDown) {
+      const border = roomBorder(view,topDown);
+      if (border !== 'open') {
         const inset = Math.max(1, 1.5 / scale);
         ctx.strokeStyle = collision.static;
         ctx.lineWidth = inset;
-        ctx.strokeRect(inset/2,inset/2,width-inset,height-inset);
+        if (border === 'closed') ctx.strokeRect(inset/2,inset/2,width-inset,height-inset);
+        else { ctx.beginPath(); ctx.moveTo(inset/2,0); ctx.lineTo(inset/2,height); ctx.moveTo(width-inset/2,0); ctx.lineTo(width-inset/2,height); ctx.stroke(); }
         ctx.lineWidth = 1;
       }
       for (const {item,index} of orderedLayers(view)) {
@@ -264,7 +267,7 @@
       return Math.abs(actor.x-p.px) <= w/2+2 && Math.abs(actor.y-p.py) <= h/2+2;
     };
     const hits = room.entities.map((actor,index)=>({actor,index})).filter(entry=>hit(entry.actor));
-    const topDown = (room.view ?? (Math.abs(room.gravity ?? 24) < .01 ? 'top_down' : 'platformer')) === 'top_down';
+    const topDown = (room.view ?? (Math.abs(room.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer')) === 'top_down';
     hits.sort((a,b)=>(a.actor.layer ?? sprites[a.actor.sprite]?.layer ?? 0)-(b.actor.layer ?? sprites[b.actor.sprite]?.layer ?? 0)
       || ((room.ySort ?? topDown)
         ? a.actor.y+spriteSize(a.actor)[1]/2-b.actor.y-spriteSize(b.actor)[1]/2 : a.index-b.index));

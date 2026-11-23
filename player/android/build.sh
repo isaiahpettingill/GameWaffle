@@ -27,6 +27,7 @@ for abi in arm64-v8a x86_64; do
     cmake -S "$SDL_SOURCE" -B "$build" -G Ninja \
         -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
         -DANDROID_ABI="$abi" -DANDROID_PLATFORM=android-24 -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
+        -DSDL_SHARED=ON -DSDL_STATIC="$([[ ${BUILD_LIBRETRO:-0} == 1 ]] && echo ON || echo OFF)" \
         -DCMAKE_BUILD_TYPE=Release -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
     cmake --build "$build" --parallel "${JOBS:-4}"
     env "$linker_variable=$toolchain/${target}24-clang" \
@@ -36,13 +37,25 @@ for abi in arm64-v8a x86_64; do
     cp "$build/libSDL3.so" "$stage/lib/$abi/"
     cp "player/target/$target/release/libmain.so" "$stage/lib/$abi/"
     "$toolchain/llvm-strip" "$stage/lib/$abi/"*.so
+    if [[ ${BUILD_LIBRETRO:-0} == 1 ]]; then
+        env "$linker_variable=$toolchain/${target}24-clang" \
+            RUSTFLAGS="-L native=$build -C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-landroid -C link-arg=-llog -C link-arg=-lOpenSLES -C link-arg=-lGLESv1_CM -C link-arg=-lGLESv2 -C link-arg=-lEGL -C link-arg=-ldl" \
+            cargo build --locked --release --lib --features libretro --manifest-path player/Cargo.toml --target "$target"
+        core="player/target/$target/release/libmain.so"
+        "$toolchain/llvm-strip" "$core"
+        if "$toolchain/llvm-readelf" -d "$core" | grep -q 'NEEDED.*libSDL'; then
+            echo 'The core requires a separate SDL library.' >&2
+            exit 1
+        fi
+        python3 packaging/core-zip.py "$core" "android-$abi"
+    fi
 done
 
 mapfile -t java_sources < <(find "$SDL_SOURCE/android-project/app/src/main/java/org/libsdl/app" -name '*.java' | sort)
 "$JAVA_HOME/bin/javac" -source 8 -target 8 -classpath "$ANDROID_PLATFORM_JAR" -d "$stage/classes" "${java_sources[@]}"
 "$JAVA_HOME/bin/jar" cf "$stage/classes.jar" -C "$stage/classes" .
 JAVA_HOME="$JAVA_HOME" "$tools/d8" --min-api 24 --lib "$ANDROID_PLATFORM_JAR" --output "$stage/dex" "$stage/classes.jar"
-"$tools/aapt2" link -o "$stage/unsigned.apk" -I "$ANDROID_PLATFORM_JAR" \
+"$tools/aapt2" link --version-code "${RELEASE_VERSION_CODE:-1}" --version-name "${RELEASE_VERSION_NAME:-0.1.0}" -o "$stage/unsigned.apk" -I "$ANDROID_PLATFORM_JAR" \
     --manifest player/android/AndroidManifest.xml -A "$stage/assets"
 python3 - "$stage" <<'PY'
 import sys
@@ -57,14 +70,21 @@ with ZipFile(stage / 'unsigned.apk', 'a', compression=ZIP_STORED) as apk:
         apk.write(file, file.relative_to(stage).as_posix())
 PY
 "$tools/zipalign" -P 16 -f 4 "$stage/unsigned.apk" "$stage/aligned.apk"
-# Keep the debug key outside the release output.
-key="$stage/debug.keystore"
-if [[ ! -f "$key" ]]; then
-    "$JAVA_HOME/bin/keytool" -genkeypair -keystore "$key" -storepass android -keypass android \
-        -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=GameWaffle Debug'
+if [[ -n ${ANDROID_KEYSTORE:-} ]]; then
+    key=$ANDROID_KEYSTORE
+    alias=gamewaffle
+    : "${GW_KEY_PASSWORD:?Set the keystore password}"
+else
+    key="$stage/debug.keystore"
+    alias=androiddebugkey
+    export GW_KEY_PASSWORD=android
+    if [[ ! -f "$key" ]]; then
+        "$JAVA_HOME/bin/keytool" -genkeypair -keystore "$key" -storepass:env GW_KEY_PASSWORD \
+            -alias "$alias" -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=GameWaffle Debug'
+    fi
 fi
-JAVA_HOME="$JAVA_HOME" "$tools/apksigner" sign --ks "$key" --ks-key-alias androiddebugkey \
-    --ks-pass pass:android --key-pass pass:android --out "$output" "$stage/aligned.apk"
+JAVA_HOME="$JAVA_HOME" "$tools/apksigner" sign --ks "$key" --ks-key-alias "$alias" \
+    --ks-pass env:GW_KEY_PASSWORD --out "$output" "$stage/aligned.apk"
 JAVA_HOME="$JAVA_HOME" "$tools/apksigner" verify "$output"
 "$tools/zipalign" -c -P 16 4 "$output"
 printf 'Built %s\n' "$output"

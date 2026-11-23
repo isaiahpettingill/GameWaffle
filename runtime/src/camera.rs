@@ -13,8 +13,8 @@ pub struct Camera {
 impl Default for Camera {
     fn default() -> Self {
         Self {
-            min_width: 160,
-            min_height: 144,
+            min_width: 128,
+            min_height: 128,
             max_width: 512,
             max_height: 512,
             zoom: 2,
@@ -24,8 +24,12 @@ impl Default for Camera {
 
 pub fn viewport(camera: Camera, window: [u32; 2], room: [u32; 2], focus: [f32; 2]) -> [u32; 4] {
     let zoom = camera.zoom.max(1);
-    let width = (window[0] / zoom).clamp(camera.min_width, camera.max_width);
-    let height = (window[1] / zoom).clamp(camera.min_height, camera.max_height);
+    let dimension = |pixels: u32, min: u32, max: u32| {
+        let min = min.clamp(128, 512);
+        (pixels / zoom).clamp(min, max.clamp(min, 512))
+    };
+    let width = dimension(window[0], camera.min_width, camera.max_width);
+    let height = dimension(window[1], camera.min_height, camera.max_height);
     let axis = |center: f32, size: u32, extent: u32| {
         (center.round() as i64 - i64::from(size / 2))
             .clamp(0, i64::from(extent.saturating_sub(size))) as u32

@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.gamewaffle.player" android:versionCode="1" android:versionName="0.1.0">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.gamewaffle.player">
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="35" />
     <uses-feature android:glEsVersion="0x00020000" android:required="true" />
     <application android:label="GameWaffle Player" android:theme="@android:style/Theme.Material.NoActionBar" android:hasCode="true" android:extractNativeLibs="false" android:allowBackup="false">

@@ -22,9 +22,11 @@ qoa = "1.0.1"
 sdl3 = "=0.22.1"
 opus-decoder = "0.1.1"
 ogg = "0.8"
+self_cell = { version = "1", optional = true }
 
 [features]
 bundled = ["sdl3/build-from-source-static"]
+libretro = ["dep:self_cell", "sdl3/static-link"]
 
 [patch.crates-io]
 box2d-rs = { path = "../runtime/vendor/box2d-rs" }

@@ -3,7 +3,6 @@ use sdl3::{
     pixels::PixelFormat,
     rect::Rect,
     render::{BlendMode, ScaleMode, Texture, TextureCreator},
-    video::WindowContext,
 };
 use serde::Deserialize;
 use std::{collections::BTreeMap, io::Cursor};
@@ -23,6 +22,8 @@ pub struct Media {
 
 #[derive(Deserialize)]
 pub struct Room {
+    #[serde(default)]
+    pub seams: BTreeMap<String, bool>,
     pub width: u32,
     pub height: u32,
     pub background: String,
@@ -63,7 +64,6 @@ impl Media {
             return Err("Cartridge exceeds 256 MiB".into());
         }
         let offset = match bytes.get(..6) {
-            Some(b"GWAF\x00\x01") => 6,
             Some(b"GWAF\x00\x02") if bytes.len() >= 14 => {
                 14usize.saturating_add(u32::from_le_bytes(bytes[6..10].try_into()?) as usize)
             }
@@ -83,10 +83,7 @@ impl Atlas {
         Some(Rect::new(x, y, w as u32, h as u32))
     }
 
-    pub fn texture<'a>(
-        &self,
-        creator: &'a TextureCreator<WindowContext>,
-    ) -> Result<Texture<'a>, Error> {
+    pub fn texture<'a, T>(&self, creator: &'a TextureCreator<T>) -> Result<Texture<'a>, Error> {
         let mut decoder = png::Decoder::new(Cursor::new(&self.png));
         decoder.set_transformations(png::Transformations::normalize_to_color8());
         let mut reader = decoder.read_info()?;

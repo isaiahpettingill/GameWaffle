@@ -6,9 +6,9 @@ import { logicDefinitions, logicStatements, readValue, writeValue } from './logi
 
 Blockly.setLocale(English);
 
-const labels = {start:'Room start',tick:'Every tick',a:'Press A',b:'Press B',x:'Press X',menu:'Press Start',
+const labels = {restored:'Load saved game',start:'Room start',tick:'Every tick',a:'Press A',b:'Press B',x:'Press X',menu:'Press Start',
   begin_contact:'Contact begins',end_contact:'Contact ends',damage:'Receive damage',destroy:'Destroyed'};
-const colors = {walk:218,jump:218,velocity:218,damage:354,fire:354,chase:159,animate:280,sound:37,room:159,spawn:187};
+const colors = {burst:24,emit:24,stop_fx:24,remove_self:187,camera:218,follow:218,release_camera:218,give:45,take:45,counter:286,hide:286,say:286,walk:218,jump:218,velocity:218,damage:354,fire:354,chase:159,animate:280,sound:37,room:159,spawn:187};
 const eventBlock = 'waffle_event';
 const spriteOptions = new WeakMap();
 function blockDefinition(id) {
@@ -26,6 +26,11 @@ Blockly.defineBlocksWithJsonArray([
     nextStatement:'waffle',colour:41,tooltip:'Starts a stack of blocks when this event occurs.' },
   ...Object.keys(Blocks).filter(id=>id!=='spawn').map(blockDefinition),
   ...logicDefinitions(),
+  {type:'waffle_use',message0:'Use module %1',args0:[{type:'field_input',name:'name',text:'common'}],colour:200},
+  {type:'waffle_proc',message0:'Procedure %1',args0:[{type:'field_input',name:'name',text:'celebrate'}],nextStatement:'waffle',colour:200},
+  {type:'waffle_fn',message0:'Function %1 parameters %2 return %3',args0:[
+    {type:'field_input',name:'name',text:'double'},{type:'field_input',name:'params',text:'amount'},
+    {type:'input_value',name:'result',check:'WaffleValue'}],colour:200},
 ]);
 Blockly.Blocks.waffle_spawn = {
   init() {
@@ -59,10 +64,14 @@ export function mountBlocks(node, onChange, sprites) {
     zoom:{controls:true,wheel:false,startScale:.95,minScale:.45,maxScale:1.6,scaleSpeed:1.15},
     toolbox:{kind:'categoryToolbox',contents:[
       {kind:'category',name:'Events',colour:41,contents:[{kind:'block',type:eventBlock}]},
+      {kind:'category',name:'Routines',colour:200,contents:blocks(['proc','fn','call','function_call','param','use'])},
       {kind:'category',name:'Logic',colour:276,contents:blocks(['set','if','while','wait','get','integer','bool','button','calc','not'])},
+      {kind:'category',name:'Items',colour:45,contents:blocks(['give','take','item'])},
+      {kind:'category',name:'Dialogue & HUD',colour:286,contents:blocks(['say','counter','hide'])},
+      {kind:'category',name:'Particles',colour:24,contents:blocks(['burst','emit','stop_fx'])},
       {kind:'category',name:'Motion',colour:218,contents:blocks(['walk','jump','velocity','chase'])},
       {kind:'category',name:'Combat',colour:354,contents:blocks(['damage','fire'])},
-      {kind:'category',name:'Room & media',colour:159,contents:blocks(['spawn','animate','sound','room'])},
+      {kind:'category',name:'Room & media',colour:159,contents:blocks(['spawn','remove_self','animate','sound','room','camera','follow','release_camera'])},
     ]},
   });
   spriteOptions.set(workspace,sprites.map(id=>[id,id]));
@@ -81,6 +90,16 @@ export function mountBlocks(node, onChange, sprites) {
         const next = encodeStack(items);
         return {type:eventBlock,x:position[0],y:position[1],fields:{event},...(next ? {next:{block:next}} : {})};
       });
+      const add=(key,data)=>{
+        const [x,y]=script.layout?.[key]??[34+(savedBlocks.length%2)*390,25+Math.floor(savedBlocks.length/2)*155];
+        savedBlocks.push({...data,x,y});
+      };
+      for(const name of script.imports??[])add('use:'+name,{type:'waffle_use',fields:{name}});
+      for(const [name,r] of Object.entries(script.routines??{})){
+        const next=r.body && encodeStack(r.body);
+        add('routine:'+name,r.body?{type:'waffle_proc',fields:{name},...(next?{next:{block:next}}:{})}:
+          {type:'waffle_fn',fields:{name,params:r.params.join(', ')},inputs:{result:{block:writeValue(r.result)}}});
+      }
       Blockly.serialization.workspaces.load({blocks:{languageVersion:0,blocks:savedBlocks}},workspace);
     } finally { Blockly.Events.enable(); changing = false; }
   }
@@ -91,6 +110,7 @@ export function mountBlocks(node, onChange, sprites) {
       const value = (key,fallback)=>{inputs[key]={block:writeValue(data[key]??fallback)};};
       const stack = key=>{const block=encodeStack(data[key]??[]);if(block)inputs[key]={block};};
       if (logicStatements.has(op)) {
+        if(op==='call')fields.name=data.name;
         if (op==='set') { fields.scope=data.scope; fields.name=data.name; value('value',0); }
         if (op==='wait') value('ticks',1);
         if (op==='if' || op==='while') { value('condition',0); stack('body'); }
@@ -112,7 +132,8 @@ export function mountBlocks(node, onChange, sprites) {
       const field=key=>block.getFieldValue(key);
       const value=(key,fallback)=>block.getInputTargetBlock(key) ? readValue(block.getInputTargetBlock(key)) : fallback;
       const stack=key=>decodeStack(block.getInputTargetBlock(key));
-      if (op==='set') result.push({op,scope:field('scope'),name:field('name'),value:value('value',0)});
+      if(op==='call')result.push({op,name:field('name'),args:[]});
+      else if (op==='set') result.push({op,scope:field('scope'),name:field('name'),value:value('value',0)});
       else if (op==='wait') result.push({op,ticks:value('ticks',1)});
       else if (op==='if' || op==='while') result.push({op,condition:value('condition',0),body:stack('body'),
         ...(op==='if' ? {otherwise:stack('otherwise')} : {})});
@@ -122,8 +143,16 @@ export function mountBlocks(node, onChange, sprites) {
     return result;
   }
   function save() {
-    const events = {}, layout = {};
+    const events = {}, layout = {}, routines=Object.create(null),imports=[];
     for (const hat of workspace.getTopBlocks(true)) {
+      const name=hat.getFieldValue('name'),position=hat.getRelativeToSurfaceXY();
+      if(hat.type==='waffle_use'){imports.push(name);layout['use:'+name]=[position.x,position.y];continue;}
+      if(['waffle_proc','waffle_fn'].includes(hat.type)){
+        if(Object.hasOwn(routines,name))throw Error('Duplicate routine '+name);
+        routines[name]=hat.type==='waffle_proc'?{params:[],body:decodeStack(hat.getNextBlock())}:
+          {params:hat.getFieldValue('params').split(',').map(s=>s.trim()).filter(Boolean),result:readValue(hat.getInputTargetBlock('result'))};
+        layout['routine:'+name]=[position.x,position.y];continue;
+      }
       if (hat.type !== eventBlock) throw Error('Connect each loose block to an event before saving');
       const event = hat.getFieldValue('event');
       if (Object.hasOwn(events,event)) throw Error(`Use one stack for “${labels[event]}”`);
@@ -131,7 +160,7 @@ export function mountBlocks(node, onChange, sprites) {
       layout[event] = [p.x,p.y];
       events[event] = decodeStack(hat.getNextBlock());
     }
-    return {events,layout};
+    return {events,layout,routines,imports};
   }
   return {load,save,dispose:()=>{observer.disconnect();workspace.dispose();}};
 }

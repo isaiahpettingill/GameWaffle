@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::BTreeMap;
 
 fn read_float<'de, D: serde::Deserializer<'de>>(decoder: D) -> Result<f32, D::Error> {
@@ -27,8 +26,6 @@ fn read_optional_float<'de, D: serde::Deserializer<'de>>(
     struct Number(#[serde(deserialize_with = "read_float")] f32);
     Ok(Option::<Number>::deserialize(decoder)?.map(|number| number.0))
 }
-
-pub type Code = BTreeMap<String, Vec<Vec<Value>>>;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -132,9 +129,10 @@ impl Clip {
 
 #[derive(Deserialize)]
 pub struct Sprite {
+    pub emitter: Option<crate::particles::Emitter>,
+    #[serde(default, rename = "alwaysActive")]
+    pub always_active: bool,
     pub clips: BTreeMap<String, Clip>,
-    #[serde(default)]
-    pub code: Code,
     #[serde(default)]
     pub program: BTreeMap<String, crate::vm::Encoded>,
     pub physics: Physics,
@@ -150,6 +148,9 @@ pub struct Sprite {
 
 #[derive(Clone, Default, Deserialize)]
 pub struct Spawn {
+    #[serde(default)]
+    pub conditions: Vec<(String, bool)>,
+    pub blocker: Option<usize>,
     #[serde(deserialize_with = "read_float")]
     pub x: f32,
     #[serde(deserialize_with = "read_float")]
@@ -186,7 +187,19 @@ pub enum View {
 }
 
 #[derive(Clone, Deserialize)]
+pub struct Exit {
+    pub targets: Vec<String>,
+    pub mode: String,
+    pub flag: Option<String>,
+    pub when: bool,
+    pub adjacent: bool,
+}
+#[derive(Clone, Deserialize)]
 pub struct Room {
+    #[serde(default)]
+    pub seams: BTreeMap<String, bool>,
+    #[serde(default)]
+    pub exits: BTreeMap<String, Exit>,
     pub cols: usize,
     pub rows: usize,
     #[serde(deserialize_with = "read_float")]
@@ -210,6 +223,8 @@ impl Room {
 
 #[derive(Deserialize)]
 pub struct Game {
+    #[serde(default)]
+    pub id: String,
     #[serde(default)]
     pub globals: BTreeMap<String, i64>,
     #[serde(default)]
@@ -290,6 +305,10 @@ pub struct Snapshot<'a> {
     pub room: &'a str,
     pub tick: u64,
     pub actors: Vec<ActorView<'a>>,
+    pub particles: &'a [crate::particles::Batch],
+    pub focus: Option<[f32; 2]>,
+    pub dialog: Option<&'a str>,
+    pub counters: &'a BTreeMap<String, i32>,
     pub sounds: &'a [String],
     pub events: &'a [RuntimeEvent],
 }

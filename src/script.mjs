@@ -7,7 +7,40 @@ export const variableName = name => typeof name === 'string' && /^[A-Za-z_][A-Za
 const commands = {constant:10, load:11, store:12, calc:13, branch:14, jump:15, wait:16};
 const buttons = ['up','down','left','right','a','b','x','menu'];
 
-export function compileScript(script) {
+export function compileScript(script,modules={}){
+  const result=compileEvents(script,modules);
+  for(const [name,r] of Object.entries(script.routines??{})){
+    const args=r.params.map(()=>0);
+    const block=r.body?{op:'call',name,args}:{op:'wait',ticks:{call:name,args}};
+    try{compileEvents({...script,events:{start:[block]}},modules);}
+    catch(error){if(error.node===block || !error.node)error.node=r;throw error;}
+  }
+  return result;
+}
+function compileEvents(script, modules) {
+  let unit=script, parameters=new Map(), active=new Set(), current;
+  function call(name,args,isFunction,run){
+    const parts=name.split('.');
+    const qualified=parts.length===2;
+    if(parts.length>2 || (qualified && !unit.imports?.includes(parts[0])))throw Error('Import the module before calling '+name);
+    const owner=qualified ? modules[parts[0]] : unit;
+    const key=parts.at(-1);
+    const routine=owner && Object.hasOwn(owner.routines??{},key) && owner.routines[key];
+    if(!routine || isFunction===Array.isArray(routine.body))throw Error('Unknown '+(isFunction?'function ':'procedure ')+name);
+    if(active.has(routine))throw Error('Recursive call to '+name);
+    if(args.length!==routine.params.length)throw Error(name+' takes '+routine.params.length+' arguments');
+    const previousUnit=unit, previousParams=parameters;
+    const bindings=new Map(routine.params.map((param,index)=>[param,{value:args[index],unit,parameters,active:new Set(active)}]));
+    active.add(routine);unit=owner;parameters=bindings;
+    try{run(routine);}finally{unit=previousUnit;parameters=previousParams;active.delete(routine);}
+  }
+  for(const name of script.imports??[])if(!Object.hasOwn(modules,name))throw Error('Unknown module '+name);
+  for(const [name,r] of Object.entries(script.routines??{})){
+    if(!variableName(name) || Object.hasOwn(Blocks,name) || name==='wait' || !Array.isArray(r.params) ||
+       r.params.some(p=>!variableName(p)) || new Set(r.params).size!==r.params.length ||
+       r.params.length>(r.body?0:2))throw Error('Invalid routine '+name);
+  }
+  try {
   const dependencies = new Set();
   const events = {};
   let nodes = 0;
@@ -40,8 +73,18 @@ export function compileScript(script) {
       if (typeof value === 'number' || typeof value === 'boolean') {
         if (typeof value === 'number' && !Number.isSafeInteger(value)) throw Error('Use an exact integer in expressions');
         emit(commands.constant,target,...word(intern(constants,Number(value))));
+      } else if(value?.call){
+        current=value;call(value.call,value.args,true,r=>expression(r.result,target,depth+1));
+      } else if(value?.param){
+        const binding=parameters.get(value.param);
+        if(!binding)throw Error('Unknown parameter '+value.param);
+        const oldUnit=unit,oldParams=parameters,oldActive=active;
+        unit=binding.unit;parameters=binding.parameters;active=binding.active;
+        try{expression(binding.value,target,depth+1);}finally{unit=oldUnit;parameters=oldParams;active=oldActive;}
       } else if (value?.get != null) {
         emit(commands.load,target,scope(value.scope),...word(named(value.get)));
+       } else if (value?.item != null) {
+        emit(commands.load,target,4,...word(named(value.item)));
       } else if (value?.button != null) {
         const index = buttons.indexOf(value.button);
         if (index < 0) throw Error(`Unknown button: ${value.button}`);
@@ -59,7 +102,9 @@ export function compileScript(script) {
       if (!Array.isArray(list)) throw Error('Expected a list of blocks');
       for (const block of list) {
         enter(depth);
-        if (block.op === 'set') {
+        current=block;
+        if (block.op==='call')call(block.name,block.args,false,r=>sequence(r.body,depth+1));
+        else if (block.op === 'set') {
           expression(block.value ?? 0,0,depth+1);
           emit(commands.store,scope(block.scope),...word(named(block.name)),0);
         } else if (block.op === 'if' || block.op === 'while') {
@@ -83,6 +128,7 @@ export function compileScript(script) {
           emit(commands.wait,0);
         } else {
           if (!Object.hasOwn(Blocks,block.op)) throw Error(`Unknown block: ${block.op}`);
+          if (['give','take'].includes(block.op) && !variableName(block.item??'coin'))throw Error('Use an item ID with letters, numbers, or underscores');
           const operands = Blocks[block.op][1].map(([key,type,fallback],index)=>{
             const value = block[key] ?? fallback;
             if (type === 'number') {
@@ -103,7 +149,8 @@ export function compileScript(script) {
     }
     sequence(body,0);
     if (bytes.length >= 65535) throw Error('Script bytecode exceeds 64 KiB');
-    if (bytes.length) events[event] = { b:Buffer.from(bytes), n:names, k:constants, ...(reals.length ? {f:reals} : {}) };
+    if (bytes.length) events[event] = { b:typeof Buffer === "undefined" ? Uint8Array.from(bytes) : Buffer.from(bytes), n:names, k:constants, ...(reals.length ? {f:reals} : {}) };
   }
   return { events, dependencies };
+  } catch(error){error.node=current;throw error;}
 }

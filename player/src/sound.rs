@@ -11,10 +11,10 @@ use symphonia::core::{
 
 const SAMPLE_LIMIT: usize = 32 * 1024 * 1024;
 type Error = Box<dyn std::error::Error>;
-struct Samples {
-    channels: u8,
-    rate: u32,
-    pcm: Vec<f32>,
+pub(super) struct Samples {
+    pub(super) channels: u8,
+    pub(super) rate: u32,
+    pub(super) pcm: Vec<f32>,
 }
 
 fn decode_opus(bytes: &[u8]) -> Result<Samples, Error> {
@@ -66,7 +66,7 @@ fn decode_opus(bytes: &[u8]) -> Result<Samples, Error> {
     })
 }
 
-fn decode(sound: &Sound) -> Result<Samples, Error> {
+pub(super) fn decode(sound: &Sound) -> Result<Samples, Error> {
     if sound.format == "qoa" {
         let input = &sound.data;
         let first = input.get(8..16).ok_or("Missing QOA frame")?;
@@ -170,7 +170,7 @@ pub struct Mixer {
     audio: Option<AudioSubsystem>,
     decoded: BTreeMap<String, Rc<Samples>>,
     voices: Vec<Voice>,
-    room: String,
+    tracks: [Option<String>; 2],
 }
 
 impl Mixer {
@@ -179,7 +179,7 @@ impl Mixer {
             audio,
             decoded: BTreeMap::new(),
             voices: Vec::new(),
-            room: String::new(),
+            tracks: Default::default(),
         }
     }
     pub fn play(
@@ -223,18 +223,18 @@ impl Mixer {
         });
         Ok(())
     }
-    pub fn room(&mut self, id: &str) -> bool {
-        if self.room == id {
+    pub fn room(&mut self, music: Option<&str>, ambience: Option<&str>) -> bool {
+        if self.tracks[0].as_deref() == music && self.tracks[1].as_deref() == ambience {
             return false;
         }
-        self.room = id.into();
+        self.tracks = [music.map(str::to_owned), ambience.map(str::to_owned)];
         self.voices.retain(|voice| !voice.looping);
         true
     }
     pub fn reset(&mut self) {
         self.voices.clear();
         self.decoded.clear();
-        self.room.clear();
+        self.tracks = Default::default();
     }
     pub fn update(&mut self) {
         self.voices.retain_mut(|voice| {

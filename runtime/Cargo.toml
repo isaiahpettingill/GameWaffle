@@ -7,6 +7,7 @@ edition = "2024"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+ed25519-dalek = { version = "2", default-features = false, features = ["fast"] }
 box2d-rs = "0.0.4"
 ciborium = "0.2.2"
 miniz_oxide = "0.8.9"

@@ -127,6 +127,10 @@ impl Program {
                 15 => "j",
                 16 => "r",
                 17 => "rf",
+                18 | 19 | 21 | 27 | 28 => "NW",
+                20 | 22 => "N",
+                23 | 25 | 26 | 29 => "",
+                24 => "WW",
                 _ => return Err(format!("Invalid opcode {opcode}")),
             };
             let mut args = [0; 4];
@@ -151,7 +155,7 @@ impl Program {
                     b'N' => index < raw.n.len(),
                     b'n' if opcode == 11 && args[1] == 3 => index < 8,
                     b'n' => index < raw.n.len(),
-                    b's' => index < if opcode == 11 { 4 } else { 3 },
+                    b's' => index < if opcode == 11 { 5 } else { 3 },
                     b'o' => index < 11,
                     _ => true,
                 };
@@ -179,6 +183,19 @@ impl Program {
                 15 => jump,
                 16 => wait,
                 17 => real,
+                18 => engine::<18>,
+                19 => engine::<19>,
+                20 => engine::<20>,
+                21 => engine::<21>,
+                22 => engine::<22>,
+                23 => engine::<23>,
+                24 => engine::<24>,
+                25 => engine::<25>,
+                26 => engine::<26>,
+                27 => engine::<27>,
+                28 => engine::<28>,
+                29 => engine::<29>,
+
                 _ => unreachable!(),
             };
             code.push(Instruction { handler, args });
@@ -294,6 +311,13 @@ fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'
                 input.menu,
             ][key as usize],
         ))
+    } else if scope == 4 {
+        Integer::from(i64::from(
+            *cx.runtime
+                .inventory
+                .get(m.program.names[key as usize].as_ref())
+                .unwrap_or(&0),
+        ))
     } else {
         let name = &m.program.names[key as usize];
         match scope {
@@ -318,6 +342,9 @@ fn store(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &
     };
     let name = &m.program.names[key as usize];
     let value = &m.registers[source as usize];
+    if scope == 2 && table.contains_key(name) == value.zero() {
+        cx.runtime.gates_dirty = true;
+    }
     if value.zero() {
         table.remove(name);
     } else {
@@ -410,7 +437,7 @@ fn engine<const OP: u8>(
     m: &mut Machine,
     cx: &mut Context<'_>,
 ) -> Result<(), &'static str> {
-    let named = matches!(OP, 3 | 5 | 7 | 8 | 9);
+    let named = matches!(OP, 3 | 5 | 7 | 8 | 9 | 18..=22 | 27 | 28);
     let arg = |index: usize| {
         if index == 0 && named {
             return 0.0;
