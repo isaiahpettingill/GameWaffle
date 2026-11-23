@@ -13,7 +13,10 @@ const targets=['linux-x64','windows-x64'];
 const binary=t=>t==='windows-x64'?'gamewaffle-player.exe':'gamewaffle-player';
 export function runtimeAsset(t){if(!targets.includes(t))throw Error('Select Linux or Windows');return 'GameWaffle-Player-'+t+(t==='windows-x64'?'.exe':'');}
 async function optional(file){try{return await readFile(file);}catch(error){if(error.code!=='ENOENT')throw error;}}
-async function bundledVersion(){return (await optional(join(app,'release-version')))?.toString().trim()??'development';}
+async function bundledVersion(){
+  const tag=(await optional(join(app,'release-version')))?.toString().trim();
+  return tag || 'v'+JSON.parse(await readFile(join(app,'package.json'),'utf8')).version;
+}
 function newer(tag,installed){
   if(!/^v\d+\.\d+\.\d+$/.test(tag))throw Error('Expected a stable release tag such as v2.0.0');
   if(!/^v\d+\.\d+\.\d+$/.test(installed))return true;
@@ -24,11 +27,12 @@ async function installedRuntime(t){
   const tag=(await optional(join(cache,t,'current')))?.toString();
   if(!tag || !/^v\d+\.\d+\.\d+$/.test(tag))return;
   const bundled=await bundledVersion();
-  if(t===nativeTarget && bundled!=='development' && newer(bundled,tag))return;
+  if(t===nativeTarget && newer(bundled,tag))return;
   return {tag,path:join(cache,t,tag,binary(t))};
 }
 export async function checkUpdate(component,t=nativeTarget,request=fetch){
-  if(!targets.includes(t)||!['studio','runtime'].includes(component))throw Error('Select a desktop platform and component');
+  if(!targets.includes(t))throw Error('Desktop updates require Linux x64 or Windows x64.');
+  if(!['studio','runtime'].includes(component))throw Error('Unknown update component');
   if(component==='studio' && t!==nativeTarget)throw Error('Select the installed Studio platform');
   const response=await request(api,{headers:{Accept:'application/vnd.github+json'},signal:AbortSignal.timeout(15000)});
   if(!response.ok)throw Error(response.status===404?'No published release is available':'GitHub release check failed ('+response.status+')');
@@ -65,6 +69,7 @@ export async function exportDesktop(bytes,t=nativeTarget){
   let player=cached && await optional(cached.path);
   if(!player && t===nativeTarget)player=await optional(join(app,binary(t)));
   if(!player && t===nativeTarget)player=await optional(join(app,'web-built','native',binary(t)));
-  if(!player)throw Error('Install the '+t+' runtime from Updates before export');
+  if(!player && t!==nativeTarget)player=await readFile((await update('runtime',t)).path);
+  if(!player)throw Error('Install the desktop runtime before export');
   return zipSync({[binary(t)]:[player,{os:3,attrs:(0o100755<<16)>>>0}],'game.waffle':bytes,'LICENSE':await readFile(join(app,'LICENSE'))},{level:4});
 }

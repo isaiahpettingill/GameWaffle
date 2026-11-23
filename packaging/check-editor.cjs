@@ -39,7 +39,7 @@ for(const width of [1280,800,390,320]){
   page.on('pageerror',err=>console.error(err));
   await page.goto(url+'/');
   const nav=page.getByRole('navigation',{name:'Editor views'});
-  for(const tab of ['Room','World','Game','Assets','Actors','Blocks']){
+  for(const tab of ['Room','World','Game','Assets','Actors','Code']){
     await nav.getByText(tab,{exact:true}).click();
     if(tab==='Assets'){
       const field=page.getByLabel('Find source files');
@@ -62,7 +62,7 @@ for(const width of [1280,800,390,320]){
       }
     }
     if(tab==='Actors')await page.getByRole('button',{name:'Combat',exact:true}).click();
-    if(tab==='Blocks'){
+    if(tab==='Code'){
       await page.locator('.blocklySvg').first().waitFor();
       await page.getByRole('button',{name:'Text',exact:true}).click();
       const source=page.locator('.cm-content');
@@ -75,7 +75,7 @@ for(const width of [1280,800,390,320]){
       if(width===1280){
         const sprite=await page.getByLabel('Script file').locator('option').first().innerText();
         await page.waitForFunction(async id=>(await(await fetch('./api/recovery/'+encodeURIComponent('./api/script/'+id))).json())?.source?.includes('jump('),sprite);
-        await page.reload();await nav.getByText('Blocks',{exact:true}).click();
+        await page.reload();await nav.getByText('Code',{exact:true}).click();
         await page.getByText('Recovered script draft').waitFor();
         assert.match(await page.locator('.cm-content').innerText(),/jump\(/);
       }

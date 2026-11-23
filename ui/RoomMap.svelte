@@ -10,7 +10,7 @@ import { tick } from 'svelte';
   let {
     room, roomId, size, tiles, sprites, tileArt, spriteArt, previewModes, layerIndex,
     selectedEntity = $bindable(-1), tileId = $bindable(''), spriteId = $bindable(''), tool = $bindable('paint'),placeAs=$bindable(''),
-    canUndo, canRedo, onUndo, onRedo, onEdit, onLayer, onSprites, onAssets, onPlay, busy,
+    canUndo, canRedo, onUndo, onRedo, onEdit, onLayer, onPlayer, onSprites, onAssets, onPlay, busy,
   } = $props();
 
   const tools = [
@@ -325,7 +325,7 @@ import { tick } from 'svelte';
       if(room.entities.some(other=>other.player===Number(placeAs)))return;
       entity.player=Number(placeAs);entity.standardMovement=!sprites[id].script;
       if(entity.standardMovement&&(!sprites[id].physics?.mode||sprites[id].physics.mode==='none'))entity.physics={mode:'dynamic'};
-      placeAs='';
+      placeAs='';tool='select';
     }
     const entities = [...room.entities,entity];
     onEdit({...room,entities});
@@ -470,7 +470,7 @@ import { tick } from 'svelte';
   {#if spriteTool}
     <div class="palette">
       {#if tool==='spawn'}
-        <strong>Actor</strong><div class="field-row"><label>Controlled by<select bind:value={placeAs}><option value="">No player</option>{#each [0,1,2,3] as slot}<option disabled={room.entities.some(e=>e.player===slot)} value={String(slot)}>Player {slot+1}</option>{/each}</select></label><label>Find an actor<input type="search" bind:value={spriteFilter}></label></div>
+        <strong>Actor</strong><div class="field-row"><label>Place as<select bind:value={placeAs}><option value="">No player</option>{#each [0,1,2,3] as slot}<option disabled={room.entities.some(e=>e.player===slot)} value={String(slot)}>Player {slot+1}</option>{/each}</select></label><label>Find an actor<input type="search" bind:value={spriteFilter}></label></div>
         <div class="tile-list">
           <PagedList items={Object.keys(sprites)} query={spriteFilter} label="sprite choices" size={12}>{#snippet children(id)}
             <button class="swatch" class:selected={spriteId===id} aria-pressed={spriteId===id}
@@ -481,7 +481,11 @@ import { tick } from 'svelte';
           {/snippet}</PagedList>
         </div>
       {:else if room.entities[selectedEntity]}
-        <span>{room.entities[selectedEntity].name ?? room.entities[selectedEntity].sprite} selected</span>
+        {@const instance=room.entities[selectedEntity]}
+        <strong>{instance.name??instance.sprite}</strong>
+        <div class="field-row"><label>Controlled by<select aria-label="Selected instance player" value={instance.player==null?'':String(instance.player)} onchange={e=>onPlayer(e.currentTarget.value)}>
+          <option value="">No player</option>{#each [0,1,2,3] as slot}<option value={String(slot)}>Player {slot+1}</option>{/each}
+        </select></label></div>
       {:else}<span>Select an instance on the map.</span>{/if}
     </div>
   {:else}
