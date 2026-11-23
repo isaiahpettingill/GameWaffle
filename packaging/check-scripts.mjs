@@ -7,7 +7,8 @@ import {loadModules} from '../src/modules.mjs';
 
 const folder='demo/scripts/sprites';
 for(const name of await readdir(folder)){
-  const blocks=decodeCbor(await readFile(folder+'/'+name));
+  const bytes=await readFile(folder+'/'+name);
+  const blocks=name.endsWith('.ws') ? parseScript(bytes.toString('utf8')) : decodeCbor(bytes);
   assert.deepEqual(compileScript(parseScript(formatScript(blocks))),compileScript(blocks));
 }
 const source=`use score

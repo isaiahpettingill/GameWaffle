@@ -10,7 +10,7 @@ const publicKey=createPublicKey(privateKey);
 const limit=256*1024*1024, MAX_METADATA=32*1024*1024, prefix=[71,87,65,70,0];
 export function pack(cart, { editor = false } = {}) {
   const { start, sprites, rooms, globals, flags, atlases, audio, camera, tilePreviews, spritePreviews, name } = cart;
-  const metadata = encodeCbor({id:cart.saveId??name,start, sprites, rooms, globals:globals??{}, flags:flags??{}});
+  const metadata = encodeCbor({items:cart.items??{},id:cart.saveId??name,start, sprites, rooms, globals:globals??{}, flags:flags??{}});
   if (metadata.length > MAX_METADATA) throw Error('Cartridge simulation data exceeds 32 MiB');
   const compressed = deflateSync(metadata,{level:6});
   const views = Object.fromEntries(Object.entries(rooms).map(([id,room])=>[id,

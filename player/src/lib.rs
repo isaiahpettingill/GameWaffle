@@ -1,3 +1,4 @@
+mod lan;
 mod mapping;
 mod media;
 #[cfg(feature = "libretro")]
@@ -286,6 +287,15 @@ fn draw<T: sdl3::render::RenderTarget>(
             Ok(())
         };
         canvas.set_draw_color(Color::RGB(38, 35, 52));
+        for (id, [x, y]) in snapshot.icons {
+            if let Some(r) = source.rect(&format!("ui/item/{id}")) {
+                canvas.copy(
+                    atlas,
+                    r,
+                    FRect::new(*x as f32, *y as f32, r.width() as f32, r.height() as f32),
+                )?;
+            }
+        }
         let mut y = 2.;
         for (label, value) in snapshot.counters {
             let line = format!("{label} {value}");
@@ -293,6 +303,21 @@ fn draw<T: sdl3::render::RenderTarget>(
             text(canvas, &line, 4., y)?;
             y += 10.;
         }
+        for (label, [value, max]) in snapshot.bars {
+            text(canvas, label, 4., y)?;
+            y += 8.;
+            canvas.set_draw_color(Color::RGB(38, 35, 52));
+            canvas.fill_rect(FRect::new(2., y, 64., 5.))?;
+            canvas.set_draw_color(Color::RGB(146, 218, 196));
+            canvas.fill_rect(FRect::new(
+                3.,
+                y + 1.,
+                62. * (*value as f32) / (*max as f32),
+                3.,
+            ))?;
+            y += 7.;
+        }
+        canvas.set_draw_color(Color::RGB(38, 35, 52));
         if let Some(dialog) = snapshot.dialog {
             let wrapped = gamewaffle_runtime::dialogue_lines(dialog, (w as usize - 8) / 6);
             y = h as f32 - (wrapped.lines().count() + 1) as f32 * 8. - 4.;
@@ -326,6 +351,22 @@ fn save_slot(runtime: &mut Runtime, slot: u8, write: bool) -> Result<(), Error> 
 }
 
 pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
+    run_network(path, verify, None)
+}
+pub fn run_network(
+    path: Option<PathBuf>,
+    verify: bool,
+    connection: Option<(String, Option<usize>)>,
+) -> Result<(), Error> {
+    let mut network = connection
+        .map(|(address, n)| {
+            lan::Network::connect(
+                path.as_deref().ok_or("Select a cartridge for LAN play")?,
+                &address,
+                n,
+            )
+        })
+        .transpose()?;
     let sdl = sdl3::init()?;
     let video = sdl.video()?;
     let mut window = video.window("GameWaffle Player", 800, 560);
@@ -354,6 +395,9 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
     let (sender, files) = mpsc::channel();
     let mut mixer = sound::Mixer::new(sdl.audio().ok());
     let mut game = path.as_deref().map(Game::open).transpose()?;
+    if let (Some((_, seed)), Some(game)) = (&network, &mut game) {
+        game.runtime.set_seed(*seed);
+    }
     let mut texture = None;
     let mut frame_texture = None;
     let mut frame_dimensions = [0, 0];
@@ -369,7 +413,7 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
     let mut particle_rects = Vec::new();
     'running: loop {
         for event in pump.poll_iter() {
-            if setup.is_none() {
+            if setup.is_none() && network.is_none() {
                 let command = match event {
                     Event::KeyDown {
                         scancode: Some(Key::F5),
@@ -489,7 +533,9 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
                     ..
                 } => {
                     if let Some(game) = &mut game {
-                        game.runtime.reset()?;
+                        if network.is_none() {
+                            game.runtime.reset()?;
+                        }
                         mixer.reset();
                     }
                 }
@@ -563,6 +609,9 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
             }
         }
         for path in files.try_iter() {
+            if network.is_some() {
+                continue;
+            }
             match Game::open(&path) {
                 Ok(new) => {
                     let title = format!("GameWaffle — {}", new.media.name.replace('\0', ""));
@@ -620,7 +669,12 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
                     slot[2] |= x < -16000;
                     slot[3] |= x > 16000;
                 }
-                game.runtime.set_view_size(view[2], view[3]);
+                if let Some((net, _)) = &mut network {
+                    states = net.step(states[0])?;
+                    game.runtime.set_view_size(320, 240);
+                } else {
+                    game.runtime.set_view_size(view[2], view[3]);
+                }
                 game.runtime.step_inputs(states.map(buttons))?;
                 let room_id = game.runtime.room();
                 let room = game

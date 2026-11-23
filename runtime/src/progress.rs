@@ -1,8 +1,66 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 
+pub(super) type WorldMemory = BTreeMap<String, BTreeMap<String, Record>>;
+#[derive(Clone, Deserialize, Serialize)]
+pub(super) struct Record {
+    pub xy: [f32; 2],
+    pub motion: [f32; 2],
+    pub health: f32,
+    pub locals: BTreeMap<String, String>,
+    pub animation: String,
+    pub facing: f32,
+}
+pub(super) fn variables(source: &BTreeMap<String, String>) -> Result<vm::Variables, String> {
+    let mut globals = vm::Variables::new();
+    for (name, value) in source {
+        let integer = if let Ok(v) = value.parse::<i64>() {
+            vm::Integer::Small(v)
+        } else {
+            if value.len() > 2468 {
+                return Err("Invalid saved integer".into());
+            }
+            let big = value
+                .parse::<num_bigint::BigInt>()
+                .map_err(|_| "Invalid saved integer")?;
+            if big.bits() > 8192 {
+                return Err("Invalid saved integer".into());
+            }
+            vm::Integer::Large(big)
+        };
+        globals.insert(name.as_str().into(), integer);
+    }
+    Ok(globals)
+}
+impl Runtime {
+    pub(super) fn room_memory(&self) -> BTreeMap<String, Record> {
+        let mut records = self.memory.get(&self.room).cloned().unwrap_or_default();
+        for a in self.actors.values() {
+            if let Some(key) = &a.persistence {
+                records.insert(
+                    key.clone(),
+                    Record {
+                        xy: [a.p.x, a.p.y],
+                        motion: [a.v.x, a.v.y],
+                        health: a.health,
+                        locals: a
+                            .variables
+                            .iter()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect(),
+                        animation: a.animation.clone(),
+                        facing: a.facing,
+                    },
+                );
+            }
+        }
+        records
+    }
+}
 #[derive(Deserialize, Serialize)]
 struct Save {
+    #[serde(default)]
+    memory: WorldMemory,
     version: u8,
     game: String,
     room: String,
@@ -11,7 +69,11 @@ struct Save {
     players: BTreeMap<usize, [f32; 2]>,
     globals: BTreeMap<String, String>,
     flags: Vec<String>,
+    #[serde(default)]
+    personal: [BTreeMap<String, u32>; 4],
     inventory: BTreeMap<String, u32>,
+    #[serde(default)]
+    removed: BTreeMap<String, std::collections::BTreeSet<String>>,
     #[serde(default)]
     counters: BTreeMap<String, i32>,
 }
@@ -23,7 +85,10 @@ impl Runtime {
         self.rng = self.seed;
     }
     pub fn save_game(&self) -> Result<String, String> {
+        let mut memory = self.memory.clone();
+        memory.insert(self.room.clone(), self.room_memory());
         let state = Save {
+            memory,
             version: 1,
             game: self.game.id.clone(),
             room: self.room.clone(),
@@ -40,7 +105,9 @@ impl Runtime {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             flags: self.flags.keys().map(ToString::to_string).collect(),
+            personal: self.personal.clone(),
             inventory: self.inventory.clone(),
+            removed: self.removed.clone(),
             counters: self.counters.clone(),
         };
         serde_json::to_string(&state).map_err(|e| e.to_string())
@@ -63,31 +130,32 @@ impl Runtime {
         {
             return Err("Invalid save for this game".into());
         }
-        let mut globals = vm::Variables::new();
-        for (name, value) in state.globals {
-            let integer = if let Ok(v) = value.parse::<i64>() {
-                vm::Integer::Small(v)
-            } else {
-                if value.len() > 2468 {
-                    return Err("Invalid saved integer".into());
+        let globals = variables(&state.globals)?;
+        for room in state.memory.values() {
+            for record in room.values() {
+                if record
+                    .xy
+                    .iter()
+                    .chain(record.motion.iter())
+                    .any(|n| !n.is_finite() || n.abs() > 100000.)
+                    || !record.health.is_finite()
+                {
+                    return Err("Invalid saved actor".into());
                 }
-                let big = value
-                    .parse::<num_bigint::BigInt>()
-                    .map_err(|_| "Invalid saved integer")?;
-                if big.bits() > 8192 {
-                    return Err("Invalid saved integer".into());
-                }
-                vm::Integer::Large(big)
-            };
-            globals.insert(name.into(), integer);
+                variables(&record.locals)?;
+            }
         }
+        self.actors.clear();
+        self.memory = state.memory;
         self.globals = globals;
         self.flags = state
             .flags
             .into_iter()
             .map(|n| (n.into(), 1.into()))
             .collect();
+        self.personal = state.personal;
         self.inventory = state.inventory;
+        self.removed = state.removed;
         self.seed = state.seed.max(1);
         self.rng = state.rng.max(1);
         self.inputs = Default::default();

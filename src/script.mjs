@@ -1,4 +1,4 @@
-import { Blocks, Events, Opcodes } from './schema.mjs';
+import { readings, Blocks, Events, Opcodes } from './schema.mjs';
 
 export const scopes = ['local','global','flag'];
 export const operations = ['add','subtract','multiply','divide','remainder','equal','less','less_equal','and','or','not'];
@@ -85,6 +85,10 @@ function compileEvents(script, modules) {
         emit(commands.load,target,scope(value.scope),...word(named(value.get)));
        } else if (value?.item != null) {
         emit(commands.load,target,4,...word(named(value.item)));
+      } else if(value?.actor){
+        const index=readings.indexOf(value.actor);
+        if(index<0)throw Error('Unknown actor property '+value.actor);
+        emit(commands.load,target,5,...word(index));
       } else if (value?.button != null) {
         const index = buttons.indexOf(value.button);
         if (index < 0) throw Error(`Unknown button: ${value.button}`);

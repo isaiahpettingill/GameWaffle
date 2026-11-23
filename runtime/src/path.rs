@@ -58,3 +58,89 @@ pub fn waypoint(room: &Room, from: B2vec2, to: B2vec2, blocked: &HashSet<usize>)
     }
     None
 }
+
+/// Search from one supported tile to another. Sample each ballistic arc for clearance.
+pub fn platform_move(
+    room: &Room,
+    from: B2vec2,
+    to: B2vec2,
+    blocked: &HashSet<usize>,
+    speed: f32,
+    gravity: f32,
+) -> B2vec2 {
+    use std::collections::VecDeque;
+    let cell = |p: B2vec2| {
+        (
+            (p.x / room.size).floor() as i32,
+            (p.y / room.size).floor() as i32,
+        )
+    };
+    let open = |x: i32, y: i32| {
+        x >= 0
+            && y >= 0
+            && x < room.cols as i32
+            && y < room.rows as i32
+            && !blocked.contains(&(y as usize * room.cols + x as usize))
+    };
+    let stand = |x: i32, y: i32| open(x, y) && !open(x, y + 1);
+    let origin = cell(from);
+    let target = cell(to);
+    let mut queue = VecDeque::from([(origin, B2vec2::zero())]);
+    let mut seen = HashSet::from([origin]);
+    let mut best = (
+        origin.0.abs_diff(target.0) + origin.1.abs_diff(target.1),
+        B2vec2::zero(),
+    );
+    while let Some(((x, y), first)) = queue.pop_front() {
+        if seen.len() > 512 {
+            break;
+        }
+        for sign in [-1, 1] {
+            for jump in [false, true] {
+                let vx = speed * sign as f32;
+                let vy = if jump { -8. } else { 0. };
+                let velocity = B2vec2::new(vx, vy);
+                let initial = if (x, y) == origin { velocity } else { first };
+                let mut last = (x, y);
+                for tick in 1..=90 {
+                    let t = tick as f32 / 60.;
+                    let px = x as f32 + 0.5 + vx * t * super::PPM / room.size;
+                    let py =
+                        y as f32 + 0.99 + (vy * t + 0.5 * gravity * t * t) * super::PPM / room.size;
+                    let pos = (px.floor() as i32, py.floor() as i32);
+                    if !jump && last == (x, y) && pos.0 == x {
+                        continue;
+                    }
+                    let landing = if !jump && stand(pos.0, y) && pos.0 != x {
+                        Some((pos.0, y))
+                    } else if vy + gravity * t >= 0.
+                        && !open(pos.0, pos.1)
+                        && stand(pos.0, pos.1 - 1)
+                    {
+                        Some((pos.0, pos.1 - 1))
+                    } else {
+                        None
+                    };
+                    if let Some(p) = landing {
+                        if seen.insert(p) {
+                            let dist = p.0.abs_diff(target.0) + p.1.abs_diff(target.1);
+                            if dist == 0 {
+                                return initial;
+                            }
+                            if dist < best.0 {
+                                best = (dist, initial);
+                            }
+                            queue.push_back((p, initial));
+                        }
+                        break;
+                    }
+                    if !open(pos.0, pos.1) {
+                        break;
+                    }
+                    last = pos;
+                }
+            }
+        }
+    }
+    best.1
+}

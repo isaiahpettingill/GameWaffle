@@ -100,6 +100,22 @@
       "physics": {
         "mode": "sensor"
       }
+    },
+    "guardian": {
+      "source": "assets/sprites/drone.aseprite",
+      "script": "scripts/sprites/guardian.ws",
+      "animation": "idle",
+      "team": 2,
+      "layer": 4,
+      "width": 36,
+      "height": 36,
+      "physics": {
+        "mode": "dynamic",
+        "gravity": 0,
+        "health": 12,
+        "elasticity": 0.4
+      },
+      "alwaysActive": true
     }
   },
   "tiles": {
@@ -575,6 +591,12 @@
             "yard",
             "vault"
           ]
+        },
+        "left": {
+          "mode": "fixed",
+          "targets": [
+            "arena"
+          ]
         }
       }
     },
@@ -850,6 +872,214 @@
           "adjacent": true
         },
         "right": {
+          "mode": "fixed",
+          "targets": [
+            "courtyard"
+          ]
+        }
+      }
+    },
+    "arena": {
+      "title": "Pump Hall",
+      "background": "#182b31",
+      "cols": 28,
+      "rows": 15,
+      "music": "music",
+      "entities": [
+        {
+          "sprite": "maker",
+          "player": 0,
+          "x": 62,
+          "y": 311
+        },
+        {
+          "sprite": "runner",
+          "player": 1,
+          "x": 92,
+          "y": 311
+        },
+        {
+          "name": "Pump guardian",
+          "sprite": "guardian",
+          "persistRemoval": true,
+          "x": 330,
+          "y": 288
+        }
+      ],
+      "layers": [
+        {
+          "name": "Scenery",
+          "order": 0,
+          "collidable": false,
+          "cells": [
+            [
+              9,
+              13,
+              "water"
+            ],
+            [
+              10,
+              13,
+              "water"
+            ],
+            [
+              11,
+              13,
+              "water"
+            ]
+          ]
+        },
+        {
+          "name": "Terrain",
+          "order": 2,
+          "collidable": true,
+          "cells": [
+            [
+              0,
+              14,
+              "stone"
+            ],
+            [
+              1,
+              14,
+              "stone"
+            ],
+            [
+              2,
+              14,
+              "stone"
+            ],
+            [
+              3,
+              14,
+              "stone"
+            ],
+            [
+              4,
+              14,
+              "stone"
+            ],
+            [
+              5,
+              14,
+              "stone"
+            ],
+            [
+              6,
+              14,
+              "stone"
+            ],
+            [
+              7,
+              14,
+              "stone"
+            ],
+            [
+              8,
+              14,
+              "stone"
+            ],
+            [
+              9,
+              14,
+              "stone"
+            ],
+            [
+              10,
+              14,
+              "stone"
+            ],
+            [
+              11,
+              14,
+              "stone"
+            ],
+            [
+              12,
+              14,
+              "stone"
+            ],
+            [
+              13,
+              14,
+              "stone"
+            ],
+            [
+              14,
+              14,
+              "stone"
+            ],
+            [
+              15,
+              14,
+              "stone"
+            ],
+            [
+              16,
+              14,
+              "stone"
+            ],
+            [
+              17,
+              14,
+              "stone"
+            ],
+            [
+              18,
+              14,
+              "stone"
+            ],
+            [
+              19,
+              14,
+              "stone"
+            ],
+            [
+              20,
+              14,
+              "stone"
+            ],
+            [
+              21,
+              14,
+              "stone"
+            ],
+            [
+              22,
+              14,
+              "stone"
+            ],
+            [
+              23,
+              14,
+              "stone"
+            ],
+            [
+              24,
+              14,
+              "stone"
+            ],
+            [
+              25,
+              14,
+              "stone"
+            ],
+            [
+              26,
+              14,
+              "stone"
+            ],
+            [
+              27,
+              14,
+              "stone"
+            ]
+          ]
+        }
+      ],
+      "groupCamera": true,
+      "exits": {
+        "left": {
           "mode": "fixed",
           "targets": [
             "courtyard"

@@ -11,12 +11,13 @@ Section
   SetOutPath "$INSTDIR"
   File /r "..\stage\*"
   CreateDirectory "$SMPROGRAMS\GameWaffle"
-  CreateShortcut "$SMPROGRAMS\GameWaffle\Studio.lnk" "$INSTDIR\node.exe" '"$INSTDIR\packaging\studio.mjs"'
+  CreateShortcut "$SMPROGRAMS\GameWaffle\Studio.lnk" "$INSTDIR\gamewaffle-studio.exe"
   CreateShortcut "$SMPROGRAMS\GameWaffle\Player.lnk" "$INSTDIR\gamewaffle-player.exe"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 SectionEnd
 Section "Uninstall"
   RMDir /r "$SMPROGRAMS\GameWaffle"
+  Delete "$INSTDIR\gamewaffle-studio.exe"
   Delete "$INSTDIR\node.exe"
   Delete "$INSTDIR\gamewaffle-player.exe"
   Delete "$INSTDIR\package.json"

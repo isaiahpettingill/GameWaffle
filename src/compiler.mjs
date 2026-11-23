@@ -257,6 +257,13 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       ? { format: 'qoa', data: wavToQoa(data) } : { format: extension, data };
   }
 
+  const items={},itemIcons=new Map();
+  for(const [id,item] of Object.entries(project.items??{})){
+    if(!variableName(id))throw Error('Invalid item ID '+id);
+    if(item.flag && !variableName(item.flag))throw Error('Invalid item flag '+item.flag);
+    items[id]={consumable:item.consumable===true,flag:item.flag||null};
+    if(item.icon){const art=await source(item.icon);itemIcons.set('ui/item/'+id,{width:art.width,height:art.height,rgba:art.frames[0].rgba});}
+  }
   let font=defaultFont();
   if(project.font){
     const image=await source(project.font);
@@ -307,7 +314,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         players.add(entry.player);
       }
       const physics = entry.physics ? props({ ...definition.physics, ...entry.physics }, definition.physics.mode) : undefined;
-      entities.push({ ...entry, conditions:conditions(project.sprites[entry.sprite],entry), name, animation, physics });
+      entities.push({ ...entry,persistence:entry.persistRemoval?'sprite/'+name:null, conditions:conditions(project.sprites[entry.sprite],entry), name, animation, physics });
     }
     for (const sound of [room.music, room.ambience].filter(Boolean)) {
       if (!Object.hasOwn(audio, sound)) throw Error(`Unknown room audio: ${sound}`);
@@ -341,7 +348,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
           blit(frames.get(clip[0].image),chunk,x*size-chunk.x,y*size-chunk.y);
         } else {
           for (const frame of clip) images.set(frame.image, frames.get(frame.image));
-          entities.push({ x: (x+.5)*size, y:(y+.5)*size, tile: tileId, clip,
+          entities.push({ x: (x+.5)*size, y:(y+.5)*size, tile: tileId, clip,persistence:project.tiles[tileId].persistRemoval?`tile/${index}/${x}/${y}`:null,
             conditions:gates, blocker:gates.length && physics.mode==='static'?y*cols+x:null,
             physics: !gates.length && physics.mode === 'static' ? { ...physics, mode: 'none' } : physics, layer: order });
         }
@@ -380,7 +387,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         solids.push({...walls[edge],physics});
       }
     }
-    images.set('ui/font',font);
+    images.set('ui/font',font);for(const [id,image] of itemIcons)images.set(id,image);
     const exits={};
     for(const [edge,exit] of Object.entries(room.exits??{})){
       if(!['left','right','up','down'].includes(edge)||!['fixed','save','crossing'].includes(exit.mode)
@@ -391,7 +398,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     atlases[id] = atlas(images);
     rooms[id] = { title: room.title ?? id, exits, cols, rows, width, height, size, baked, solids, entities,
       blockers: [...blockers], background: room.background ?? '#101a23', music: room.music,
-      ambience: room.ambience, gravity, view, ySort };
+      ambience: room.ambience, group_camera:room.groupCamera===true, gravity, view, ySort };
   }
   addSeams(rooms,atlases,sprites,atlas);
   const start = project.start ?? Object.keys(rooms)[0];
@@ -404,7 +411,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     [id, { mode: tile.physics.mode, variants: tile.variants.map(clip => thumbnail(clip[0])) }]));
   const spritePreviews = Object.fromEntries(Object.entries(sprites).map(([id, sprite]) =>
     [id, thumbnail((sprite.clips[sprite.animation] ?? sprite.clips.default).frames[0])]));
-  return { saveId:project.saveId??project.name, name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
+  return { items,saveId:project.saveId??project.name, name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
     tilePreviews, spritePreviews };
 }
 

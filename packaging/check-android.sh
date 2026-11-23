@@ -26,7 +26,6 @@ sleep 1
 adb shell input keyevent KEYCODE_F2
 adb shell input keyevent KEYCODE_F9
 adb shell input keyevent KEYCODE_F4
-adb shell input keyevent KEYCODE_ESCAPE
 sleep 1
 adb shell pidof "$app" >/dev/null
 adb logcat -b crash -d > android-crashes.txt

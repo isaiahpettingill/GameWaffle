@@ -32,6 +32,10 @@ struct Bullet {
 }
 
 struct Actor {
+    persistence: Option<String>,
+    last_spawn: u32,
+    answer: i64,
+    item_count: u32,
     dormant: bool,
     emitter: Option<particles::Emitter>,
     id: u32,
@@ -99,8 +103,9 @@ enum Action {
         amount: f32,
     },
     Remove(u32),
+    Used(u32),
     Fire(u32, String, f32, f32),
-    Instance(Spawn),
+    Instance(u32, Spawn),
 }
 
 #[wasm_bindgen]
@@ -123,17 +128,25 @@ pub struct Runtime {
     transition: Option<String>,
     pending_start: Vec<u32>,
     restored: bool,
-    pending_instances: Vec<Spawn>,
+    pending_instances: Vec<(u32, Spawn)>,
     programs: BTreeMap<String, vm::Programs>,
     globals: vm::Variables,
     flags: vm::Variables,
     seed: u32,
     rng: u32,
     camera_actor: Option<u32>,
+    group_camera: bool,
+    memory: progress::WorldMemory,
+    removed: BTreeMap<String, std::collections::BTreeSet<String>>,
     camera_point: Option<[f32; 2]>,
     view_size: [u32; 2],
+    personal: [BTreeMap<String, u32>; 4],
+    checkpoint: Option<String>,
+    retry: bool,
     inventory: BTreeMap<String, u32>,
-    dialog: std::collections::VecDeque<String>,
+    dialog: std::collections::VecDeque<(String, Option<u32>)>,
+    icons: BTreeMap<String, [i32; 2]>,
+    bars: BTreeMap<String, [i32; 2]>,
     counters: BTreeMap<String, i32>,
     script_fuel: usize,
 }
@@ -208,7 +221,13 @@ impl Runtime {
         self.inputs = [Input::default(); 4];
         self.tick = 0;
         self.transition = None;
+        self.personal = Default::default();
+        self.checkpoint = None;
+        self.retry = false;
         self.inventory.clear();
+        self.removed.clear();
+        self.memory.clear();
+        self.actors.clear();
         self.set_seed(self.seed.wrapping_mul(1664525).wrapping_add(1013904223));
         self.reset_variables();
         self.load(&self.game.start.clone())
@@ -217,6 +236,20 @@ impl Runtime {
 
 impl Runtime {
     fn focus(&self) -> Option<[f32; 2]> {
+        if self.group_camera {
+            let mut players = self.actors.values().filter(|a| a.player.is_some());
+            if let Some(first) = players.next() {
+                let (mut left, mut right, mut top, mut bottom) =
+                    (first.p.x, first.p.x, first.p.y, first.p.y);
+                for a in players {
+                    left = left.min(a.p.x);
+                    right = right.max(a.p.x);
+                    top = top.min(a.p.y);
+                    bottom = bottom.max(a.p.y);
+                }
+                return Some([(left + right) * 0.5, (top + bottom) * 0.5]);
+            }
+        }
         self.camera_point.or_else(|| {
             self.camera_actor
                 .and_then(|id| self.actors.get(&id))
@@ -267,7 +300,9 @@ impl Runtime {
             tick: self.tick,
             actors,
             focus: self.focus(),
-            dialog: self.dialog.front().map(String::as_str),
+            dialog: self.dialog.front().map(|d| d.0.as_str()),
+            icons: &self.icons,
+            bars: &self.bars,
             counters: &self.counters,
             sounds: &self.sounds,
             events: &self.events,
@@ -379,10 +414,18 @@ impl Runtime {
             seed: 1,
             rng: 1,
             camera_actor: None,
+            group_camera: false,
+            memory: Default::default(),
+            removed: Default::default(),
             camera_point: None,
             view_size: [512, 512],
+            personal: Default::default(),
+            checkpoint: None,
+            retry: false,
             inventory: Default::default(),
             dialog: Default::default(),
+            icons: Default::default(),
+            bars: Default::default(),
             counters: Default::default(),
             script_fuel: 0,
         };
@@ -393,16 +436,23 @@ impl Runtime {
 
     fn load(&mut self, id: &str) -> Result<(), String> {
         let room = self.game.rooms.get(id).ok_or("Unknown room")?.clone();
+        if !self.actors.is_empty() {
+            let state = self.room_memory();
+            self.memory.insert(self.room.clone(), state);
+        }
         self.actors.clear();
         self.particles.clear();
         (self.world, self.contacts) = physics::world(room.gravity);
         self.room = id.into();
         self.camera_actor = None;
+        self.group_camera = room.group_camera;
         self.camera_point = None;
         self.blocked = room.blockers.iter().copied().collect();
         self.static_ids.clear();
         self.dialog.clear();
         self.counters.clear();
+        self.icons.clear();
+        self.bars.clear();
         self.restored = false;
         self.pending_start.clear();
         self.pending_instances.clear();
@@ -422,6 +472,9 @@ impl Runtime {
         }
         self.gates.clear();
         for spawn in room.entities {
+            if self.was_removed(&spawn) {
+                continue;
+            }
             if spawn.conditions.is_empty() {
                 self.add_scene_actor(spawn, room.size)?;
             } else {
@@ -430,6 +483,14 @@ impl Runtime {
         }
         self.gates_dirty = true;
         self.sync_gates()
+    }
+
+    fn was_removed(&self, spawn: &Spawn) -> bool {
+        spawn.persistence.as_ref().is_some_and(|key| {
+            self.removed
+                .get(&self.room)
+                .is_some_and(|set| set.contains(key))
+        })
     }
 
     fn sync_gates(&mut self) -> Result<(), String> {
@@ -441,10 +502,11 @@ impl Runtime {
         let size = room.size;
         self.blocked = room.blockers.iter().copied().collect();
         for (spawn, id) in &mut gates {
-            if spawn
-                .conditions
-                .iter()
-                .all(|(flag, on)| self.flag(flag) == *on)
+            if !self.was_removed(spawn)
+                && spawn
+                    .conditions
+                    .iter()
+                    .all(|(flag, on)| self.flag(flag) == *on)
             {
                 if let Some(cell) = spawn.blocker {
                     self.blocked.insert(cell);
@@ -486,10 +548,22 @@ impl Runtime {
         );
         let actor = self.actors.get_mut(&id).unwrap();
         actor.name = spawn.name;
+        actor.persistence = spawn.persistence;
         if let Some(animation) = spawn.animation {
             actor.animation = animation;
         }
-        if spawn.flip_x == Some(true) {
+        if let Some(state) = actor
+            .persistence
+            .as_ref()
+            .and_then(|key| self.memory.get(&self.room)?.get(key))
+        {
+            actor.teleport(Vec2::new(state.xy[0], state.xy[1]));
+            actor.velocity(Vec2::new(state.motion[0], state.motion[1]));
+            actor.health = state.health;
+            actor.variables = progress::variables(&state.locals)?;
+            actor.animation = state.animation.clone();
+            actor.facing = state.facing;
+        } else if spawn.flip_x == Some(true) {
             actor.face(Vec2::new(-1.0, 0.0), false);
         }
         Ok(())
@@ -518,6 +592,10 @@ impl Runtime {
             id,
             Actor {
                 dormant: false,
+                persistence: None,
+                last_spawn: 0,
+                answer: 0,
+                item_count: 0,
                 emitter: definition.and_then(|s| s.emitter),
                 id,
                 name: None,
@@ -593,11 +671,20 @@ impl Runtime {
         self.sounds.clear();
         self.events.clear();
         if !self.dialog.is_empty() {
-            if inputs
-                .iter()
-                .zip(self.inputs)
-                .any(|(now, old)| now.a && !old.a)
-            {
+            let target = self.dialog.front().and_then(|d| d.1);
+            let answer = inputs.iter().zip(self.inputs).find_map(|(n, o)| {
+                if n.a && !o.a {
+                    Some(1)
+                } else if target.is_some() && n.b && !o.b {
+                    Some(0)
+                } else {
+                    None
+                }
+            });
+            if let Some(answer) = answer {
+                if let Some(actor) = target.and_then(|id| self.actors.get_mut(&id)) {
+                    actor.answer = answer;
+                }
                 self.dialog.pop_front();
             }
             self.inputs = inputs;
@@ -620,7 +707,7 @@ impl Runtime {
             .collect();
         for (id, event) in suspended {
             if event != "tick" {
-                self.run_script(id, &event, &inputs, &mut actions, false);
+                self.run_script(id, &event, &inputs, &mut actions, false, [0; 2]);
             }
         }
         let event = if std::mem::take(&mut self.restored) {
@@ -711,24 +798,33 @@ impl Runtime {
             } else {
                 "end_contact"
             };
-            self.run(a, event, &inputs, &mut actions);
-            self.run(b, event, &inputs, &mut actions);
+            self.run_script(a, event, &inputs, &mut actions, true, [i64::from(b), 0]);
+            self.run_script(b, event, &inputs, &mut actions, true, [i64::from(a), 0]);
         }
         self.apply(&mut actions, &inputs);
         let size = self.game.rooms[&self.room].size;
-        for spawn in std::mem::take(&mut self.pending_instances) {
+        for (owner, spawn) in std::mem::take(&mut self.pending_instances) {
             if self.actors.len() >= MAX_ACTORS + self.static_ids.len() {
                 break;
             }
+            let spawned = self.next;
             self.add_scene_actor(spawn, size)?;
+            if let Some(a) = self.actors.get_mut(&owner) {
+                a.last_spawn = spawned;
+            }
         }
         self.sync_gates()?;
         self.particles.update(self.focus(), self.view_size);
+        if std::mem::take(&mut self.retry) {
+            if let Some(saved) = self.checkpoint.clone() {
+                return self.load_game(&saved);
+            }
+        }
         self.cross_exit(&inputs)
     }
 
     fn run(&mut self, id: u32, event: &str, inputs: &[Input; 4], actions: &mut Vec<Action>) {
-        self.run_script(id, event, inputs, actions, true);
+        self.run_script(id, event, inputs, actions, true, [0; 2]);
     }
 
     fn run_script(
@@ -738,6 +834,7 @@ impl Runtime {
         inputs: &[Input; 4],
         actions: &mut Vec<Action>,
         start: bool,
+        payload: [i64; 2],
     ) -> bool {
         let Some(actor) = self.actors.get_mut(&id) else {
             return false;
@@ -761,7 +858,7 @@ impl Runtime {
                 return true;
             }
             Some(machine) => machine,
-            None if start => vm::Machine::new(program.clone()),
+            None if start => vm::Machine::new(program.clone(), payload),
             None => return true,
         };
         let input = actor.player.map_or(Input::default(), |slot| inputs[slot]);
@@ -828,15 +925,53 @@ impl Runtime {
             29 => self.actors.get_mut(&id).unwrap().emitter = None,
 
             26 => actions.push(Action::Remove(id)),
+            31 => {
+                self.checkpoint = self.save_game().ok();
+            }
+            32 => self.retry = true,
+            33 if self.dialog.len() < 32 => self
+                .dialog
+                .push_back((format!("{name}  A: Yes  B: No"), Some(id))),
+            34..=36 => {
+                let slot = args[1] as i32;
+                if !(1..=4).contains(&slot) {
+                    self.actors.get_mut(&id).unwrap().item_count = 0;
+                    return;
+                }
+                let bag = &mut self.personal[(slot - 1) as usize];
+                let old = bag.get(name).copied().unwrap_or(0);
+                let n = args[2].max(0.) as u32;
+                let count = match opcode {
+                    34 if old > 0 || bag.len() < 1024 => old.saturating_add(n),
+                    35 => old.saturating_sub(n),
+                    _ => old,
+                };
+                if opcode != 36 {
+                    if count == 0 {
+                        bag.remove(name);
+                    } else {
+                        bag.insert(name.into(), count);
+                    }
+                }
+                self.actors.get_mut(&id).unwrap().item_count = count;
+            }
+            30 => {
+                self.group_camera = true;
+                self.camera_actor = None;
+                self.camera_point = None;
+            }
             23 => {
+                self.group_camera = false;
                 self.camera_actor = Some(id);
                 self.camera_point = None;
             }
             24 => {
+                self.group_camera = false;
                 self.camera_actor = None;
                 self.camera_point = Some([args[0], args[1]]);
             }
             25 => {
+                self.group_camera = false;
                 self.camera_actor = None;
                 self.camera_point = None;
             }
@@ -855,11 +990,46 @@ impl Runtime {
                     self.inventory.insert(name.into(), count);
                 }
             }
-            20 if self.dialog.len() < 32 && !name.is_empty() => self.dialog.push_back(name.into()),
+            20 if self.dialog.len() < 32 && !name.is_empty() => {
+                self.dialog.push_back((name.into(), None))
+            }
             21 if self.counters.contains_key(name) || self.counters.len() < 4 => {
                 self.counters.insert(name.into(), args[1] as i32);
             }
+            38 => {
+                let slot = args[1] as usize;
+                if let Some(item) = self.game.items.get(name)
+                    && (1..=4).contains(&slot)
+                    && let Some(count) = self.personal[slot - 1].get_mut(name)
+                    && *count > 0
+                {
+                    if item.consumable {
+                        *count -= 1;
+                    }
+                    if let Some(flag) = &item.flag {
+                        self.flags.insert(flag.as_str().into(), 1.into());
+                        self.gates_dirty = true;
+                    }
+                    if let Some(target) = self.actors.values().find(|a| a.player == Some(slot - 1))
+                    {
+                        actions.push(Action::Used(target.id));
+                    }
+                }
+            }
+            39 if self.game.items.contains_key(name)
+                && (self.icons.contains_key(name) || self.icons.len() < 32) =>
+            {
+                self.icons
+                    .insert(name.into(), [args[1] as i32, args[2] as i32]);
+            }
+            37 if self.bars.contains_key(name) || self.bars.len() < 4 => {
+                let max = (args[2] as i32).max(1);
+                self.bars
+                    .insert(name.into(), [(args[1] as i32).clamp(0, max), max]);
+            }
             22 => {
+                self.icons.remove(name);
+                self.bars.remove(name);
                 self.counters.remove(name);
             }
 
@@ -920,6 +1090,35 @@ impl Runtime {
                             .total_cmp(&(b.p - p).length_squared())
                     })
                     .map(|a| a.p);
+                if !top_down
+                    && self.actors[&id].physics.gravity > 0.
+                    && self.actors[&id].physics.mode == Mode::Dynamic
+                {
+                    let Some(to) = destination else { return };
+                    let a = &self.actors[&id];
+                    let ladder = self.actors.values().any(|r| {
+                        r.physics.mode == Mode::Ladder
+                            && overlap(a.p, a.width, a.height, r.p, r.width, r.height)
+                    });
+                    let velocity = if ladder && (to.y - p.y).abs() > 4. {
+                        Vec2::new(0., (to.y - p.y).signum() * arg(1))
+                    } else if self.grounded(id) {
+                        path::platform_move(
+                            &self.game.rooms[&self.room],
+                            Vec2::new(p.x, p.y + a.height / 2. - 1.),
+                            to,
+                            &self.blocked,
+                            arg(1),
+                            self.game.rooms[&self.room].gravity * a.physics.gravity,
+                        )
+                    } else {
+                        return;
+                    };
+                    let a = self.actors.get_mut(&id).unwrap();
+                    a.face(velocity, false);
+                    a.velocity(velocity);
+                    return;
+                }
                 let v = destination
                     .and_then(|to| {
                         path::waypoint(&self.game.rooms[&self.room], p, to, &self.blocked)
@@ -947,12 +1146,15 @@ impl Runtime {
             }
             9 if self.game.sprites.contains_key(name) => {
                 let p = self.actors[&id].p;
-                actions.push(Action::Instance(Spawn {
-                    sprite: Some(name.into()),
-                    x: p.x + arg(2),
-                    y: p.y + arg(3),
-                    ..Spawn::default()
-                }));
+                actions.push(Action::Instance(
+                    id,
+                    Spawn {
+                        sprite: Some(name.into()),
+                        x: p.x + arg(2),
+                        y: p.y + arg(3),
+                        ..Spawn::default()
+                    },
+                ));
             }
             _ => {}
         }
@@ -990,10 +1192,11 @@ impl Runtime {
             }
             budget -= 1;
             match action {
+                Action::Used(id) => self.run(id, "use_item", inputs, actions),
                 Action::Fire(id, aim, speed, damage) => self.fire(id, aim, speed, damage),
-                Action::Instance(spawn) => {
+                Action::Instance(owner, spawn) => {
                     if self.pending_instances.len() < MAX_ACTORS {
-                        self.pending_instances.push(spawn);
+                        self.pending_instances.push((owner, spawn));
                     }
                 }
                 Action::Damage {
@@ -1014,7 +1217,14 @@ impl Runtime {
                         amount,
                     });
                     let dead = actor.health <= 0.0;
-                    self.run(id, "damage", inputs, actions);
+                    self.run_script(
+                        id,
+                        "damage",
+                        inputs,
+                        actions,
+                        true,
+                        [i64::from(source), amount.round() as i64],
+                    );
                     if dead {
                         actions.push(Action::Remove(id));
                     }
@@ -1022,6 +1232,14 @@ impl Runtime {
                 Action::Remove(id) => {
                     self.run(id, "destroy", inputs, actions);
                     if let Some(mut actor) = self.actors.remove(&id) {
+                        if actor.player.is_none() {
+                            if let Some(key) = actor.persistence.take() {
+                                self.removed
+                                    .entry(self.room.clone())
+                                    .or_default()
+                                    .insert(key);
+                            }
+                        }
                         if actor.player.is_some() {
                             actor.health = actor.physics.health;
                             actor.teleport(actor.spawn);

@@ -17,9 +17,13 @@ import { buttons } from './schema.mjs';
 import { embedCartridge, playerTemplate } from './web-export.mjs';
 import { Runtime, initSync } from '../web-built/runtime/runtime.js';
 
+if(process.env.GW_PARENT_PIPE){process.stdin.resume();process.stdin.once("end",()=>process.exit(0));}
 const args = process.argv.slice(2);
 const option = (name, fallback) => args.includes(name) ? args[args.indexOf(name)+1] : fallback;
-const root = resolve(option('--project','demo'));
+if(!args.includes('--project') && !args.includes('--cart')){
+  await (await import('./launcher.mjs')).launch(Number(option('--port','4871')),args.includes('--open'));
+}else{
+const root = resolve(option('--project','.'));
 const cartFile = option('--cart');
 const lan = args.includes('--lan');
 const port = Number(option('--port','4871'));
@@ -88,6 +92,10 @@ const files = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; char
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   try {
+    if(url.pathname==='/projects' && local(req)){
+      if(process.env.GAMEWAFFLE_LAUNCHER){res.writeHead(302,{Location:process.env.GAMEWAFFLE_LAUNCHER});res.end();return;}
+      return send(res,200,'Start Studio without a project path to open the project chooser.','text/plain');
+    }
     if (url.pathname === '/export.html' && req.method === 'GET') {
       return send(res, 200, embedCartridge(await readFile(playerTemplate, 'utf8'), bytes), 'text/html; charset=utf-8');
     }
@@ -320,3 +328,5 @@ server.listen(port, lan ? '0.0.0.0' : '127.0.0.1', ()=>{
   }
   if (lan) console.log('Open /player.html at this computer’s LAN address on other devices and select Join LAN.');
 });
+
+}

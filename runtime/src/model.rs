@@ -149,6 +149,8 @@ pub struct Sprite {
 #[derive(Clone, Default, Deserialize)]
 pub struct Spawn {
     #[serde(default)]
+    pub persistence: Option<String>,
+    #[serde(default)]
     pub conditions: Vec<(String, bool)>,
     pub blocker: Option<usize>,
     #[serde(deserialize_with = "read_float")]
@@ -197,6 +199,8 @@ pub struct Exit {
 #[derive(Clone, Deserialize)]
 pub struct Room {
     #[serde(default)]
+    pub group_camera: bool,
+    #[serde(default)]
     pub seams: BTreeMap<String, bool>,
     #[serde(default)]
     pub exits: BTreeMap<String, Exit>,
@@ -222,7 +226,14 @@ impl Room {
 }
 
 #[derive(Deserialize)]
+pub struct Item {
+    pub consumable: bool,
+    pub flag: Option<String>,
+}
+#[derive(Deserialize)]
 pub struct Game {
+    #[serde(default)]
+    pub items: BTreeMap<String, Item>,
     #[serde(default)]
     pub id: String,
     #[serde(default)]
@@ -308,6 +319,8 @@ pub struct Snapshot<'a> {
     pub particles: &'a [crate::particles::Batch],
     pub focus: Option<[f32; 2]>,
     pub dialog: Option<&'a str>,
+    pub icons: &'a BTreeMap<String, [i32; 2]>,
+    pub bars: &'a BTreeMap<String, [i32; 2]>,
     pub counters: &'a BTreeMap<String, i32>,
     pub sounds: &'a [String],
     pub events: &'a [RuntimeEvent],

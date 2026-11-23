@@ -19,6 +19,7 @@ for(const name of packages)await dependency(name);
 if(process.argv.includes('--android-editor'))process.exit(0);
 if(/^v\d+\.\d+\.\d+$/.test(process.env.GITHUB_REF_NAME??''))await writeFile(join(target,'release-version'),process.env.GITHUB_REF_NAME);
 const ext=windows?'.exe':'';
+await copyFile('studio/target/release/gamewaffle-studio'+ext,join(target,'gamewaffle-studio'+ext));
 await copyFile(process.execPath,join(target,'node'+ext));
 await copyFile('player/target/release/gamewaffle-player'+ext,join(target,'gamewaffle-player'+ext));
 if(!windows)for(const f of ['node','gamewaffle-player'])await chmod(join(target,f),0o755);

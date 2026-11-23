@@ -40,7 +40,7 @@ export function parseScript(source){
       const name=qualified(),[scope,key]=name.split('.');
       if(peek()==='(')value={call:name,args:args()};
       else if(key && ['local','global','flag'].includes(scope))value={scope,get:key};
-      else if(key && ['item','button'].includes(scope))value={[scope]:key};
+      else if(key && ['item','button','actor'].includes(scope))value={[scope]:key};
       else if(!key)value={param:name};
       else fail('Unknown name '+name);
     }
@@ -107,6 +107,7 @@ function value(v){
   if(v.call)return v.call+'('+v.args.map(value).join(', ')+')';
   if(v.param)return v.param;
   if(v.get)return v.scope+'.'+v.get;
+  if(v.actor)return "actor."+v.actor;
   if(v.button || v.item)return v.button?'button.'+v.button:'item.'+v.item;
   if(v.calc==='not')return '(not '+value(v.left)+')';
   return '('+value(v.left)+' '+operators[v.calc]+' '+value(v.right)+')';

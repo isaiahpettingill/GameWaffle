@@ -1,6 +1,6 @@
 const {chromium}=require('playwright-core');
 (async()=>{
-const server=require('node:child_process').spawn(process.execPath,['src/server.mjs','--port','0'],{stdio:['ignore','pipe','inherit']});
+const server=require('node:child_process').spawn(process.execPath,['src/server.mjs','--project','demo','--port','0'],{stdio:['ignore','pipe','inherit']});
 process.on('exit',()=>server.kill());
 const url=await new Promise((resolve,reject)=>{
   server.stdout.on('data',chunk=>{const port=String(chunk).match(/localhost:(\d+)/);if(port)resolve('http://127.0.0.1:'+port[1]);});

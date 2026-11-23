@@ -86,3 +86,25 @@ for(const alwaysActive of [false,true]){
   assert.equal(drone(game.snapshot())>before,alwaysActive);
   game.free();
 }
+
+// Player two defeats a persistent boss and keeps the reward across a save.
+const arena=JSON.parse(await readFile('demo/project.json','utf8'));
+arena.rooms.yard.entities=[
+  {sprite:'maker',player:0,x:48,y:96},
+  {sprite:'runner',player:1,x:120,y:96},
+  {sprite:'drone',name:'guardian',persistRemoval:true,x:142,y:96,physics:{health:1}},
+];
+const scripts=new Map([
+  ['maker',{events:{start:[{op:'group_camera'}]}}],
+  ['runner',{events:{b:[{op:'damage',amount:100,range:80,height:80}]}}],
+  ['drone',{events:{damage:[{op:'give_player',item:'key',player:{actor:'other_player'},count:1}]}}],
+]);
+const battle=Runtime.from_cartridge(pack(await compileProject(resolve('demo'),{project:arena,scripts})));
+battle.step_buttons(0);
+battle.step_buttons(32<<8);
+const checkpoint=battle.save_game(),progress=JSON.parse(checkpoint);
+assert.equal(progress.personal[1].key,1);
+assert.deepEqual(progress.removed.yard,['sprite/guardian']);
+battle.reset();battle.load_game(checkpoint);
+assert.ok(!JSON.parse(battle.snapshot()).actors.some(a=>a.image.startsWith('sprite/drone/')));
+battle.free();

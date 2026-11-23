@@ -1,4 +1,6 @@
 <script>
+  import {Network,Grid2x2,Blocks,Images,Settings2,Play,Map as RoomIcon,SquareUserRound,Plus} from '@lucide/svelte';
+  const viewIcons={world:Network,room:Grid2x2,blocks:Blocks,assets:Images,game:Settings2};
   import { effects, platformGravity, roomBorder } from '../src/schema.mjs';
   import Sections from './Sections.svelte';
   import World from './World.svelte';
@@ -26,6 +28,7 @@
   let inspector=$derived(assetKind==='tile' ? tile : sprite);
   let artFiles=$derived(assets.filter(file=>/\.(ase|aseprite|png)$/i.test(file)));
   let audioFiles=$derived(assets.filter(file=>/\.(wav|ogg|oga|opus|qoa)$/i.test(file)));
+  let newItem=$state('');
   let gameSection=$state('Variables'),spriteSection=$state('Appearance'),roomSection=$state('Size'),instanceSection=$state('Placement'),mobilePane=$state('Editor');
   const tabs=[['world','World'],['room','Room'],['blocks','Blocks'],['assets','Assets'],['game','Game']];
   let variableId=$state(''), variableKind=$state('variables');
@@ -346,7 +349,15 @@
       status=dirty ? 'Unsaved project' : 'Assets rebuilt';
     }catch(err){error=err.message;}finally{busy=false;}
   }
+  function dismissMenu(event){
+    const menu=document.querySelector('details.export-menu[open]');
+    if(menu && (!menu.contains(event.target) || event.target.closest('button,a')))menu.open=false;
+  }
   function saveShortcut(event){
+    if(event.key==='Escape'){
+      const menu=document.querySelector('details.export-menu[open]');
+      if(menu){menu.open=false;menu.querySelector('summary').focus();event.preventDefault();return;}
+    }
     if((event.ctrlKey || event.metaKey) && event.key.toLowerCase()==='s' && project && tab==='room'){
       event.preventDefault();
       if(dirty)saveProject();
@@ -434,7 +445,7 @@
   }
 </script>
 
-<svelte:window onkeydown={saveShortcut} />
+<svelte:window onkeydown={saveShortcut} onclick={dismissMenu} />
 
 <header class="appbar">
   <div class="brand">
@@ -442,22 +453,29 @@
     <div><h1>GameWaffle Studio</h1><small>{project?.name ?? 'Sprite game editor'}</small></div>
   </div>
   <div class="row actions">
-    <span class="status" role="status">{status}</span>
-    <button onclick={rebuild} disabled={busy||!project}>Rebuild assets</button>
-    <button onclick={saveProject} disabled={!dirty||busy}>Save project</button>
-    <details class="export-menu">
-      <summary>Export</summary>
-      <div class="card">
+
+    <details name="studio-menu" class="export-menu"><summary>File</summary><div class="card">
+        <a href="./projects" onclick={e=>{if((dirty||scriptDirty)&&!confirm('Leave with unsaved changes?'))e.preventDefault();}}>New or open project</a>
+        <button onclick={saveProject} disabled={!dirty||busy}>Save project</button>
         <a download={exportName+'.waffleproj'} href="./api/archive" onclick={saveThenOpen}>Editable project</a>
         <a download={exportName+'.html'} href="./export.html" onclick={saveThenOpen}>Standalone web game</a>
         <a href="./api/desktop?target=linux-x64" onclick={downloadDesktop}>Linux game</a>
         <a href="./api/desktop?target=windows-x64" onclick={downloadDesktop}>Windows game</a>
-        <button onclick={()=>{updatesOpen=!updatesOpen;release=null;}}>Updates</button>
+
         <a download="gamewaffle-player.html" href="./gamewaffle-player.html">Web player</a>
         <a download={exportName+'.waffle'} href="./demo.waffle" onclick={saveThenOpen}>Cartridge</a>
       </div>
     </details>
-    <a class="button primary" href="./player.html" onclick={saveThenOpen}>Play game ↗</a>
+    <details name="studio-menu" class="export-menu"><summary>Edit</summary><div class="card">
+      <button disabled={!historyStatus.canUndo} onclick={()=>restoreRoom(true)}>Undo room edit</button>
+      <button disabled={!historyStatus.canRedo} onclick={()=>restoreRoom(false)}>Redo room edit</button>
+    </div></details>
+    <details name="studio-menu" class="export-menu"><summary>Tools</summary><div class="card">
+      <button onclick={rebuild} disabled={busy||!project}>Rebuild assets</button>
+        <button onclick={()=>{updatesOpen=!updatesOpen;release=null;}}>Updates</button>
+    </div></details>
+    <span class="status" role="status">{status}</span>
+    <a class="button primary" href="./player.html" onclick={saveThenOpen}><Play size={14}/>Play game</a>
   </div>
 </header>
 {#if updatesOpen}
@@ -476,40 +494,40 @@
     <aside class="project card">
       <div class="heading row"><h2>Project</h2></div>
       <div class="category">
-        <div class="heading row"><h3>Rooms</h3><button class="small-button" title="New room" aria-label="New room" aria-expanded={addPreset} disabled={busy} onclick={()=>addPreset=!addPreset}>+</button></div>
+        <div class="heading row"><h3>Rooms</h3><button class="small-button" title="New room" aria-label="New room" aria-expanded={addPreset} disabled={busy} onclick={()=>addPreset=!addPreset}><Plus size={14}/></button></div>
         {#if addPreset}<div class="presets">
           <button onclick={()=>addRoom('platformer')}>New platformer room</button>
           <button onclick={()=>addRoom('top_down')}>New top-down room</button>
         </div>{/if}
         {#each Object.entries(project.rooms) as [id,item]}
           <button class="item" class:selected={roomId===id} onclick={()=>selectRoom(id)}>
-            <i class="room-icon"></i><span>{item.title??id}</span>
+            <RoomIcon size={14}/><span>{item.title??id}</span>
           </button>
         {/each}
       </div>
       <div class="category">
-        <div class="heading row"><h3>Sprite definitions</h3><button class="small-button" title="Add sprite definition" aria-label="Add sprite definition" onclick={()=>openAssets('sprite',true)}>+</button></div>
+        <div class="heading row"><h3>Sprite definitions</h3><button class="small-button" title="Add sprite definition" aria-label="Add sprite definition" onclick={()=>openAssets('sprite',true)}><Plus size={14}/></button></div>
         {#each Object.keys(project.sprites??{}) as id}
           <button class="item" class:selected={tab==='room' ? mapTool==='spawn' && placementSprite===id : spriteId===id && assetKind==='sprite'}
             draggable={tab==='room'} ondragstart={event=>dragDefinition(event,id)}
             title={tab==='room' ? 'Click to place or drag to the map' : 'Select sprite definition'}
             onclick={()=>chooseDefinition(id)}>
-            {#if spriteArt[id]}<img src={spriteArt[id]} alt="">{:else}<i class="sprite-icon"></i>{/if}<span>{id}</span>
+            {#if spriteArt[id]}<img src={spriteArt[id]} alt="">{:else}<SquareUserRound size={14}/>{/if}<span>{id}</span>
           </button>
         {/each}
       </div>
       {#if tab!=='room'}<div class="category compact">
-        <div class="heading row"><h3>Tiles</h3><button class="small-button" title="Add tile" aria-label="Add tile" onclick={()=>openAssets('tile',true)}>+</button></div>
+        <div class="heading row"><h3>Tiles</h3><button class="small-button" title="Add tile" aria-label="Add tile" onclick={()=>openAssets('tile',true)}><Plus size={14}/></button></div>
         {#each Object.keys(project.tiles??{}) as id}
           <button class="item" class:selected={tileId===id} onclick={()=>{tileId=id;assetKind='tile';if(tab!=='assets')openTab('room');}}>
-            {#if tileArt[id]?.[0]}<img src={tileArt[id][0]} alt="">{:else}<i class="room-icon"></i>{/if}<span>{id}</span>
+            {#if tileArt[id]?.[0]}<img src={tileArt[id][0]} alt="">{:else}<RoomIcon size={14}/>{/if}<span>{id}</span>
           </button>
         {/each}
       </div>
     {/if}</aside>
     <div class="work">
       <nav class="row" aria-label="Editor views">
-        {#each tabs as [id,title]}<button class:active={tab===id} onclick={()=>openTab(id)}>{title}</button>{/each}
+        {#each tabs as [id,title]}{@const Icon=viewIcons[id]}<button class:active={tab===id} onclick={()=>openTab(id)}><Icon size={15}/>{title}</button>{/each}
       </nav>
       {#if tab==='world' && room}
         <World rooms={project.rooms} flags={Object.keys(project.flags??{})} {roomId} onSelect={id=>{roomId=id;layerIndex=chooseInitialLayer(project.rooms[id]);selectedEntity=-1;}} onEdit={replaceRoom}/>
@@ -529,8 +547,17 @@
       {:else if tab==='game'}
         <section class="card asseteditor">
           <h2>Game settings</h2>
-          <Sections labels={['Variables','Display']} bind:value={gameSection}/>
-          {#if gameSection==='Variables'}
+          <Sections labels={['Variables','Items','Display']} bind:value={gameSection}/>
+          {#if gameSection==='Items'}
+            <form class="row" onsubmit={e=>{e.preventDefault();if(!/^[A-Za-z_]\w{0,63}$/.test(newItem)||Object.hasOwn(project.items??{},newItem)){error='Choose a unique item ID';return;}set(project.items??={},newItem,{consumable:false});newItem='';}}>
+              <input aria-label="Item ID" placeholder="Item ID" bind:value={newItem}><button>Add item</button>
+            </form>
+            {#each Object.entries(project.items??{}) as [id,item]}
+              <h3>{id}</h3><label class="stack">Icon<select value={item.icon??''} onchange={e=>set(item,'icon',e.currentTarget.value)}><option value="">None</option>{#each artFiles as file}<option>{file}</option>{/each}</select></label>
+              <label class="check"><input type="checkbox" checked={item.consumable} onchange={e=>set(item,'consumable',e.currentTarget.checked)}>Consume on use</label>
+              <label class="stack">Set flag on use<select value={item.flag??''} onchange={e=>set(item,'flag',e.currentTarget.value)}><option value="">None</option>{#each Object.keys(project.flags??{}) as f}<option>{f}</option>{/each}</select></label>
+            {/each}
+          {:else if gameSection==='Variables'}
             {#each Object.entries(project.variables??{}) as [id,value]}
               <label class="row variable">{id}<input type="number" step="1" {value} onchange={e=>{
                 const next=e.currentTarget.valueAsNumber;
@@ -633,6 +660,7 @@
                 {#each artFiles as file}<option value={file}>{file}</option>{/each}
               </select></label>
               {#if assetKind==='tile'}
+                <label class="check"><input type="checkbox" checked={tile.persistRemoval??false} onchange={e=>set(tile,'persistRemoval',e.currentTarget.checked)}> Remember destroyed tiles</label>
                 <label class="stack">Aseprite tag <select value={tile.tag??''} onchange={e=>set(tile,'tag',e.currentTarget.value)}>
                   <option value="">Use the first tag</option>
                   {#each art[tile.source]?.tags??[] as tag}<option value={tag}>{tag}</option>{/each}
@@ -685,6 +713,7 @@
             {#if (project.start??Object.keys(project.rooms)[0])===roomId}<small>Starting room</small>
             {:else}<button class="small-button" onclick={()=>set(project,'start',roomId)}>Set as starting room</button>{/if}
           </div>
+          <label class="check"><input type="checkbox" checked={room.groupCamera??false} onchange={e=>setRoom('groupCamera',e.currentTarget.checked)}> Follow all players</label>
           <label class="stack">Room name <input value={room.title??roomId} onchange={e=>setRoom('title',e.currentTarget.value)}></label>
           <label class="stack">Room view <select aria-label="Room view" value={roomView} onchange={e=>setView(e.currentTarget.value)}>
             <option value="platformer">Platformer</option><option value="top_down">Top-down</option>
@@ -779,6 +808,7 @@
                 <option value="">Definition default</option>
                 {#each new Set(['default',...(art[definition?.source]?.tags??[])]) as tag}<option value={tag}>{tag}</option>{/each}
               </select></label>
+              <label class="check"><input type="checkbox" checked={actor.persistRemoval??false} onchange={e=>changeActor('persistRemoval',e.currentTarget.checked)}> Save instance state</label>
               <label class="check"><input type="checkbox" checked={actor.flipX??false} onchange={e=>changeActor('flipX',e.currentTarget.checked || '')}> Face left at start</label>
               <label class="stack">Spawn flag<select value={actor.flag??''} onchange={e=>changeActor('flag',e.currentTarget.value)}>
                 <option value="">Always</option>{#each Object.keys(project.flags??{}) as flag}<option>{flag}</option>{/each}
@@ -803,12 +833,14 @@
   </main>
 {/if}
 <style>
-  .appbar{display:flex;justify-content:space-between;align-items:center;gap:1rem;border-bottom:1px solid var(--line);padding:.8rem 1.1rem;}
+  .actions{flex:1;}
+  .actions .status{margin-left:auto;}
+  .appbar{display:flex;justify-content:space-between;align-items:center;gap:1rem;border-bottom:1px solid var(--line);padding:.4rem .65rem;}
   .status{font-size:.76rem;color:var(--muted);margin-right:.35rem;}
   .banner{margin:.6rem 1.1rem 0;padding:.55rem .65rem;border:1px solid #79505d;border-radius:7px;background:#30242f;}
-  main{display:grid;grid-template-columns:minmax(155px,185px) minmax(300px,1fr) minmax(210px,255px);gap:.8rem;align-items:start;padding:.85rem 1.1rem;}
+  main{display:grid;grid-template-columns:minmax(155px,185px) minmax(300px,1fr) minmax(210px,255px);gap:1px;align-items:stretch;padding:0;background:var(--line);}
   .project,.inspector{padding:.65rem;}
-  .work{min-width:0;}
+  .work{min-width:0;background:var(--bg);padding:.45rem;}
   .heading{justify-content:space-between;margin-bottom:.55rem;}
   h2{font-size:.94rem;}
   h3{font-size:.72rem;font-weight:700;color:var(--muted);}
@@ -821,9 +853,9 @@
   .item i,.item img{width:12px;height:12px;object-fit:contain;image-rendering:pixelated;flex-shrink:0;}
   .room-icon{border:1px solid #9e9cb4;border-radius:2px;background:#514765;}
   .sprite-icon{border:1px solid #abd8bc;border-radius:50%;background:#4d6b69;}
-  nav{margin-bottom:.65rem;}
+  nav{margin-bottom:.4rem;border-bottom:1px solid var(--line);gap:1px;}
   nav button{background:none;border-color:transparent;font-size:.8rem;}
-  nav .active{color:var(--accent);border-color:#6b5769;background:#322b3c;}
+  nav .active{color:var(--accent);border-bottom:2px solid var(--accent);background:var(--panel);}
   .panel-tabs{border-bottom:1px solid var(--line);padding-bottom:.45rem;margin-bottom:.45rem;}
   .panel-tabs button,.layer-actions button{font-size:.73rem;padding:.3rem .35rem;}
   .layer-actions,.remove,.crop-note{margin-top:.55rem;}
@@ -832,7 +864,7 @@
   .presets button{font-size:.75rem;text-align:left;padding:.35rem;}
   .export-menu{position:relative;}
   .export-menu summary{padding:.42rem .62rem;border:1px solid var(--line);border-radius:7px;cursor:pointer;}
-  .export-menu>div{position:absolute;right:0;top:calc(100% + 6px);z-index:5;display:grid;min-width:11rem;padding:.3rem;}
+  .export-menu>div{position:absolute;left:0;top:calc(100% + 6px);z-index:5;display:grid;min-width:11rem;padding:.3rem;}
   .export-menu a{padding:.38rem .45rem;border-radius:5px;text-decoration:none;color:inherit;}
   .export-menu a:hover{background:#3b3248;color:var(--accent);}
   .inspector{max-height:calc(100dvh - 5.6rem);overflow:auto;}
@@ -858,13 +890,17 @@
   main.wide{grid-template-columns:minmax(155px,185px) minmax(0,1fr);}
   .pair{grid-template-columns:repeat(2,minmax(0,1fr));}
   .project,.inspector{min-width:0;}.item span{overflow-wrap:anywhere;}
-  @media(min-width:881px){.project,.inspector{position:sticky;top:.5rem;overflow:auto;max-height:calc(100dvh - 1rem);}}
+  @media(min-width:881px){
+    :global(.studio #app){height:100dvh;display:flex;flex-direction:column;}
+    main{min-height:0;flex:1;}
+    .work,.project,.inspector{overflow:auto;min-height:0;max-height:none;scrollbar-gutter:stable;}
+  }
   @media(max-width:880px){
     main,main.wide{display:block;padding:.5rem;}
     .mobile-tabs{display:block;margin:0 .5rem;}
     main[data-pane="Editor"]>aside,main[data-pane="Project"]>:not(.project),main[data-pane="Settings"]>:not(.inspector){display:none;}
     main.wide[data-pane="Settings"]>.work{display:block;}
-    .appbar{flex-wrap:wrap;padding:.6rem;gap:.4rem;}.actions{gap:.3rem;}
+    .appbar{flex-wrap:wrap;padding:.6rem;gap:.4rem;}.actions{flex-basis:100%;gap:.3rem;}.status{order:1;flex-basis:100%;}
     .inspector,.instance-list{max-height:none;overflow:visible;}
   }
 </style>
