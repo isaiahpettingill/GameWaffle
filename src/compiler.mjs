@@ -307,7 +307,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         players.add(entry.player);
       }
       const physics = entry.physics ? props({ ...definition.physics, ...entry.physics }, definition.physics.mode) : undefined;
-      entities.push({ ...entry, conditions:conditions(project.sprites[entry.sprite],entry), name, animation, physics });
+      entities.push({ ...entry,persistence:entry.persistRemoval?'sprite/'+name:null, conditions:conditions(project.sprites[entry.sprite],entry), name, animation, physics });
     }
     for (const sound of [room.music, room.ambience].filter(Boolean)) {
       if (!Object.hasOwn(audio, sound)) throw Error(`Unknown room audio: ${sound}`);
@@ -341,7 +341,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
           blit(frames.get(clip[0].image),chunk,x*size-chunk.x,y*size-chunk.y);
         } else {
           for (const frame of clip) images.set(frame.image, frames.get(frame.image));
-          entities.push({ x: (x+.5)*size, y:(y+.5)*size, tile: tileId, clip,
+          entities.push({ x: (x+.5)*size, y:(y+.5)*size, tile: tileId, clip,persistence:project.tiles[tileId].persistRemoval?`tile/${index}/${x}/${y}`:null,
             conditions:gates, blocker:gates.length && physics.mode==='static'?y*cols+x:null,
             physics: !gates.length && physics.mode === 'static' ? { ...physics, mode: 'none' } : physics, layer: order });
         }

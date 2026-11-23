@@ -13,7 +13,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut path = None;
     let mut verify = false;
-    for arg in std::env::args_os().skip(1) {
+    let mut network = None;
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--host" || arg == "--join" {
+            let address = args
+                .next()
+                .ok_or("Supply an IP address and port")?
+                .into_string()
+                .map_err(|_| "Invalid address")?;
+            let guests = if arg == "--host" {
+                Some(
+                    args.next()
+                        .ok_or("Supply the remote player count")?
+                        .to_string_lossy()
+                        .parse::<usize>()?,
+                )
+            } else {
+                None
+            };
+            network = Some((address, guests));
+            continue;
+        }
         if arg == "--verify" {
             verify = true;
         } else if path.is_none() {
@@ -30,5 +51,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    main::run(path, verify)
+    main::run_network(path, verify, network)
 }

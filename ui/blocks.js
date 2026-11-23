@@ -66,12 +66,12 @@ export function mountBlocks(node, onChange, sprites) {
       {kind:'category',name:'Events',colour:41,contents:[{kind:'block',type:eventBlock}]},
       {kind:'category',name:'Routines',colour:200,contents:blocks(['proc','fn','call','function_call','param','use'])},
       {kind:'category',name:'Logic',colour:276,contents:blocks(['set','if','while','wait','get','integer','bool','actor','button','calc','not'])},
-      {kind:'category',name:'Items',colour:45,contents:blocks(['give','take','item'])},
-      {kind:'category',name:'Dialogue & HUD',colour:286,contents:blocks(['say','counter','hide'])},
+      {kind:'category',name:'Items',colour:45,contents:blocks(['give','take','item','give_player','take_player','count_player'])},
+      {kind:'category',name:'Dialogue & HUD',colour:286,contents:blocks(['say','ask','counter','bar','hide'])},
       {kind:'category',name:'Particles',colour:24,contents:blocks(['burst','emit','stop_fx'])},
       {kind:'category',name:'Motion',colour:218,contents:blocks(['walk','jump','velocity','chase'])},
       {kind:'category',name:'Combat',colour:354,contents:blocks(['damage','fire'])},
-      {kind:'category',name:'Room & media',colour:159,contents:blocks(['spawn','remove_self','animate','sound','room','camera','follow','release_camera'])},
+      {kind:'category',name:'Room & media',colour:159,contents:blocks(['spawn','remove_self','animate','sound','room','camera','follow','group_camera','release_camera','checkpoint','retry_checkpoint'])},
     ]},
   });
   spriteOptions.set(workspace,sprites.map(id=>[id,id]));

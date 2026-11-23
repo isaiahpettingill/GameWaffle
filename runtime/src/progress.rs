@@ -11,7 +11,11 @@ struct Save {
     players: BTreeMap<usize, [f32; 2]>,
     globals: BTreeMap<String, String>,
     flags: Vec<String>,
+    #[serde(default)]
+    personal: [BTreeMap<String, u32>; 4],
     inventory: BTreeMap<String, u32>,
+    #[serde(default)]
+    removed: BTreeMap<String, std::collections::BTreeSet<String>>,
     #[serde(default)]
     counters: BTreeMap<String, i32>,
 }
@@ -40,7 +44,9 @@ impl Runtime {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             flags: self.flags.keys().map(ToString::to_string).collect(),
+            personal: self.personal.clone(),
             inventory: self.inventory.clone(),
+            removed: self.removed.clone(),
             counters: self.counters.clone(),
         };
         serde_json::to_string(&state).map_err(|e| e.to_string())
@@ -87,7 +93,9 @@ impl Runtime {
             .into_iter()
             .map(|n| (n.into(), 1.into()))
             .collect();
+        self.personal = state.personal;
         self.inventory = state.inventory;
+        self.removed = state.removed;
         self.seed = state.seed.max(1);
         self.rng = state.rng.max(1);
         self.inputs = Default::default();

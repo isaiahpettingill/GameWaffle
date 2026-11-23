@@ -98,6 +98,11 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
       const line=label+' '+value;
       ctx.fillRect(2,y,line.length*6+4,9);text(line,4,y);y+=10;
     }
+    for(const [label,[value,max]] of Object.entries(snapshot.bars??{})){
+      text(label,4,y);y+=8;ctx.fillStyle='#262334';ctx.fillRect(2,y,64,5);
+      ctx.fillStyle='#92dac4';ctx.fillRect(3,y+1,62*value/max,3);y+=7;
+    }
+    ctx.fillStyle='#262334';
     if(snapshot.dialog){
       const lines=dialogue_lines(snapshot.dialog,Math.floor((width-8)/6)).split('\n');
       y=height-(lines.length+1)*8-4;

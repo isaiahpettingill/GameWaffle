@@ -86,3 +86,29 @@ Compiled instructions use 8-bit opcodes, 8-bit registers where applicable, and l
 Media remains compressed in its source format. The player loads the active room atlas when necessary. The compiler puts occupied static tile chunks into the room atlas. A playable cartridge contains no editor thumbnail data.
 
 The final 96 bytes contain a 32-byte Ed25519 public key and a 64-byte signature. The signature covers the header, simulation, and media. Set `GAMEWAFFLE_SIGNING_KEY` to the path of an Ed25519 private PEM key to sign repeat builds with the same key. By default, the compiler makes a key for the current process.
+
+See the [engine command reference](blocks.md) for commands, events, and actor readings.
+Run `node packaging/sdk-reference.mjs` after you change the schema.
+
+Set **Remember removal** on a named instance to keep it removed after a room
+change or a save. Keep the instance name stable across game updates. Set
+**Remember destroyed tiles** to keep a removed tile absent at its layer and cell.
+
+Use **Follow all players** to center the view between the outermost players.
+Use **Set checkpoint** and **Return to checkpoint** to retry within the current
+session. Disk save slots have a separate lifetime.
+
+In a damage event, read `actor.other_player` to award an item to the player
+who dealt damage. Player numbers range from 1 through 4. Read `actor.item_count`
+after a player inventory command. Read `actor.last_spawn` after the spawn
+tick completes. To get a yes or no answer, ask a question, wait one tick, and
+read `actor.answer`. A selects yes. B selects no.
+
+## Native LAN games
+
+Use the same cartridge file on each computer. To host for one remote player,
+run `gamewaffle-player --host 0.0.0.0:4872 1 game.waffle`. Replace 1 with 2
+or 3 for more guests. Each guest runs
+`gamewaffle-player --join HOST_IP:4872 game.waffle`. Each computer supplies
+one controller. The host assigns slots in connection order. The players exchange
+button states before each simulation tick. A dropped connection ends the session.

@@ -130,7 +130,10 @@ impl Program {
                 17 => "rf",
                 18 | 19 | 21 | 27 | 28 => "NW",
                 20 | 22 => "N",
-                23 | 25 | 26 | 29 => "",
+                33 => "N",
+                34 | 35 | 37 => "NWW",
+                36 => "NW",
+                23 | 25 | 26 | 29 | 30 | 31 | 32 => "",
                 24 => "WW",
                 _ => return Err(format!("Invalid opcode {opcode}")),
             };
@@ -154,7 +157,7 @@ impl Program {
                     b'k' => index < raw.k.len(),
                     b'f' => index < raw.f.len(),
                     b'N' => index < raw.n.len(),
-                    b'n' if opcode == 11 && args[1] == 5 => index < 11,
+                    b'n' if opcode == 11 && args[1] == 5 => index < 14,
                     b'n' if opcode == 11 && args[1] == 3 => index < 8,
                     b'n' => index < raw.n.len(),
                     b's' => index < if opcode == 11 { 6 } else { 3 },
@@ -197,6 +200,14 @@ impl Program {
                 27 => engine::<27>,
                 28 => engine::<28>,
                 29 => engine::<29>,
+                30 => engine::<30>,
+                31 => engine::<31>,
+                32 => engine::<32>,
+                33 => engine::<33>,
+                34 => engine::<34>,
+                35 => engine::<35>,
+                36 => engine::<36>,
+                37 => engine::<37>,
 
                 _ => unreachable!(),
             };
@@ -327,6 +338,9 @@ fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'
             7 => a.player.map_or(0, |p| p as i64 + 1),
             8 => m.payload[0],
             9 => m.payload[1],
+            11 => i64::from(a.last_spawn),
+            12 => a.answer,
+            13 => i64::from(a.item_count),
             _ => cx
                 .runtime
                 .actors
@@ -460,7 +474,7 @@ fn engine<const OP: u8>(
     m: &mut Machine,
     cx: &mut Context<'_>,
 ) -> Result<(), &'static str> {
-    let named = matches!(OP, 3 | 5 | 7 | 8 | 9 | 18..=22 | 27 | 28);
+    let named = matches!(OP, 3 | 5 | 7 | 8 | 9 | 18..=22 | 27 | 28 | 33..=37);
     let arg = |index: usize| {
         if index == 0 && named {
             return 0.0;

@@ -641,6 +641,7 @@
                 {#each artFiles as file}<option value={file}>{file}</option>{/each}
               </select></label>
               {#if assetKind==='tile'}
+                <label class="check"><input type="checkbox" checked={tile.persistRemoval??false} onchange={e=>set(tile,'persistRemoval',e.currentTarget.checked)}> Remember destroyed tiles</label>
                 <label class="stack">Aseprite tag <select value={tile.tag??''} onchange={e=>set(tile,'tag',e.currentTarget.value)}>
                   <option value="">Use the first tag</option>
                   {#each art[tile.source]?.tags??[] as tag}<option value={tag}>{tag}</option>{/each}
@@ -787,6 +788,7 @@
                 <option value="">Definition default</option>
                 {#each new Set(['default',...(art[definition?.source]?.tags??[])]) as tag}<option value={tag}>{tag}</option>{/each}
               </select></label>
+              <label class="check"><input type="checkbox" checked={actor.persistRemoval??false} onchange={e=>changeActor('persistRemoval',e.currentTarget.checked)}> Remember removal</label>
               <label class="check"><input type="checkbox" checked={actor.flipX??false} onchange={e=>changeActor('flipX',e.currentTarget.checked || '')}> Face left at start</label>
               <label class="stack">Spawn flag<select value={actor.flag??''} onchange={e=>changeActor('flag',e.currentTarget.value)}>
                 <option value="">Always</option>{#each Object.keys(project.flags??{}) as flag}<option>{flag}</option>{/each}

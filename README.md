@@ -57,7 +57,7 @@ Set the room view in the **Room** panel. The platformer view uses gravity. In th
 
 The top-down view uses zero gravity. **Move with D-pad** moves the sprite on both axes. Diagonal and straight movement have the same speed. Attacks and facing-mode projectiles follow the last movement direction. By default, the room has solid edges. Lower sprites appear in front of higher sprites in the same visual layer.
 
-Use a collidable layer for walls. The pathfinding block uses four-direction A* on the tile grid. Add separate behavior for platform jumps.
+Use a collidable layer for walls. Top-down enemies use four-direction A* on the tile grid. Platform enemies search for supported landing cells and use gravity to estimate jumps and falls.
 
 ## Prepare assets and scripts
 

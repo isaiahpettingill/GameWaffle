@@ -149,6 +149,8 @@ pub struct Sprite {
 #[derive(Clone, Default, Deserialize)]
 pub struct Spawn {
     #[serde(default)]
+    pub persistence: Option<String>,
+    #[serde(default)]
     pub conditions: Vec<(String, bool)>,
     pub blocker: Option<usize>,
     #[serde(deserialize_with = "read_float")]
@@ -308,6 +310,7 @@ pub struct Snapshot<'a> {
     pub particles: &'a [crate::particles::Batch],
     pub focus: Option<[f32; 2]>,
     pub dialog: Option<&'a str>,
+    pub bars: &'a BTreeMap<String, [i32; 2]>,
     pub counters: &'a BTreeMap<String, i32>,
     pub sounds: &'a [String],
     pub events: &'a [RuntimeEvent],

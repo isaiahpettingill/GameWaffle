@@ -7,6 +7,14 @@ export const Blocks = {
   emit: ['Emit %1 at %2 per second', [['effect',effects,'smoke'],['rate','number',16]]],
   stop_fx: ['Stop particle emitter', []],
   remove_self: ['Remove this instance', []],
+  bar:['Show bar %1 value %2 maximum %3',[['label','text','Health'],['value','number',1],['maximum','number',10]]],
+  checkpoint:['Set checkpoint',[]],
+  retry_checkpoint:['Return to checkpoint',[]],
+  ask:['Ask yes or no %1',[['text','text','Open the door?']]],
+  give_player:['Give %1 to player %2 count %3',[['item','text','coin'],['player','number',1],['count','number',1]]],
+  take_player:['Take %1 from player %2 count %3',[['item','text','coin'],['player','number',1],['count','number',1]]],
+  count_player:['Read %1 count for player %2',[['item','text','coin'],['player','number',1]]],
+  group_camera:['Follow all players',[]],
   follow: ['Follow this sprite', []],
   camera: ['Point camera at X %1 Y %2', [['x','number',0],['y','number',0]]],
   release_camera: ['Follow player 1', []],
@@ -27,8 +35,8 @@ export const Blocks = {
   spawn: ['Add instance of %1 at offset X %2 Y %3', [['sprite','text','drone'],['x','number',0],['y','number',0]]],
 };
 export const Opcodes = Object.freeze({
-  walk:0, jump:1, damage:2, fire:3, chase:4, sound:5, velocity:6, animate:7, room:8, spawn:9, give:18, take:19, say:20, counter:21, hide:22, follow:23, camera:24, release_camera:25, remove_self:26, burst:27, emit:28, stop_fx:29,
+  walk:0, jump:1, damage:2, fire:3, chase:4, sound:5, velocity:6, animate:7, room:8, spawn:9, give:18, take:19, say:20, counter:21, hide:22, follow:23, camera:24, release_camera:25, remove_self:26, burst:27, emit:28, stop_fx:29,group_camera:30,checkpoint:31,retry_checkpoint:32,ask:33,give_player:34,take_player:35,count_player:36,bar:37,
 });
 export const buttons = ['up','down','left','right','a','b','x','menu'];
 
-export const readings=['id','x','y','vx','vy','health','grounded','player','other','damage','other_player'];
+export const readings=['id','x','y','vx','vy','health','grounded','player','other','damage','other_player','last_spawn','answer','item_count'];
