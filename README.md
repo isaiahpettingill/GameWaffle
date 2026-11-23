@@ -26,7 +26,7 @@ npm start -- --project path/to/project
 
 1. In **Project**, select **New room** (+). Select **New platformer room** or **New top-down room**.
 2. Select the layer that you want to edit. Use **Terrain** or **Walls** for collision. Use **Background** or **Ground** for decoration.
-3. Select a tile from the palette. Select **Brush**. Drag across the map to paint tiles. Use **Rectangle** to fill an area. Use **Pick tile** to select a tile from the map.
+3. Select a tile from the palette. Select **Brush**. Drag with the left mouse button to paint. Drag with the right mouse button to erase tiles on the active layer. Use **Rectangle** to fill an area. Use **Pick tile** to select a tile from the map.
 4. Select a actor in **Project**. Click the map to add an instance. You can also drag the definition to the map.
 5. Select **Play room** to save and test the room.
 
@@ -78,7 +78,7 @@ The player applies the effect to the room, sprites, and particles before it draw
 Use [demo/project.json](demo/project.json) as an example. Put art and audio files in the project's `assets/` directory. Studio rebuilds the saved project when these files change. Select **Rebuild assets** to start a rebuild manually.
 
 - **Actors.** Choose a sprite file in **Actors → New actor**. Set the physics mode. Open **Collision filter** to set the category, mask, and group. Open **Appearance** to set the visual layer. Use **Blocks** to attach behavior to events. Studio saves each sprite script as CBOR. The compiler converts the blocks to operation codes and operands.
-- **Tiles.** Set the project tile size to 8 × 8, 16 × 16, 24 × 24, or 32 × 32 pixels. Use the same size for all tile frames. Register the Aseprite file and select a tag. Each frame in the tag is a variant. Use `:animated:` or `:fluid:` to play the frames in sequence. Use `:mirror-x:`, `:mirror-y:`, or `:rot-90:` to transform the frames. Set tile properties in Studio.
+- **Tiles.** Set the project tile size to 8 × 8, 16 × 16, 24 × 24, or 32 × 32 pixels. Use the same size for all tile frames. Import the Aseprite file as a tile set. Studio creates a tile for each tag. The project sidebar lists each source file once. Select a tile in the room palette to paint with it. Each frame in the tag is a variant. Use `:animated:` or `:fluid:` to play the frames in sequence. Use `:mirror-x:`, `:mirror-y:`, or `:rot-90:` to transform the frames. Set tile properties in Studio.
 - **Art.** Studio reads `.ase`, `.aseprite`, and `.png` files. It uses indexed palettes, transparency, frame times, and tag playback direction. Flatten native Aseprite tilemap layers and layers with non-normal blend modes before import.
 - **Collision.** Enable collision on a room layer to use its tile physics. Available tile types include solid tiles, one-way platforms, ladders, breakable tiles, fluid zones, and rigid bodies. The compiler combines adjacent static collision tiles and makes a separate texture atlas for each room.
 - **Audio.** Register WAV, Opus, Ogg Vorbis, or QOA files. Studio converts WAV to QOA by default. Use mono or stereo PCM or float32 WAV for this conversion. Clear the QOA option to keep the WAV file. Set music and ambient sound in the **Room** panel. Use **Play sound** in a sprite script for event sounds.
@@ -177,7 +177,7 @@ The Box2D Rust port uses its [upstream license](runtime/vendor/box2d-rs/LICENSE)
 
 ## Edit a project
 
-Open a folder to work on its source files. Select **Actors → New actor**, **Assets → Tiles → New tile**, or **Assets → Sounds → New sound**. Choose a project file, or select **Browse device**. Check the name and select **Create**. A PNG supplies one frame.
+Open a folder to work on its source files. Select **Actors → New actor**, **Assets → Tiles → New tile set**, or **Assets → Sounds → New sound**. Choose a project file, or select **Browse device**. Check the name and select **Create**. A PNG supplies one frame.
 
 Select **File → Editable project** to copy the project to a single `.waffleproj` file. Studio keeps its files in a virtual filesystem. A save replaces the archive. Use this command to open an archive or a folder after you build Studio.
 

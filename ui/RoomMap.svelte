@@ -40,7 +40,7 @@ import { tick } from 'svelte';
   const spriteTool = $derived(tool === 'spawn' || tool === 'select');
   const tileChoices = $derived(Object.keys(tiles).filter(id=>id.toLowerCase().includes(query.trim().toLowerCase())));
   const help = $derived({
-    paint: 'Drag to paint tiles.', erase: 'Drag to erase tiles on the active layer.',
+    paint: 'Left-drag to paint. Right-drag to erase.', erase: 'Drag to erase tiles on the active layer.',
     rect: 'Drag from one corner to the other to fill a rectangle.',
     pick: 'Select a tile on a visible layer to use it as the brush.',
     spawn: 'Choose an actor. Click the map to place an instance.',
@@ -279,7 +279,8 @@ import { tick } from 'svelte';
   }
 
   function down(event) {
-    if (busy || gesture || (event.button !== 0 && event.button !== 1)) return;
+    const erase = event.button === 2 && ['paint','rect','erase'].includes(tool);
+    if (busy || gesture || (event.button !== 0 && event.button !== 1 && !erase)) return;
     const p = point(event);
     hover = p;
     if (tool === 'hand' || space || event.button === 1) {
@@ -305,10 +306,11 @@ import { tick } from 'svelte';
       onSprites();
     } else {
       const layer = room.layers[layerIndex];
-      if (!layer || hidden[layerIndex] || (tool !== 'erase' && !tileId)) return;
-      gesture = {kind:tool,id:event.pointerId,start:p,previous:p,layer:layerIndex,tile:tileId,variant:brushVariant(),
+      const kind = erase ? 'erase' : tool;
+      if (!layer || hidden[layerIndex] || (kind !== 'erase' && !tileId)) return;
+      gesture = {kind,id:event.pointerId,start:p,previous:p,layer:layerIndex,tile:tileId,variant:brushVariant(),
         cells:new Map(layer.cells.map(cell=>[cell[1]*room.cols+cell[0],cell])),changed:false};
-      if (tool !== 'rect') { stamp(p.x,p.y); publishCells(); }
+      if (kind !== 'rect') { stamp(p.x,p.y); publishCells(); }
     }
     canvas.setPointerCapture(event.pointerId);
     event.preventDefault();
@@ -455,7 +457,7 @@ import { tick } from 'svelte';
       <canvas aria-label="Room map" class:hand={tool==='hand' || space} class:select={tool==='pick' || tool==='select'}
         bind:this={canvas} {width} {height} style:width={`${width*scale}px`} style:height={`${height*scale}px`}
         ondragover={dragOver} ondrop={drop}
-        onpointerdown={down} onpointermove={move} onpointerup={event=>finish(event,true)}
+        oncontextmenu={event=>{if(['paint','rect','erase'].includes(tool))event.preventDefault();}} onpointerdown={down} onpointermove={move} onpointerup={event=>finish(event,true)}
         onpointercancel={event=>finish(event,false)} onlostpointercapture={event=>finish(event,false)}
         onpointerleave={()=>{if(!gesture)hover=null;}}></canvas>
     </div>
@@ -468,7 +470,7 @@ import { tick } from 'svelte';
   {#if spriteTool}
     <div class="palette">
       {#if tool==='spawn'}
-        <div class="palette-head row"><strong>Actor</strong><label>Controlled by<select bind:value={placeAs}><option value="">No player</option>{#each [0,1,2,3] as slot}<option disabled={room.entities.some(e=>e.player===slot)} value={String(slot)}>Player {slot+1}</option>{/each}</select></label><input type="search" aria-label="Find an actor" placeholder="Find an actor" bind:value={spriteFilter}></div>
+        <strong>Actor</strong><div class="field-row"><label>Controlled by<select bind:value={placeAs}><option value="">No player</option>{#each [0,1,2,3] as slot}<option disabled={room.entities.some(e=>e.player===slot)} value={String(slot)}>Player {slot+1}</option>{/each}</select></label><label>Find an actor<input type="search" bind:value={spriteFilter}></label></div>
         <div class="tile-list">
           <PagedList items={Object.keys(sprites)} query={spriteFilter} label="sprite choices" size={12}>{#snippet children(id)}
             <button class="swatch" class:selected={spriteId===id} aria-pressed={spriteId===id}
@@ -499,7 +501,7 @@ import { tick } from 'svelte';
           {/snippet}</PagedList>
         </div>
       {:else}<p class="muted">{query ? 'No tiles match the search.' : 'Add a tile in Assets.'}</p>{/if}
-      <div class="brush-options row">
+      <div class="brush-options field-row">
         {#if room.layers[layerIndex]}
           <label>Layer <select aria-label="Layer" value={layerIndex} onchange={event=>onLayer(Number(event.currentTarget.value))}>
             {#each orderedLayers(room).reverse() as {item,index}}<option value={index}>{item.name}</option>{/each}

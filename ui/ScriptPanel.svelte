@@ -90,14 +90,14 @@
       <button class="primary" disabled={!ready || !dirty || busy} onclick={save}>Save script</button>
     </div>
   </div>
-  {#if adding}<form class="row" onsubmit={async e=>{
+  {#if adding}<form class="field-row" onsubmit={async e=>{
     e.preventDefault();if(!/^[A-Za-z_]\w{0,63}$/.test(newModule)||modules.includes(newModule)){error='Choose a unique module name';return;}
     try{
       const r=await fetch('./api/module/'+newModule,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({events:{}})});
       if(!r.ok)throw Error((await r.json()).error);
       onFileEdit((await r.json()).edit);selected=newModule;modules=[...modules,newModule].sort();newModule='';adding=false;await open(sprite);
     }catch(err){error=err.message;}
-  }}><input aria-label="Module name" bind:value={newModule} placeholder="Module name"/><button>Create</button></form>{/if}
+  }}><label>Module name<input bind:value={newModule}/></label><button>Create</button></form>{/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   <div inert={busy||!ready} hidden={mode!=='blocks'} class="workspace" bind:this={host}></div>
   <div inert={busy||!ready} hidden={mode!=='text'} class="workspace" bind:this={textHost}></div>

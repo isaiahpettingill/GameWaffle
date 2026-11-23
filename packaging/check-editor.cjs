@@ -3,6 +3,27 @@ const fs=require('node:fs/promises');
 const os=require('node:os');
 const path=require('node:path');
 const assert=require('node:assert/strict');
+async function checkFormRows(page,view){
+  const errors=await page.locator('.field-row,.record-form,.asset-source,.fields,.pair,form.row,.address').evaluateAll(rows=>{
+    const errors=[];
+    for(const row of rows){
+      const controls=[...row.querySelectorAll('input,select,button')].filter(el=>
+        el.getClientRects().length && !['checkbox','radio','range','file','hidden'].includes(el.type));
+      for(const [index,control] of controls.entries()){
+        const a=control.getBoundingClientRect();
+        for(const other of controls.slice(index+1)){
+          const b=other.getBoundingClientRect();
+          if(Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>1 &&
+             (Math.abs(a.top-b.top)>1 || Math.abs(a.bottom-b.bottom)>1)){
+            errors.push([control.outerHTML.slice(0,90),other.outerHTML.slice(0,90)]);
+          }
+        }
+      }
+    }
+    return errors;
+  });
+  assert.deepEqual(errors,[],view+' form alignment');
+}
 (async()=>{
 const fixture=await fs.mkdtemp(path.join(os.tmpdir(),'gw-editor-'));
 const project=path.join(fixture,'demo');await fs.cp('demo',project,{recursive:true});
@@ -20,6 +41,14 @@ for(const width of [1280,800,390,320]){
   const nav=page.getByRole('navigation',{name:'Editor views'});
   for(const tab of ['Room','World','Game','Assets','Actors','Blocks']){
     await nav.getByText(tab,{exact:true}).click();
+    if(tab==='Assets'){
+      const field=page.getByLabel('Find source files');
+      const action=page.getByRole('button',{name:'Import file…',exact:true});
+      const [a,b]=await Promise.all([field.boundingBox(),action.boundingBox()]);
+      assert.equal(a.height,b.height,'Source search and import control heights');
+      if(b.x>=a.x+a.width)assert.ok(Math.abs(a.y-b.y)<1,'Source search and import top edges');
+      else assert.ok(b.y>=a.y+a.height,'Wrapped import button clears the search field');
+    }
     if(tab==='World')await page.getByRole('button',{name:'right exit'}).click();
     if(tab==='Game'){
       const form=page.locator('.record-form');
@@ -27,7 +56,10 @@ for(const width of [1280,800,390,320]){
       assert.deepEqual(await fields.evaluateAll(nodes=>nodes.map(n=>n.tagName)),['SELECT','INPUT','INPUT','BUTTON']);
       const sizes=await fields.evaluateAll(nodes=>nodes.map(n=>n.getBoundingClientRect().height));
       assert.equal(new Set(sizes).size,1,'Variable form control heights at '+width);
-      await page.getByRole('button',{name:'Display',exact:true}).click();
+      for(const section of ['Controls','Items','Display']){
+        await page.getByRole('button',{name:section,exact:true}).click();
+        await checkFormRows(page,section);
+      }
     }
     if(tab==='Actors')await page.getByRole('button',{name:'Combat',exact:true}).click();
     if(tab==='Blocks'){
@@ -53,6 +85,7 @@ for(const width of [1280,800,390,320]){
       const discard=page.getByRole('button',{name:'Discard',exact:true});
       if(await discard.isVisible()){await discard.click();await discard.waitFor({state:'hidden'});}
     }
+    await checkFormRows(page,tab);
     const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);
     if(overflow)throw Error('Horizontal overflow '+width+' '+tab);
   }
