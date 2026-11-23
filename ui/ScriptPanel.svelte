@@ -7,7 +7,7 @@
   let modules=$state([]),selected=$state(''),newModule=$state(''),adding=$state(false);
   const endpoint=()=>selected?'./api/module/'+encodeURIComponent(selected):'./api/script/'+encodeURIComponent(sprite);
   let mode=$state('blocks'),textHost,textEditor,original;
-  let { sprite, sprites, items, actions, onBeforeSave, dirty = $bindable(false), onSave,onFileEdit } = $props();
+  let { sprite, sprites, newActor, items, actions, onBeforeSave, dirty = $bindable(false), onSave,onFileEdit } = $props();
   const registry=()=>({items:Object.fromEntries(items.map(id=>[id,true])),controls:Object.fromEntries(actions.map(id=>[id,true]))});
   let draft,recovered=$state(false);
   function changed(){
@@ -43,9 +43,12 @@
     ready=false;
     error='';
     try{
-      const response=await fetch(endpoint());
-      const data=await response.json();
-      if(!response.ok)throw Error(data.error);
+      let data={events:{}};
+      if(selected || !newActor){
+        const response=await fetch(endpoint());
+        data=await response.json();
+        if(!response.ok)throw Error(data.error);
+      }
       if(current!==version)return;
       draft=draftFile(endpoint(),message=>error=message);
       const previous=discard?(await draft.write(null),null):await draft.read();
