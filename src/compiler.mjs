@@ -1,3 +1,4 @@
+import {bakeRoomShader} from './room-shaders.mjs';
 import {addSeams} from './seams.mjs';
 import {pack} from './pack.mjs';
 import {defaultFont} from './font.mjs';
@@ -387,6 +388,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         solids.push({...walls[edge],physics});
       }
     }
+    const ripple = bakeRoomShader(room.shader,images);
     images.set('ui/font',font);for(const [id,image] of itemIcons)images.set(id,image);
     const exits={};
     for(const [edge,exit] of Object.entries(room.exits??{})){
@@ -396,7 +398,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       exits[edge]={mode:exit.mode,targets:exit.targets,flag:exit.flag||null,when:exit.when??true,adjacent:exit.adjacent??false};
     }
     atlases[id] = atlas(images);
-    rooms[id] = { title: room.title ?? id, exits, cols, rows, width, height, size, baked, solids, entities,
+    rooms[id] = { title: room.title ?? id, ripple, exits, cols, rows, width, height, size, baked, solids, entities,
       blockers: [...blockers], background: room.background ?? '#101a23', music: room.music,
       ambience: room.ambience, group_camera:room.groupCamera===true, gravity, view, ySort };
   }

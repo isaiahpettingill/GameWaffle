@@ -55,8 +55,11 @@ mapfile -t java_sources < <(find "$SDL_SOURCE/android-project/app/src/main/java/
 "$JAVA_HOME/bin/javac" -source 8 -target 8 -classpath "$ANDROID_PLATFORM_JAR" -d "$stage/classes" "${java_sources[@]}"
 "$JAVA_HOME/bin/jar" cf "$stage/classes.jar" -C "$stage/classes" .
 JAVA_HOME="$JAVA_HOME" "$tools/d8" --min-api 24 --lib "$ANDROID_PLATFORM_JAR" --output "$stage/dex" "$stage/classes.jar"
+mkdir -p "$stage/res/drawable-nodpi"
+cp studio/icons/icon.png "$stage/res/drawable-nodpi/gamewaffle.png"
+"$tools/aapt2" compile --dir "$stage/res" -o "$stage/resources.zip"
 "$tools/aapt2" link --version-code "${RELEASE_VERSION_CODE:-1}" --version-name "${RELEASE_VERSION_NAME:-0.1.0}" -o "$stage/unsigned.apk" -I "$ANDROID_PLATFORM_JAR" \
-    --manifest player/android/AndroidManifest.xml -A "$stage/assets"
+    --manifest player/android/AndroidManifest.xml -A "$stage/assets" "$stage/resources.zip"
 python3 - "$stage" <<'PY'
 import sys
 from pathlib import Path

@@ -5,12 +5,15 @@ use sdl3::{
     surface::{Surface, SurfaceContext},
 };
 use self_cell::self_cell;
-type AtlasTexture<'a> = Texture<'a>;
+struct RoomTextures<'a> {
+    atlas: Texture<'a>,
+    ripple: Option<Texture<'a>>,
+}
 self_cell!(
     struct CachedAtlas {
         owner: TextureCreator<SurfaceContext<'static>>,
         #[covariant]
-        dependent: AtlasTexture,
+        dependent: RoomTextures,
     }
 );
 
@@ -44,7 +47,16 @@ impl Video {
         let room = &game.media.rooms[id];
         if self.atlas.as_ref().is_none_or(|a| a.0 != id) {
             let atlas = CachedAtlas::try_new(self.canvas.texture_creator(), |creator| {
-                game.media.atlases[id].texture(creator)
+                let [w, h] = self.dimensions;
+                let ripple = if room.ripple.is_some() {
+                    Some(creator.create_texture_target(PixelFormat::RGBA32, w, h)?)
+                } else {
+                    None
+                };
+                Ok::<_, Error>(RoomTextures {
+                    atlas: game.media.atlases[id].texture(creator)?,
+                    ripple,
+                })
             })?;
             self.atlas = Some((id.to_owned(), atlas));
         }
@@ -69,14 +81,21 @@ impl Video {
             [room.width, room.height],
             focus,
         );
-        draw(
-            &mut self.canvas,
-            game,
-            &snapshot,
-            self.atlas.as_ref().unwrap().1.borrow_dependent(),
-            view,
-            &mut self.rectangles,
-        )?;
+        self.atlas
+            .as_mut()
+            .unwrap()
+            .1
+            .with_dependent_mut(|_, textures| {
+                draw(
+                    &mut self.canvas,
+                    game,
+                    &snapshot,
+                    &textures.atlas,
+                    view,
+                    &mut self.rectangles,
+                    textures.ripple.as_mut(),
+                )
+            })?;
         self.canvas.present();
         let surface = self.canvas.surface();
         surface.with_lock(|pixels| output(pixels.as_ptr().cast(), w, h, surface.pitch() as usize));

@@ -14,7 +14,7 @@ export function pack(cart, { editor = false } = {}) {
   if (metadata.length > MAX_METADATA) throw Error('Cartridge simulation data exceeds 32 MiB');
   const compressed = deflateSync(metadata,{level:6});
   const views = Object.fromEntries(Object.entries(rooms).map(([id,room])=>[id,
-    Object.fromEntries(['neighbors','seams','title','width','height','size','background','baked','ySort','music','ambience'].map(key=>[key,room[key]??null]))]));
+    Object.fromEntries(['neighbors','seams','ripple','title','width','height','size','background','baked','ySort','music','ambience'].map(key=>[key,room[key]??null]))]));
   const media = encodeCbor({name,start,rooms:views,atlases,audio,camera,...(editor ? {tilePreviews,spritePreviews} : {})});
   const bytes = new Uint8Array(14 + compressed.length + media.length);
   if (bytes.length > limit) throw Error('Cartridge exceeds 256 MiB');

@@ -1,5 +1,6 @@
 import {dialogue_lines} from '../web-built/runtime/runtime.js';
 const images = new WeakMap();
+const rippleBuffers = new WeakMap();
 export function loadAtlas(atlas) {
   if (!images.has(atlas)) {
     images.set(atlas, new Promise((resolve, reject) => {
@@ -81,6 +82,26 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
     if(!batch.points.length)continue;
     ctx.fillStyle='#'+batch.color.toString(16).padStart(6,'0');
     for(const [px,py] of batch.points)ctx.fillRect(px,py,batch.size,batch.size);
+  }
+  ctx.setTransform(1,0,0,1,0,0);
+  if(room.ripple){
+    const [amplitude,wavelength,speed]=room.ripple;
+    let buffer=rippleBuffers.get(canvas);
+    if(!buffer){buffer=document.createElement('canvas');rippleBuffers.set(canvas,buffer);}
+    if(buffer.width!==width)buffer.width=width;
+    if(buffer.height!==height)buffer.height=height;
+    buffer.getContext('2d').drawImage(canvas,0,0);
+    for(let row=0;row<height;row+=2){
+      const shift=Math.round(amplitude*Math.sin(2*Math.PI*(row/wavelength+(snapshot.tick%60)*speed/60)));
+      const band=Math.min(2,height-row);
+      ctx.drawImage(buffer,0,row,width,band,shift,row,width,band);
+      if(shift>0)ctx.drawImage(buffer,0,row,1,band,0,row,shift,band);
+      if(shift<0)ctx.drawImage(buffer,width-1,row,1,band,width+shift,row,-shift,band);
+    }
+  }
+  for(const key of ['post/screen','post/rows','post/columns']){
+    const r=atlas.entries[key];
+    if(r)ctx.drawImage(image,r[0],r[1],key==='post/columns'?width:r[2],key==='post/rows'?height:r[3],0,0,width,height);
   }
   const font=atlas.entries['ui/font'];
   if (!showGrid && font) {

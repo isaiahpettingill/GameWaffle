@@ -30,3 +30,6 @@ libretro = ["dep:self_cell", "sdl3/static-link"]
 
 [patch.crates-io]
 box2d-rs = { path = "../runtime/vendor/box2d-rs" }
+
+[build-dependencies]
+embed-resource = "3.0.12"

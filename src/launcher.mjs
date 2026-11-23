@@ -1,6 +1,6 @@
 import {createServer} from 'node:http';
 import {spawn} from 'node:child_process';
-import {mkdir,writeFile,cp,mkdtemp} from 'node:fs/promises';
+import {mkdir,writeFile,cp,mkdtemp,readFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {homedir} from 'node:os';
 import {zipSync} from 'fflate';
@@ -11,11 +11,12 @@ export async function launch(port,open){
   const children=new Set();
   for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>process.exit());
   process.on('exit',()=>{for(const child of children)child.kill();});
-  const page=`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GameWaffle Studio</title>
+  const icon='data:image/svg+xml;base64,'+(await readFile(new URL('../packaging/gamewaffle.svg',import.meta.url))).toString('base64');
+  const page=`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="${icon}"><title>GameWaffle Studio</title>
 <style>
 *{box-sizing:border-box}body{margin:0;background:#1b2025;color:#e4e8ea;font:15px system-ui,sans-serif;color-scheme:dark}header{padding:.65rem 1rem;border-bottom:1px solid #42494f;background:#23292e;font-weight:650}main{max-width:37rem;margin:clamp(1rem,8vh,5rem) auto;padding:0 1rem}
 h1{font-size:1.3rem}form{display:grid;gap:.65rem;background:#272d32;border:1px solid #42494f;padding:1rem;margin-top:-1px}label{display:grid;gap:.3rem;color:#c1cbd0}button,input,select{font:inherit;color:inherit;background:#1d2328;border:1px solid #58646b;padding:.5rem;border-radius:1px}button{justify-self:start;cursor:pointer;background:#344047}button:hover,button:focus-visible{border-color:#93ced6}button[value=new]{background:#e5bc72;color:#24282a}
-</style><header>GameWaffle Studio</header><main><h1>Projects</h1><form method="post"><label>New project name<input name="name" required maxlength="80"></label>
+</style><header><img src="${icon}" width="24" height="24" alt="" style="vertical-align:middle;margin-right:.5rem">GameWaffle Studio</header><main><h1>Projects</h1><form method="post"><label>New project name<input name="name" required maxlength="80"></label>
 <label>Storage<select name="storage"><option value="folder">Project folder</option><option value="archive">Single project file (.waffleproj)</option></select></label>
 <label>First room<select name="view"><option value="platformer">Platformer</option><option value="top_down">Top-down</option></select></label>
 <button name="action" value="new">Create project</button></form>

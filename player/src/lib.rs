@@ -135,7 +135,7 @@ fn request_file(window: &Window, sender: &mpsc::Sender<PathBuf>) -> Result<(), E
     Ok(())
 }
 
-fn draw<T: sdl3::render::RenderTarget>(
+fn draw_world<T: sdl3::render::RenderTarget>(
     canvas: &mut Canvas<T>,
     game: &Game,
     snapshot: &gamewaffle_runtime::Snapshot<'_>,
@@ -271,6 +271,67 @@ fn draw<T: sdl3::render::RenderTarget>(
         }));
         canvas.fill_rects(rectangles)?;
     }
+    Ok(())
+}
+
+fn draw<T: sdl3::render::RenderTarget>(
+    canvas: &mut Canvas<T>,
+    game: &Game,
+    snapshot: &gamewaffle_runtime::Snapshot<'_>,
+    atlas: &Texture<'_>,
+    view: [u32; 4],
+    rectangles: &mut Vec<FRect>,
+    ripple_target: Option<&mut Texture<'_>>,
+) -> Result<(), Error> {
+    let [_, _, w, h] = view;
+    let room = &game.media.rooms[snapshot.room];
+    let source = &game.media.atlases[snapshot.room];
+    if let (Some([amplitude, wavelength, speed]), Some(scene)) = (room.ripple, ripple_target) {
+        let mut result = Ok(());
+        canvas.with_texture_canvas(scene, |target| {
+            result = draw_world(target, game, snapshot, atlas, view, rectangles);
+        })?;
+        result?;
+        for row in (0..h).step_by(2) {
+            let phase = row as f64 / wavelength.max(1) as f64
+                + (snapshot.tick % 60) as f64 * speed as f64 / 60.;
+            let shift = (amplitude as f64 * (phase * std::f64::consts::TAU).sin()).round() as i32;
+            let band = 2.min(h - row);
+            let copy = |canvas: &mut Canvas<T>, sx, sw, dx, dw| {
+                canvas.copy(
+                    scene,
+                    sdl3::rect::Rect::new(sx, row as i32, sw, band),
+                    FRect::new(dx as f32, row as f32, dw as f32, band as f32),
+                )
+            };
+            copy(canvas, 0, w, shift, w)?;
+            if shift > 0 {
+                copy(canvas, 0, 1, 0, shift as u32)?;
+            }
+            if shift < 0 {
+                copy(
+                    canvas,
+                    w as i32 - 1,
+                    1,
+                    w as i32 + shift,
+                    shift.unsigned_abs(),
+                )?;
+            }
+        }
+    } else {
+        draw_world(canvas, game, snapshot, atlas, view, rectangles)?;
+    }
+    for key in ["post/screen", "post/rows", "post/columns"] {
+        if let Some(mut rect) = source.rect(key) {
+            if key == "post/rows" {
+                rect.set_height(h);
+            }
+            if key == "post/columns" {
+                rect.set_width(w);
+            }
+            canvas.copy(atlas, rect, FRect::new(0., 0., w as f32, h as f32))?;
+        }
+    }
     if let Some(font) = source.rect("ui/font") {
         let text = |canvas: &mut Canvas<T>, line: &str, mut x: f32, y: f32| -> Result<(), Error> {
             for ch in line.chars() {
@@ -373,7 +434,21 @@ pub fn run_network(
     if verify {
         window.hidden();
     }
-    let window = window.resizable().position_centered().build()?;
+    let mut window = window.resizable().position_centered().build()?;
+    let mut icon = png::Decoder::new(std::io::Cursor::new(include_bytes!(
+        "../../studio/icons/icon.png"
+    )))
+    .read_info()?;
+    let mut pixels = vec![0; icon.output_buffer_size().ok_or("Invalid window icon")?];
+    let image = icon.next_frame(&mut pixels)?;
+    let surface = sdl3::surface::Surface::from_data(
+        &mut pixels,
+        image.width,
+        image.height,
+        image.width * 4,
+        PixelFormat::RGBA32,
+    )?;
+    window.set_icon(surface);
     let mut canvas = window.into_canvas();
     let creator = canvas.texture_creator();
     let pads = sdl.gamepad()?;
@@ -400,6 +475,7 @@ pub fn run_network(
     }
     let mut texture = None;
     let mut frame_texture = None;
+    let mut ripple_texture = None;
     let mut frame_dimensions = [0, 0];
     let mut atlas_id = String::new();
     let mut touch = cfg!(target_os = "android");
@@ -755,8 +831,19 @@ pub fn run_network(
             target.set_scale_mode(sdl3::render::ScaleMode::Nearest);
             frame_texture = Some(target);
             frame_dimensions = dimensions;
+            ripple_texture = None;
         }
         let snapshot = game.as_ref().map(|game| game.runtime.view());
+        let ripple = game
+            .as_ref()
+            .zip(snapshot.as_ref())
+            .is_some_and(|(g, s)| g.media.rooms[s.room].ripple.is_some());
+        if ripple && ripple_texture.is_none() {
+            ripple_texture =
+                Some(creator.create_texture_target(PixelFormat::RGBA32, view[2], view[3])?);
+        } else if !ripple {
+            ripple_texture = None;
+        }
         let frame = frame_texture.as_mut().unwrap();
         let mut rendered = Ok(());
         canvas.with_texture_canvas(frame, |canvas| {
@@ -769,6 +856,7 @@ pub fn run_network(
                         texture.as_ref().unwrap(),
                         view,
                         &mut particle_rects,
+                        ripple_texture.as_mut(),
                     )?;
                 } else {
                     canvas.set_draw_color(Color::RGB(24, 24, 34));
