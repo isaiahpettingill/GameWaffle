@@ -1,3 +1,4 @@
+import './check-dependencies.mjs';
 import {access,readFile} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import {studioBuildId} from './studio-build-state.mjs';

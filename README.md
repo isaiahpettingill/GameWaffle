@@ -177,7 +177,7 @@ The Box2D Rust port uses its [upstream license](runtime/vendor/box2d-rs/LICENSE)
 
 ## Edit a project
 
-Open a folder to work on its source files. Use **Assets → Import image or sound** to add a PNG, Aseprite file, or sound. Select **Add sprite** or **Add tile** to use the image. A PNG supplies one frame.
+Open a folder to work on its source files. In **Assets**, select **Sprites**, **Tiles**, or **Audio**. Select **New sprite**, **New tile**, or **New sound**. Choose a project file, or select **Browse device**. Check the name and select **Create**. A PNG supplies one frame.
 
 Select **File → Editable project** to copy the project to a single `.waffleproj` file. Studio keeps its files in a virtual filesystem. A save replaces the archive. Use this command to open an archive or a folder after you build Studio.
 

@@ -76,3 +76,46 @@ body.studio{--bg:#1e1e2e;--panel:#181825;--well:#11111b;--line:#45475a;--muted:#
 .studio .project .item svg{color:#89b4fa}
 .studio .project .item.selected{border-left:2px solid var(--accent)}
 @media(max-width:480px){.studio .studio-menus details:last-child>div{left:-4rem}}
+
+body.studio{
+  min-height:100dvh;
+  --control-height:2rem;
+  --control-font:.8125rem;
+  --control-pad:.55rem;
+  --field-gap:.4rem;
+}
+@media(pointer:coarse){body.studio{--control-height:2.75rem}}
+body.studio #app :is(button,a.button,.studio-menus summary,.studio-menus a):not(:where(.workspace *)){
+  box-sizing:border-box;min-height:var(--control-height);padding:.25rem var(--control-pad);
+  display:inline-flex;align-items:center;justify-content:center;gap:.35rem;
+  font-family:inherit;font-size:var(--control-font);
+  font-weight:500;line-height:1.2;border-radius:1px;
+}
+body.studio #app :is(button,a.button) svg{width:1rem;height:1rem;flex:none}
+body.studio #app .icon-button{width:var(--control-height);min-width:var(--control-height);padding:0;flex:none}
+body.studio #app :is(.item,.entries button,.studio-menus details>div>*){justify-content:flex-start;text-align:start}
+body.studio #app .studio-menus summary{border:0;min-width:3rem}
+body.studio #app .primary{font-weight:650}
+body.studio #app :is(input:not([type=checkbox],[type=radio],[type=range],[type=file]),select):not(:where(.workspace *)){
+  box-sizing:border-box;height:var(--control-height);padding:.25rem var(--control-pad);
+  font-family:inherit;font-size:var(--control-font);line-height:1.2;min-width:0;
+}
+body.studio #app input[type=checkbox]{width:1rem;height:1rem;margin:0;flex:none}
+body.studio #app .check{min-height:var(--control-height);gap:.5rem;margin-top:0}
+body.studio #app :is(.pair,.fields){align-items:end;column-gap:.6rem;row-gap:var(--field-gap)}
+body.studio #app :is(.stack,.fields label,main form>label){font-size:var(--control-font);line-height:1.35;gap:var(--field-gap)}
+body.studio #app .pair .stack{margin-top:var(--field-gap)}
+body.studio #app .pathrow output{display:flex;align-items:center;min-height:var(--control-height)}
+body.studio #app .row.add{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,8rem),1fr));align-items:end}
+body.studio #app .row.add :is(input,select){width:100%}
+body.studio #app :is(.sections,.panel-tabs,.layer-actions){align-items:stretch;gap:2px}
+body.studio #app :is(.sections,.panel-tabs,.layer-actions)>button{flex:1 1 auto}
+body.studio #app .tile-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,5.1rem),1fr));gap:.3rem;overflow:visible}
+body.studio #app .tile-list .swatch{display:grid;grid-template-rows:1.6rem 1.2rem;justify-items:center;align-content:center;min-width:0;max-width:none;height:3.5rem}
+body.studio #app .swatch span{max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.studio #app .tile-list .pager{grid-column:1/-1}
+body.studio #app .world button{min-height:var(--control-height)}
+body.studio #app form.row{align-items:end;row-gap:.5rem}
+body.studio #app form.row>label{display:grid;align-content:end;gap:var(--field-gap);min-width:0;font-size:var(--control-font)}
+body.studio #app .debugger form{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,8rem),1fr));max-width:52rem}
+body.studio #app .debugger form label{max-width:none}

@@ -420,8 +420,8 @@ import { tick } from 'svelte';
       <small>{room.cols} × {room.rows} tiles</small>
     </div>
     <div class="row">
-      <button aria-label="Undo room edit" title="Undo (Ctrl+Z)" disabled={!canUndo || busy} onclick={onUndo}><Undo2 size={15}/></button>
-      <button aria-label="Redo room edit" title="Redo (Ctrl+Shift+Z)" disabled={!canRedo || busy} onclick={onRedo}><Redo2 size={15}/></button>
+      <button class="icon-button" aria-label="Undo room edit" title="Undo (Ctrl+Z)" disabled={!canUndo || busy} onclick={onUndo}><Undo2 size={15}/></button>
+      <button class="icon-button" aria-label="Redo room edit" title="Redo (Ctrl+Shift+Z)" disabled={!canRedo || busy} onclick={onRedo}><Redo2 size={15}/></button>
       <a class="button" title="Play the saved room" aria-disabled={busy} href={busy ? undefined : `./player.html?room=${encodeURIComponent(roomId)}`} target="_blank" rel="noopener" onclick={onPlay}><Play size={14}/>Play room</a>
     </div>
   </header>
@@ -438,9 +438,9 @@ import { tick } from 'svelte';
       {#if spriteTool}<button aria-pressed={snap} onclick={()=>snap=!snap}>Snap</button>{/if}
     </div>
     <div class="row">
-      <button aria-label="Zoom out" onclick={()=>changeZoom(scale/1.25)}><ZoomOut size={15}/></button>
+      <button class="icon-button" aria-label="Zoom out" onclick={()=>changeZoom(scale/1.25)}><ZoomOut size={15}/></button>
       <button title="Fit room to view" onclick={()=>changeZoom(null)}>{zoom == null ? 'Fit' : `${Math.round(scale*100)}%`}</button>
-      <button aria-label="Zoom in" onclick={()=>changeZoom(scale*1.25)}><ZoomIn size={15}/></button>
+      <button class="icon-button" aria-label="Zoom in" onclick={()=>changeZoom(scale*1.25)}><ZoomIn size={15}/></button>
     </div>
   </div>
   <div class="viewport" bind:this={viewport} bind:clientWidth={viewportWidth} bind:clientHeight={viewportHeight}>
@@ -464,7 +464,7 @@ import { tick } from 'svelte';
         <div class="palette-head row"><strong>Sprites</strong><input type="search" aria-label="Find a sprite" placeholder="Find a sprite" bind:value={spriteFilter}></div>
         <div class="tile-list">
           <PagedList items={Object.keys(sprites)} query={spriteFilter} label="sprite choices" size={12}>{#snippet children(id)}
-            <button class:selected={spriteId===id} aria-pressed={spriteId===id}
+            <button class="swatch" class:selected={spriteId===id} aria-pressed={spriteId===id}
               aria-label={`Use ${id} for placement`} onclick={()=>spriteId=id}>
               {#if spriteArt[id]}<img src={spriteArt[id]} alt="">{:else}<SquareUserRound size={22}/>{/if}
               <span>{id}</span>
@@ -485,7 +485,7 @@ import { tick } from 'svelte';
       {#if tileChoices.length}
         <div class="tile-list">
           <PagedList items={tileChoices} query={query} label="tile choices" size={12}>{#snippet children(id)}
-            <button class:selected={tileId===id} aria-pressed={tileId===id} onclick={()=>chooseTile(id)}>
+            <button class="swatch" class:selected={tileId===id} aria-pressed={tileId===id} onclick={()=>chooseTile(id)}>
               {#if tileArt[id]?.[0]}<img src={tileArt[id][0]} alt="">{:else}<Layers3 size={22}/>{/if}
               <span>{id}</span>
             </button>
@@ -515,7 +515,6 @@ import { tick } from 'svelte';
   .maphead,.view-tools,.map-status{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem;}
   .maphead{padding:.66rem .75rem;}
   h2{font-size:1rem;}
-  .maphead button,.maphead a,.tools button,.view-tools button,.brush-options button{font-size:.78rem;padding:.35rem .5rem;}
   .tools,.view-tools{padding:.4rem .7rem;border-top:1px solid var(--line);}
   .tools button.selected,.view-tools button[aria-pressed=true]{background:#313244;border-color:#b4befe;color:#cba6f7;}
   .viewport{height:clamp(245px,46vh,610px);overflow:auto;background:var(--well);overscroll-behavior:contain;border-block:1px solid var(--line);}

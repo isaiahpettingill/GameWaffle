@@ -11,9 +11,9 @@
 {#if query&&!matches.length}<small>No matches</small>{/if}
 {#if pages>1}
 <div class="pager">
-  <button aria-label={'Previous '+label} disabled={!page} onclick={()=>requested=page-1}><ChevronLeft size={14}/></button>
+  <button class="icon-button" aria-label={'Previous '+label} disabled={!page} onclick={()=>requested=page-1}><ChevronLeft size={14}/></button>
   <small>{page+1} / {pages}</small>
-  <button aria-label={'Next '+label} disabled={page+1>=pages} onclick={()=>requested=page+1}><ChevronRight size={14}/></button>
+  <button class="icon-button" aria-label={'Next '+label} disabled={page+1>=pages} onclick={()=>requested=page+1}><ChevronRight size={14}/></button>
 </div>
 {/if}
-<style>.pager{display:flex;align-items:center;justify-content:flex-end;gap:.4rem;flex-basis:100%}.pager button{padding:.15rem .28rem}</style>
+<style>.pager{display:flex;align-items:center;justify-content:flex-end;gap:.4rem;flex-basis:100%}</style>

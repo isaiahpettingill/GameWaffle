@@ -55,7 +55,7 @@
 </script>
 <section class="card debugger" aria-label="Script debugger">
   <div class="row"><h2>Script debugger</h2><button onclick={onClose}>Close</button></div>
-  <canvas bind:this={canvas} tabindex="0" role="application" aria-label="Debug game input" onkeydown={e=>key(e,true)} onkeyup={e=>key(e,false)} onblur={()=>control&&Atomics.store(control,1,0)}></canvas>
+  <div tabindex="0" role="application" aria-label="Debug game input" onkeydown={e=>key(e,true)} onkeyup={e=>key(e,false)} onblur={()=>control&&Atomics.store(control,1,0)}><canvas bind:this={canvas}></canvas></div>
   <div class="row"><button disabled={!stop} onclick={()=>resume(false)}>Continue</button><button disabled={!stop} onclick={()=>resume(true)}>Step instruction</button><button disabled={!running} onclick={()=>Atomics.store(control,0,1)}>Pause</button></div>
   <p role="status">{stop ? `Paused at ${stop.event} · instruction ${stop.pc} · actor ${stop.actor}` : 'Running'}</p>
   {#if stop&&current}<p><code>{current.file}:{current.line} {current.text}</code> · {current.op}</p>{/if}

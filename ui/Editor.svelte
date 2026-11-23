@@ -26,7 +26,10 @@
   let project=$state(null), assets=$state([]), art=$state({}), tab=$state('room'), roomId=$state(''), spriteId=$state(''),
     tileId=$state(''), layerIndex=$state(0), assetKind=$state('sprite'), scriptDirty=$state(false),
     dirty=$state(false), busy=$state(false), error=$state(''), status=$state('Opening project…'), newId=$state(''),
-    newSource=$state(''), audioId=$state(''), audioSource=$state('');
+    newSource=$state('');
+  let importFile=$state(null), filePicker, tagTiles=$state(false), assetError=$state('');
+  const assetLabel=$derived(assetKind==='audio'?'sound':assetKind);
+  const sources=$derived(assetKind==='audio'?audioFiles:artFiles);
   let tileArt=$state.raw({}), spriteArt=$state.raw({}), previewModes=$state.raw({});
   let historyVersion=$state(0), selectedEntity=$state(-1), roomPanel=$state('layers'), addPreset=$state(false);
   let savedProject='', currentProject='', previewUrls=[];
@@ -122,12 +125,10 @@
       currentProject=savedProject=JSON.stringify(value.project);
       recovery=await draft.read();
       if(recovery===savedProject){recovery=null;await draft.write(null);}
-      audioSource=assets.find(file=>/\.(wav|ogg|oga|opus|qoa)$/i.test(file)) ?? '';
       roomId=project.start ?? Object.keys(project.rooms)[0];
       spriteId=Object.keys(project.sprites ?? {})[0] ?? '';
       placementSprite=spriteId;
       tileId=Object.keys(project.tiles ?? {})[0] ?? '';
-      newSource=assets.find(file=>/\.(ase|aseprite|png)$/i.test(file)) ?? '';
       layerIndex=chooseInitialLayer(project.rooms[roomId]);
       await updatePreviews();
       status='Ready';
@@ -333,8 +334,10 @@
     openTab(view);
   }
   function openAssets(kind,adding=false){
+    if(busy)return;
     if(scriptDirty){openTab('assets');return;}
     assetKind=kind;
+    newId='';newSource='';importFile=null;tagTiles=false;assetError='';
     addForm=adding;
     openTab('assets');
   }
@@ -437,15 +440,47 @@
     selectRoom(id);
     updateDirty();
   }
-  function addAsset(){
-    if(!/^[a-zA-Z0-9_-]+$/.test(newId)||['__proto__','constructor','prototype'].includes(newId)||!newSource){
-      error='Enter an asset ID with letters, numbers, hyphens, or underscores, then select a source file.';return;
+  function assetCollection(){
+    return assetKind==='tile'?project.tiles:assetKind==='sprite'?project.sprites:project.audio;
+  }
+  function selectSource(path,file=null){
+    importFile=file;newSource=path;tagTiles=false;assetError='';
+    const stem=path.split('/').at(-1).replace(/\.[^.]+$/,'').toLowerCase().replace(/[^a-z0-9_-]+/g,'_').replace(/^_+|_+$/g,'')||assetLabel;
+    newId=stem;
+    let suffix=2;
+    while(Object.hasOwn(assetCollection()??{},newId)||['__proto__','constructor','prototype'].includes(newId))newId=stem+'_'+suffix++;
+  }
+  async function createAsset(){
+    if(busy)return;
+    const id=newId.trim();
+    if(!newSource||!id)return;
+    if(!/^[a-zA-Z0-9_-]+$/.test(id)||['__proto__','constructor','prototype'].includes(id)){
+      assetError='Use letters, numbers, underscores, or hyphens in the name.';return;
     }
-    const collection=assetKind==='tile' ? (project.tiles??={}) : (project.sprites??={});
-    if(Object.hasOwn(collection,newId)){error='That asset ID already exists.';return;}
-    collection[newId]={source:newSource,physics:{}};
-    if(assetKind==='tile')tileId=newId;else spriteId=newId;
-    newId='';addForm=false;error='';mark();
+    if(Object.hasOwn(assetCollection()??{},id)){assetError='This name is in use. Choose another name.';return;}
+    busy=true;assetError='';
+    try{
+      if(importFile){
+        const response=await fetch('./api/import?name='+encodeURIComponent(importFile.name)+'&kind='+assetKind,{method:'POST',body:importFile});
+        const result=await response.json();
+        if(!response.ok)throw Error(result.error);
+        recordFile(result.edit);newSource=result.path;importFile=null;
+        const current=await request('./api/project');assets=current.assets;art=current.art;
+      }
+      if(art[newSource]?.error)throw Error(art[newSource].error);
+      if(tagTiles){
+        if(!art[newSource]?.tags?.length)throw Error('This file has no tile tags. Clear the tag option to create one tile.');
+        addTags();
+      }else if(assetKind==='audio'){
+        (project.audio??={})[id]={source:newSource};
+      }else{
+        const collection=assetKind==='tile'?(project.tiles??={}):(project.sprites??={});
+        collection[id]={source:newSource,physics:{}};
+        if(assetKind==='tile')tileId=id;else spriteId=id;
+      }
+      addForm=false;mark();
+    }catch(err){assetError=String(err.message??err);}
+    finally{busy=false;}
   }
   function addTags(){
     const source=art[newSource];
@@ -462,16 +497,6 @@
       collection[id]={source:newSource,tag,physics:{}};
       tileId=id;
     }
-    mark();
-  }
-  function addAudio(){
-    if(!/^[a-zA-Z0-9_-]+$/.test(audioId)||['__proto__','constructor','prototype'].includes(audioId)||!audioSource){
-      error='Enter an audio ID and select an audio source.';return;
-    }
-    const registry=project.audio??={};
-    if(Object.hasOwn(registry,audioId)){error='That audio ID already exists.';return;}
-    registry[audioId]={source:audioSource};
-    audioId='';addForm=false;error='';mark();
   }
   function toggleCompression(id,enabled){
     const item=project.audio[id];
@@ -543,9 +568,9 @@
     <aside class="project card">
       <div class="heading row"><h2>Project</h2></div>
       <small class="project-path">{projectPath}</small>
-      <label class="project-filter"><Search size={14}/><input type="search" aria-label="Find rooms, sprites, and tiles" placeholder="Find in project" bind:value={filter}></label>
+      <label class="project-filter"><Search size={14}/><input type="search" aria-label="Find rooms, sprites, and tiles" placeholder="Find…" bind:value={filter}></label>
       <div class="category">
-        <div class="heading row"><h3>Rooms</h3><button class="small-button" title="New room" aria-label="New room" aria-expanded={addPreset} disabled={busy} onclick={()=>addPreset=!addPreset}><Plus size={14}/></button></div>
+        <div class="heading row"><h3>Rooms</h3><button class="small-button icon-button" title="New room" aria-label="New room" aria-expanded={addPreset} disabled={busy} onclick={()=>addPreset=!addPreset}><Plus size={14}/></button></div>
         {#if addPreset}<div class="presets">
           <button onclick={()=>addRoom('platformer')}>New platformer room</button>
           <button onclick={()=>addRoom('top_down')}>New top-down room</button>
@@ -557,7 +582,7 @@
         {/snippet}</PagedList>
       </div>
       <div class="category">
-        <div class="heading row"><h3>Sprite definitions</h3><button class="small-button" title="Add sprite definition" aria-label="Add sprite definition" onclick={()=>openAssets('sprite',true)}><Plus size={14}/></button></div>
+        <div class="heading row"><h3>Sprite definitions</h3><button class="small-button icon-button" title="Add sprite definition" aria-label="Add sprite definition" onclick={()=>openAssets('sprite',true)}><Plus size={14}/></button></div>
         <PagedList items={Object.keys(project.sprites??{})} label="sprites" query={filter}>{#snippet children(id)}
           <button class="item" class:selected={tab==='room' ? mapTool==='spawn' && placementSprite===id : spriteId===id && assetKind==='sprite'}
             draggable={tab==='room'} ondragstart={event=>dragDefinition(event,id)}
@@ -568,7 +593,7 @@
         {/snippet}</PagedList>
       </div>
       {#if tab!=='room'}<div class="category compact">
-        <div class="heading row"><h3>Tiles</h3><button class="small-button" title="Add tile" aria-label="Add tile" onclick={()=>openAssets('tile',true)}><Plus size={14}/></button></div>
+        <div class="heading row"><h3>Tiles</h3><button class="small-button icon-button" title="Add tile" aria-label="Add tile" onclick={()=>openAssets('tile',true)}><Plus size={14}/></button></div>
         <PagedList items={Object.keys(project.tiles??{})} label="tiles" query={filter}>{#snippet children(id)}
           <button class="item" class:selected={tileId===id} onclick={()=>{tileId=id;assetKind='tile';if(tab!=='assets')openTab('room');}}>
             {#if tileArt[id]?.[0]}<img src={tileArt[id][0]} alt="">{:else}<Layers3 size={14}/>{/if}<span>{id}</span>
@@ -649,15 +674,9 @@
               {/each}
             </div>
           </div>
-          <label class="stack">Import image or sound<input type="file" accept=".ase,.aseprite,.png,.wav,.qoa,.ogg,.opus" onchange={async e=>{
-            const input=e.currentTarget,file=input.files[0];if(!file)return;
-            try{const response=await fetch('./api/import?name='+encodeURIComponent(file.name)+'&kind='+assetKind,{method:'POST',body:file});
-              if(!response.ok)throw Error((await response.json()).error);const imported=await response.json();recordFile(imported.edit);await checkAssets();newSource=imported.path;}
-            catch(err){error=err.message;}finally{input.value='';}
-          }}></label>
           <div class="row asset-bar">
-            <h3>{assetKind==='audio' ? 'Audio files' : assetKind==='tile' ? 'Tile definitions' : 'Sprite definitions'}</h3>
-            <button aria-expanded={addForm} onclick={()=>addForm=!addForm}>{addForm ? 'Cancel' : `Add ${assetKind}`}</button>
+            <h3>{addForm?'New '+assetLabel:assetKind==='audio'?'Sounds':assetKind==='tile'?'Tiles':'Sprites'}</h3>
+            {#if !addForm}<button onclick={()=>openAssets(assetKind,true)}><Plus size={16}/>New {assetLabel}…</button>{/if}
           </div>
           {#if assetKind==='tile'}
             <label class="stack">Tile size
@@ -667,19 +686,28 @@
             </label>
           {/if}
           {#if addForm}
-            <div class="row add">
-              {#if assetKind==='audio'}
-                <input bind:value={audioId} placeholder="Audio ID" aria-label="Audio ID">
-                <select bind:value={audioSource} aria-label="Audio source">{#each audioFiles as file}<option value={file}>{file}</option>{/each}</select>
-                <button onclick={addAudio}>Add</button>
-              {:else}
-                <input bind:value={newId} placeholder="Asset ID" aria-label="Asset ID">
-                <select bind:value={newSource} aria-label="Source file">{#each artFiles as file}<option value={file}>{file}</option>{/each}</select>
-                <button onclick={addAsset}>Add</button>
+            <form class="asset-create" onsubmit={e=>{e.preventDefault();createAsset();}}>
+              <label for="asset-source">Source file</label>
+              <div class="asset-source">
+                <select id="asset-source" value={newSource} onchange={e=>selectSource(e.currentTarget.value)} disabled={busy}>
+                  <option disabled value="">Choose a project file</option>
+                  {#if importFile}<option value={importFile.name}>{importFile.name}</option>{/if}
+                  {#each sources as file}<option value={file}>{file}</option>{/each}
+                </select>
+                <button type="button" disabled={busy} onclick={()=>filePicker.click()}>Browse device…</button>
+                <input hidden type="file" bind:this={filePicker} accept={assetKind==='audio'?'.wav,.qoa,.ogg,.opus':'.ase,.aseprite,.png'}
+                  onchange={e=>{const file=e.currentTarget.files[0];if(file)selectSource(file.name,file);e.currentTarget.value='';}}>
+              </div>
+              <label class="stack">{assetKind==='sprite'?'Sprite name':assetKind==='tile'?'Tile name':'Sound name'}
+                <input bind:value={newId} required disabled={busy} placeholder="Choose a source file first">
+              </label>
+              {#if assetKind==='tile'&&/\.(ase|aseprite)$/i.test(newSource)}
+                <label class="check"><input type="checkbox" bind:checked={tagTiles}>Create a tile for each Aseprite tag</label>
               {/if}
-            </div>
-            {#if assetKind==='tile' && art[newSource]?.tags?.length}<button class="extra" onclick={addTags}>Add all tags as tiles</button>{/if}
-            {#if assetKind!=='audio' && art[newSource]?.error}<p class="error">{art[newSource].error}</p>{/if}
+              {#if assetError}<p class="error" role="alert">{assetError}</p>{/if}
+              <div class="row"><button class="primary" disabled={busy||!newSource||!newId.trim()}>{tagTiles?'Create tiles':'Create '+assetLabel}</button>
+                <button type="button" disabled={busy} onclick={()=>addForm=false}>Cancel</button></div>
+            </form>
           {:else if assetKind==='audio'}
             {#each Object.entries(project.audio??{}) as [id,file]}
               {@const source=typeof file==='string'?file:file.source}
@@ -915,22 +943,19 @@
   h3{font-size:.72rem;font-weight:700;color:var(--muted);}
   .category{border-top:1px solid var(--line);padding-top:.58rem;margin-top:.65rem;}
   .category .heading{margin-bottom:.3rem;}
-  .small-button{font-size:.72rem;min-width:1.55rem;padding:.18rem .3rem;}
   .item{display:flex;align-items:center;gap:.45rem;width:100%;border-color:transparent;background:none;text-align:left;font-size:.79rem;padding:.35rem .35rem;}
   .item.selected{background:#352e3e;border-color:#62536b;}
   .item small{margin-left:auto;font-size:.66rem;}
-  .item i,.item img{width:12px;height:12px;object-fit:contain;image-rendering:pixelated;flex-shrink:0;}
+  .item img{width:12px;height:12px;object-fit:contain;image-rendering:pixelated;flex-shrink:0;}
   nav{margin-bottom:.4rem;border-bottom:1px solid var(--line);gap:1px;}
   nav button{background:none;border-color:transparent;font-size:.8rem;}
   nav .active{color:var(--accent);border-bottom:2px solid var(--accent);background:var(--panel);}
   .panel-tabs{border-bottom:1px solid var(--line);padding-bottom:.45rem;margin-bottom:.45rem;}
-  .panel-tabs button,.layer-actions button{font-size:.73rem;padding:.3rem .35rem;}
   .layer-actions,.remove,.crop-note{margin-top:.55rem;}
   .crop-note{font-size:.75rem;color:var(--accent);margin-bottom:.35rem;}
   .presets{display:grid;gap:.25rem;margin-bottom:.45rem;}
-  .presets button{font-size:.75rem;text-align:left;padding:.35rem;}
+  .presets button{text-align:left;}
   .export-menu{position:relative;}
-  .export-menu summary{padding:.42rem .62rem;border:1px solid var(--line);border-radius:7px;cursor:pointer;}
   .export-menu>div{position:absolute;left:0;top:calc(100% + 6px);z-index:5;display:grid;min-width:11rem;padding:.3rem;}
   .export-menu a{padding:.38rem .45rem;border-radius:5px;text-decoration:none;color:inherit;}
   .export-menu a:hover{background:#3b3248;color:var(--accent);}
@@ -949,6 +974,9 @@
   .asset-name{font-size:.85rem;color:var(--accent);margin-bottom:.6rem;}
   .variable input{max-width:9rem;margin-left:auto;}
   .variable{margin-top:.45rem;}
+  .asset-create{display:grid;gap:.5rem;max-width:34rem;margin-top:.65rem;}
+  .asset-create>label{font-size:var(--control-font);color:var(--muted);}
+  .asset-source{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.45rem;}
   .asset-bar{justify-content:space-between;margin-top:.65rem;}
   .instance-list{display:grid;gap:1px;}
   .instance-source{margin-top:.55rem;}
