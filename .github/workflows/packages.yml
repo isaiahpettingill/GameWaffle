@@ -16,23 +16,53 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: {node-version: 24, cache: npm}
+        with: {node-version: 24}
       - run: rustup target add wasm32-unknown-unknown
       - name: Install matching Wasm tools
         run: |
           curl -fsSL https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.105/wasm-bindgen-0.2.105-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
           cp "$RUNNER_TEMP/wasm-bindgen-0.2.105-x86_64-unknown-linux-musl/wasm-bindgen" "$HOME/.cargo/bin/"
 
-      - run: npm ci && npm run build
+      - run: npm ci --no-audit --no-fund && npm run build
       - uses: actions/upload-artifact@v4
-        with: {name: studio-assets, path: web-built, if-no-files-found: error}
+        with: {name: demo-cartridge, path: web-built/demo.waffle, if-no-files-found: error, retention-days: 1, compression-level: 0}
       - run: |
           node packaging/stage.mjs GameWaffle-Studio --android-editor
           tar czf GameWaffle-Android-Studio.tar.gz GameWaffle-Studio
       - uses: actions/upload-artifact@v4
-        with: {name: package-Android-Studio, path: GameWaffle-Android-Studio.tar.gz}
+        with: {name: package-Android-Studio, path: GameWaffle-Android-Studio.tar.gz, compression-level: 0, retention-days: 7}
+  desktop-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/native-target
+    steps:
+      - uses: actions/checkout@v4
+      - if: runner.os == 'Linux'
+        run: bash packaging/linux-deps.sh build
+      - run: cargo build --manifest-path player/Cargo.toml --features bundled,libretro --release --locked
+      - run: cargo build --manifest-path studio/Cargo.toml --release --locked
+      - name: Collect native binaries
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            ext=.exe
+            lib=main.dll
+            platform=windows-x64
+          else
+            ext=
+            lib=libmain.so
+            platform=linux-x64
+          fi
+          python packaging/core-zip.py "native-target/release/$lib" "$platform"
+          tar -czf desktop-native.tgz "GameWaffle-Libretro-$platform.zip" -C native-target/release "gamewaffle-player$ext" "gamewaffle-studio$ext"
+      - uses: actions/upload-artifact@v4
+        with: {name: 'desktop-native-${{ runner.os }}', path: desktop-native.tgz, compression-level: 0, retention-days: 1}
   desktop:
-    needs: studio
+    needs: [studio, desktop-native]
     strategy:
       fail-fast: false
       matrix:
@@ -41,29 +71,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: {node-version: 24, cache: npm}
+        with: {node-version: 24}
       - uses: actions/download-artifact@v4
-        with: {name: studio-assets, path: web-built}
+        with: {name: package-Android-Studio}
+      - uses: actions/download-artifact@v4
+        with: {name: 'desktop-native-${{ runner.os }}'}
       - if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev libdecor-0-dev libdrm-dev libgbm-dev libegl-dev libgl-dev libudev-dev libdbus-1-dev squashfs-tools
-      - run: npm ci
-      - run: cargo build --manifest-path player/Cargo.toml --features bundled --release --locked
-      - run: cargo build --release --locked --manifest-path studio/Cargo.toml
-      - run: node packaging/stage.mjs stage
-      - name: Build the libretro core
+        run: bash packaging/linux-deps.sh package ${{ inputs.launch_packages && '--launch' || '' }}
+      - name: Assemble Studio
         shell: bash
         run: |
-          cargo build --manifest-path player/Cargo.toml --features bundled,libretro --release --locked --lib
-          if [[ "$RUNNER_OS" == Windows ]]; then
-            lib=player/target/release/main.dll
-            platform=windows-x64
-          else
-            lib=player/target/release/libmain.so
-            platform=linux-x64
-          fi
-          python packaging/core-zip.py "$lib" "$platform"
+          mkdir stage
+          tar -xzf GameWaffle-Android-Studio.tar.gz -C stage --strip-components=1
+          tar -xzf desktop-native.tgz -C stage
+          mv stage/GameWaffle-Libretro-*.zip .
+          node packaging/stage.mjs stage --desktop-only
       - name: Stage standalone runtime
         shell: bash
         run: |
@@ -78,7 +100,7 @@ jobs:
           curl -fsSL https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage -o tool
           chmod +x tool
           ARCH=x86_64 ./tool --appimage-extract-and-run stage GameWaffle-x86_64.AppImage
-          SDL_VIDEO_DRIVER=dummy SDL_AUDIO_DRIVER=dummy ./GameWaffle-x86_64.AppImage --appimage-extract-and-run --player --verify web-built/demo.waffle
+          SDL_VIDEO_DRIVER=dummy SDL_AUDIO_DRIVER=dummy ./GameWaffle-x86_64.AppImage --appimage-extract-and-run --player --verify stage/web-built/demo.waffle
       - if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -107,7 +129,6 @@ jobs:
       - name: Launch the Linux Studio AppImage
         if: runner.os == 'Linux' && inputs.launch_packages
         run: |
-          sudo apt-get install -y xvfb xdotool
           xvfb-run -a bash -ec '
             ./GameWaffle-x86_64.AppImage --appimage-extract-and-run &
             pid=$!
@@ -117,27 +138,60 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: package-${{ runner.os }}
+          retention-days: 7
           if-no-files-found: error
           path: |
             GameWaffle-Libretro-*.zip
             GameWaffle-Player-*
             GameWaffle-Setup.exe
             GameWaffle-x86_64.AppImage
+  android-native:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {abi: arm64-v8a, target: aarch64-linux-android}
+          - {abi: x86_64, target: x86_64-linux-android}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build one Android architecture
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          if [[ ! -d "$ANDROID_NDK_HOME/toolchains/llvm" ]]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018"
+          fi
+          rustup target add "${{ matrix.target }}"
+          export SDL_SOURCE="$RUNNER_TEMP/SDL"
+          git clone --depth 1 --branch release-3.4.2 https://github.com/libsdl-org/SDL.git "$SDL_SOURCE"
+          BUILD_LIBRETRO=1 bash player/android/build-native.sh "${{ matrix.abi }}"
+          tar -czf native-${{ matrix.abi }}.tgz web-built/android/build/lib/${{ matrix.abi }} GameWaffle-Libretro-android-${{ matrix.abi }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.abi }}
+          path: native-${{ matrix.abi }}.tgz
+          compression-level: 0
+          retention-days: 1
   android:
-    needs: studio
+    needs: [studio, android-native]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: 21}
       - uses: actions/download-artifact@v4
-        with: {name: studio-assets, path: web-built}
-      - uses: android-actions/setup-android@v3
-        with: {packages: platform-tools, log-accepted-android-sdk-licenses: false}
-      - run: |
-          sdkmanager "ndk;27.2.12479018" "platforms;android-35" "build-tools;35.0.0"
-          rustup target add aarch64-linux-android x86_64-linux-android
-          git clone --depth 1 --branch release-3.4.2 https://github.com/libsdl-org/SDL.git "$RUNNER_TEMP/SDL"
+        with: {name: demo-cartridge, path: web-built}
+      - uses: actions/download-artifact@v4
+        with: {pattern: native-*, merge-multiple: true}
+      - name: Prepare APK inputs
+        run: |
+          for abi in arm64-v8a x86_64; do tar -xzf "native-$abi.tgz"; done
+          packages=()
+          [[ -f "$ANDROID_HOME/platforms/android-35/android.jar" ]] || packages+=("platforms;android-35")
+          [[ -x "$ANDROID_HOME/build-tools/35.0.0/aapt2" ]] || packages+=("build-tools;35.0.0")
+          if (( ${#packages[@]} )); then "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "${packages[@]}"; fi
+          git clone --depth 1 --filter=blob:none --sparse --branch release-3.4.2 https://github.com/libsdl-org/SDL.git "$RUNNER_TEMP/SDL"
+          git -C "$RUNNER_TEMP/SDL" sparse-checkout set android-project/app/src/main/java
       - name: Build and verify APK
         env:
           SIGNING: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.ANDROID_SIGNING || '' }}
@@ -157,7 +211,12 @@ jobs:
           export ANDROID_BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
           export RELEASE_VERSION_CODE="$GITHUB_RUN_NUMBER" RELEASE_VERSION_NAME="${GITHUB_REF_NAME#v}"
           export SDL_SOURCE="$RUNNER_TEMP/SDL"
-          BUILD_LIBRETRO=1 bash player/android/build.sh web-built/demo.waffle GameWaffle-Player.apk
+          USE_PREBUILT_ANDROID_LIBS=1 bash player/android/build.sh web-built/demo.waffle GameWaffle-Player.apk
+      - if: inputs.launch_packages
+        run: |
+          if [[ ! -d "$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm" ]]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018"
+          fi
       - name: Enable emulator acceleration
         if: inputs.launch_packages
         run: sudo chmod a+rw /dev/kvm
@@ -171,6 +230,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: package-Android
+          compression-level: 0
+          retention-days: 7
           path: |
             GameWaffle-Player.apk
             GameWaffle-Libretro-android-*.zip
