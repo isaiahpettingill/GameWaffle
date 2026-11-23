@@ -162,5 +162,7 @@ export function mountBlocks(node, onChange, sprites) {
     }
     return {events,layout,routines,imports};
   }
-  return {load,save,dispose:()=>{observer.disconnect();workspace.dispose();}};
+  return {load,save,draft:()=>Blockly.serialization.workspaces.save(workspace),
+    restoreDraft(value){Blockly.Events.disable();try{Blockly.serialization.workspaces.load(value,workspace);}finally{Blockly.Events.enable();}},
+    dispose:()=>{observer.disconnect();workspace.dispose();}};
 }

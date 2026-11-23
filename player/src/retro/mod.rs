@@ -219,8 +219,8 @@ unsafe extern "C" fn retro_get_system_av_info(out: *mut AvInfo) {
             geometry: Geometry {
                 w,
                 h,
-                max_w: 512,
-                max_h: 512,
+                max_w: 1024,
+                max_h: 1024,
                 aspect: w as f32 / h as f32,
             },
             timing: Timing {

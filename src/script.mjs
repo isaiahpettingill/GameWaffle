@@ -7,8 +7,8 @@ export const variableName = name => typeof name === 'string' && /^[A-Za-z_][A-Za
 const commands = {constant:10, load:11, store:12, calc:13, branch:14, jump:15, wait:16};
 const buttons = ['up','down','left','right','a','b','x','menu'];
 
-export function compileScript(script,modules={}){
-  const result=compileEvents(script,modules);
+export function compileScript(script,modules={},trace){
+  const result=compileEvents(script,modules,trace);
   for(const [name,r] of Object.entries(script.routines??{})){
     const args=r.params.map(()=>0);
     const block=r.body?{op:'call',name,args}:{op:'wait',ticks:{call:name,args}};
@@ -17,7 +17,7 @@ export function compileScript(script,modules={}){
   }
   return result;
 }
-function compileEvents(script, modules) {
+function compileEvents(script, modules, trace) {
   let unit=script, parameters=new Map(), active=new Set(), current;
   function call(name,args,isFunction,run){
     const parts=name.split('.');
@@ -62,7 +62,10 @@ function compileEvents(script, modules) {
       return index;
     };
     const word = n => [n & 255,n >>> 8];
-    const emit = (op,...operands) => bytes.push(op,...operands);
+    const emit = (op,...operands) => {
+      if(trace)trace(event,op,current);
+      bytes.push(op,...operands);
+    };
     const patch = (offset,target) => { [bytes[offset],bytes[offset+1]] = word(target); };
     function enter(depth) {
       if (++nodes > 2048 || depth > 32 || bytes.length > 60000) throw Error('Script is too large or too deeply nested');

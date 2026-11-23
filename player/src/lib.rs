@@ -282,6 +282,7 @@ fn draw<T: sdl3::render::RenderTarget>(
     view: [u32; 4],
     rectangles: &mut Vec<FRect>,
     ripple_target: Option<&mut Texture<'_>>,
+    hd_target: Option<&mut Texture<'_>>,
 ) -> Result<(), Error> {
     let [_, _, w, h] = view;
     let room = &game.media.rooms[snapshot.room];
@@ -331,6 +332,33 @@ fn draw<T: sdl3::render::RenderTarget>(
             }
             canvas.copy(atlas, rect, FRect::new(0., 0., w as f32, h as f32))?;
         }
+    }
+    if let Some(texture) = hd_target {
+        let raw = canvas.read_pixels(sdl3::rect::Rect::new(0, 0, w, h))?;
+        let surface = if raw.pixel_format() == PixelFormat::RGBA32 {
+            raw
+        } else {
+            raw.convert_format(PixelFormat::RGBA32)?
+        };
+        surface.with_lock(|pixels| {
+            texture.with_lock(None, |out, stride| {
+                gamewaffle_runtime::hd::scale(
+                    pixels,
+                    w as usize,
+                    h as usize,
+                    surface.pitch() as usize,
+                    room.hd.unwrap_or(0),
+                    out,
+                    stride,
+                )
+            })
+        })?;
+        canvas.copy(
+            texture,
+            None,
+            FRect::new(0., 0., (w * 2) as f32, (h * 2) as f32),
+        )?;
+        canvas.set_scale(2., 2.)?;
     }
     if let Some(font) = source.rect("ui/font") {
         let text = |canvas: &mut Canvas<T>, line: &str, mut x: f32, y: f32| -> Result<(), Error> {
@@ -388,6 +416,9 @@ fn draw<T: sdl3::render::RenderTarget>(
                 y += 8.;
             }
         }
+    }
+    if room.hd.unwrap_or(0) > 0 {
+        canvas.set_scale(1., 1.)?;
     }
     Ok(())
 }
@@ -476,6 +507,7 @@ pub fn run_network(
     let mut texture = None;
     let mut frame_texture = None;
     let mut ripple_texture = None;
+    let mut hd_texture = None;
     let mut frame_dimensions = [0, 0];
     let mut atlas_id = String::new();
     let mut touch = cfg!(target_os = "android");
@@ -824,13 +856,26 @@ pub fn run_network(
                 [160., 112.],
             );
         }
-        let dimensions = [view[2], view[3]];
-        if frame_dimensions != dimensions {
+        let hd = game
+            .as_ref()
+            .is_some_and(|g| g.media.rooms[g.runtime.room()].hd.unwrap_or(0) > 0);
+        let scale = if hd { 2 } else { 1 };
+        let dimensions = [view[2] * scale, view[3] * scale];
+        if frame_dimensions != dimensions || hd_texture.is_some() != hd {
             let mut target =
-                creator.create_texture_target(PixelFormat::RGBA32, view[2], view[3])?;
+                creator.create_texture_target(PixelFormat::RGBA32, dimensions[0], dimensions[1])?;
             target.set_scale_mode(sdl3::render::ScaleMode::Nearest);
             frame_texture = Some(target);
             frame_dimensions = dimensions;
+            hd_texture = if hd {
+                Some(creator.create_texture_streaming(
+                    PixelFormat::RGBA32,
+                    dimensions[0],
+                    dimensions[1],
+                )?)
+            } else {
+                None
+            };
             ripple_texture = None;
         }
         let snapshot = game.as_ref().map(|game| game.runtime.view());
@@ -857,6 +902,7 @@ pub fn run_network(
                         view,
                         &mut particle_rects,
                         ripple_texture.as_mut(),
+                        hd_texture.as_mut(),
                     )?;
                 } else {
                     canvas.set_draw_color(Color::RGB(24, 24, 34));

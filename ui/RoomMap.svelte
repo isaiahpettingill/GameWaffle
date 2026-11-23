@@ -391,12 +391,6 @@ import { tick } from 'svelte';
 
   function keydown(event) {
     if (event.target.matches?.('input,select,textarea') || event.target.isContentEditable || busy || gesture) return;
-    if ((event.ctrlKey || event.metaKey) && ['z','y'].includes(event.key.toLowerCase())) {
-      event.preventDefault();
-      if (event.shiftKey || event.key.toLowerCase() === 'y') onRedo();
-      else onUndo();
-      return;
-    }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.code === 'Space' && !event.target.closest?.('button,a')) {
       space = true;

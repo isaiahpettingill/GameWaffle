@@ -6,7 +6,14 @@
   import { effects, platformGravity, roomBorder } from '../src/schema.mjs';
   import Sections from './Sections.svelte';
   import World from './World.svelte';
+  import {draftFile} from './recovery.js';
   import { onMount } from 'svelte';
+  import Debugger from './Debugger.svelte';
+  let debugging=$state(false);
+  async function debugRoom(){
+    if(scriptDirty){error='Save the current script first.';return;}
+    if(!dirty||await saveProject())debugging=true;
+  }
   import ScriptPanel from './ScriptPanel.svelte';
   import Physics from './Physics.svelte';
   import { tileSizes, variableName } from '../src/script.mjs';
@@ -20,7 +27,10 @@
     newSource=$state(''), audioId=$state(''), audioSource=$state('');
   let tileArt=$state.raw({}), spriteArt=$state.raw({}), previewModes=$state.raw({});
   let historyVersion=$state(0), selectedEntity=$state(-1), roomPanel=$state('layers'), addPreset=$state(false);
-  let savedRooms={}, dirtyOutsideRoom=false, history=new Map(), previewUrls=[];
+  let savedProject='', currentProject='', previewUrls=[];
+  const undo=[],redo=[];
+  const draft=draftFile('project',message=>error=message);
+  let recovery=$state.raw(null);
   let dimensions=$state(null);
   let placementSprite=$state(''), mapTool=$state('paint'), addForm=$state(false);
   let revision=-1, checking=false;
@@ -44,8 +54,7 @@
   }
   const historyStatus=$derived.by(()=>{
     const revision=historyVersion;
-    const edits=history.get(roomId);
-    return { revision, canUndo:Boolean(edits?.undo.length), canRedo:Boolean(edits?.redo.length) };
+    return { revision, canUndo:undo.length>0, canRedo:redo.length>0 };
   });
   const sortedLayers=$derived((room?.layers ?? []).map((layer,index)=>({layer,index,order:layer.order??index}))
     .sort((a,b)=>b.order-a.order || b.index-a.index));
@@ -108,7 +117,9 @@
         map.entities.forEach((entity,index)=>{entity.name=names[index];});
       }
       project=value.project; assets=value.assets; art=value.art; revision=value.revision;
-      savedRooms=JSON.stringify(value.project.rooms);
+      currentProject=savedProject=JSON.stringify(value.project);
+      recovery=await draft.read();
+      if(recovery===savedProject){recovery=null;await draft.write(null);}
       audioSource=assets.find(file=>/\.(wav|ogg|oga|opus|qoa)$/i.test(file)) ?? '';
       roomId=project.start ?? Object.keys(project.rooms)[0];
       spriteId=Object.keys(project.sprites ?? {})[0] ?? '';
@@ -142,46 +153,62 @@
     }catch(err){sourceError=err.message;}finally{checking=false;}
   }
   function mark(){
-    dirtyOutsideRoom=true;
     updateDirty();
   }
-  function updateDirty(){
-    dirty=dirtyOutsideRoom || JSON.stringify(project.rooms)!==savedRooms;
-    status=dirty ? 'Unsaved project' : 'Ready';
+  function updateDirty(record=true){
+    const next=JSON.stringify(project);
+    if(record && next!==currentProject){
+      undo.push(currentProject);
+      if(undo.length>50)undo.shift();
+      redo.length=0;
+    }
+    currentProject=next;historyVersion++;
+    dirty=next!==savedProject;
+    status=dirty?'Unsaved project':'Ready';
+    draft.write(dirty?next:null);
   }
   function replaceRoom(next){
     if(busy)return;
-    const before=JSON.stringify(room);
-    const after=JSON.stringify(next);
-    if(before===after)return;
-    const edits=history.get(roomId)??{undo:[],redo:[]};
-    edits.undo.push(before);
-    if(edits.undo.length>50)edits.undo.shift();
-    edits.redo.length=0;
-    history.set(roomId,edits);
-    applyRoom(after);
-  }
-  function applyRoom(serialized){
-    project.rooms[roomId]=JSON.parse(serialized);
-    layerIndex=Math.min(layerIndex,project.rooms[roomId].layers.length-1);
-    if(selectedEntity>=project.rooms[roomId].entities.length)selectedEntity=-1;
+    project.rooms[roomId]=next;
     dimensions=null;
-    historyVersion+=1;
     updateDirty();
+  }
+  function applyProject(serialized,record){
+    project=JSON.parse(serialized);
+    if(!project.rooms[roomId])roomId=project.start??Object.keys(project.rooms)[0];
+    if(!project.sprites?.[spriteId])spriteId=Object.keys(project.sprites??{})[0]??'';
+    if(!project.tiles?.[tileId])tileId=Object.keys(project.tiles??{})[0]??'';
+    layerIndex=chooseInitialLayer(project.rooms[roomId]);
+    placementSprite=spriteId;selectedEntity=-1;dimensions=null;
+    updateDirty(record);
   }
   function editRoom(change){
     const next=JSON.parse(JSON.stringify(room));
     change(next);
     replaceRoom(next);
   }
-  function restoreRoom(back){
-    if(busy)return;
-    const edits=history.get(roomId);
-    const active=back ? edits?.undo : edits?.redo;
-    if(!active?.length)return;
-    (back ? edits.redo : edits.undo).push(JSON.stringify(room));
-    selectedEntity=-1;
-    applyRoom(active.pop());
+  function recordFile(id){
+    if(!id)return;
+    undo.push({id});if(undo.length>50)undo.shift();redo.length=0;historyVersion++;
+  }
+  let scriptVersion=$state(0);
+  async function restoreRoom(back){
+    if(busy||scriptDirty)return;
+    const active=back?undo:redo;
+    if(!active.length)return;
+    const entry=active.at(-1);
+    if(typeof entry==='object'){
+      busy=true;error='';
+      try{
+        await request('./api/file-history','POST',{id:entry.id,back});
+        active.pop();(back?redo:undo).push(entry);historyVersion++;scriptVersion++;
+        const latest=await request('./api/project');
+        assets=latest.assets;art=latest.art;revision=latest.revision;await updatePreviews();
+      }catch(e){error=e.message;}finally{busy=false;}
+      return;
+    }
+    (back?redo:undo).push(currentProject);
+    applyProject(active.pop(),false);
   }
   function setRoom(key,value){
     editRoom(next=>{if(value==='')delete next[key];else next[key]=value;});
@@ -328,15 +355,20 @@
       await request('./api/project','PUT',JSON.parse(saved));
       await updatePreviews();
       revision=(await request('./api/status')).revision;
-      savedRooms=JSON.stringify(JSON.parse(saved).rooms);
-      dirtyOutsideRoom=JSON.stringify(project)!==saved && dirtyOutsideRoom;
+      savedProject=saved;
       updateDirty();
       if(!dirty)status='Project saved';
       return !dirty;
     }catch(err){error=err.message;return false;}finally{busy=false;}
   }
   async function saveScript(id){
-    if(!project.sprites[id].script) project.sprites[id].script=`scripts/sprites/${id}.cbor`;
+    if(!project.sprites[id].script){
+      const path=`scripts/sprites/${id}.cbor`;
+      project.sprites[id].script=path;
+      const baseline=JSON.parse(savedProject);
+      if(baseline.sprites[id])baseline.sprites[id].script=path;
+      savedProject=JSON.stringify(baseline);updateDirty(false);
+    }
     await updatePreviews();
     revision=(await request('./api/status')).revision;
     status='Script saved';
@@ -356,6 +388,9 @@
     if(menu && (!menu.contains(event.target) || event.target.closest('button,a')))menu.open=false;
   }
   function saveShortcut(event){
+    if((event.ctrlKey||event.metaKey)&&!event.target.closest('input,textarea,select,[contenteditable=true],.blocklySvg')&&tab!=='blocks'&&['z','y'].includes(event.key.toLowerCase())&&!event.defaultPrevented){
+      event.preventDefault();restoreRoom(event.key.toLowerCase()==='z'&&!event.shiftKey);return;
+    }
     if(event.key==='Escape'){
       const menu=document.querySelector('details.export-menu[open]');
       if(menu){menu.open=false;menu.querySelector('summary').focus();event.preventDefault();return;}
@@ -469,10 +504,11 @@
       </div>
     </details>
     <details name="studio-menu" class="export-menu"><summary>Edit</summary><div class="card">
-      <button disabled={!historyStatus.canUndo} onclick={()=>restoreRoom(true)}>Undo room edit</button>
-      <button disabled={!historyStatus.canRedo} onclick={()=>restoreRoom(false)}>Redo room edit</button>
+      <button disabled={scriptDirty||!historyStatus.canUndo} onclick={()=>restoreRoom(true)}>Undo project edit</button>
+      <button disabled={scriptDirty||!historyStatus.canRedo} onclick={()=>restoreRoom(false)}>Redo project edit</button>
     </div></details>
     <details name="studio-menu" class="export-menu"><summary>Tools</summary><div class="card">
+      <button onclick={debugRoom} disabled={busy||!project}>Debug room</button>
       <button onclick={rebuild} disabled={busy||!project}>Rebuild assets</button>
         <button onclick={()=>{updatesOpen=!updatesOpen;release=null;}}>Updates</button>
     </div></details>
@@ -490,7 +526,13 @@
   </section>
 {/if}
 {#if error || sourceError}<p role="alert" class="error banner">{error || sourceError}</p>{/if}
-{#if project}
+{#if debugging}<Debugger room={roomId} onClose={()=>debugging=false}/>
+{:else if recovery}
+  <section class="row card" role="alert"><strong>Unsaved project edits</strong>
+    <button onclick={()=>{applyProject(recovery,true);recovery=null;}}>Recover edits</button>
+    <button onclick={()=>{recovery=null;draft.write(null);}}>Discard draft</button>
+  </section>
+{:else if project}
   <div class="mobile-tabs"><Sections labels={['Editor','Project','Settings']} bind:value={mobilePane}/></div>
   <main class:wide={tab==='game'||tab==='world'||(tab==='assets'&&assetKind==='audio')} data-pane={mobilePane}>
     <aside class="project card">
@@ -544,7 +586,7 @@
         {/key}
       {:else if tab==='blocks'}
         {#if spriteId}
-          {#key spriteId}<ScriptPanel sprite={spriteId} sprites={Object.keys(project.sprites??{})} bind:dirty={scriptDirty} onSave={saveScript} />{/key}
+          {#key spriteId+':'+scriptVersion}<ScriptPanel onFileEdit={recordFile} sprite={spriteId} sprites={Object.keys(project.sprites??{})} bind:dirty={scriptDirty} onSave={saveScript} />{/key}
         {:else}<p class="empty card">Add a sprite in Assets to give it behavior.</p>{/if}
       {:else if tab==='game'}
         <section class="card asseteditor">
@@ -603,7 +645,7 @@
           <label class="stack">Import image or sound<input type="file" accept=".ase,.aseprite,.png,.wav,.qoa,.ogg,.opus" onchange={async e=>{
             const input=e.currentTarget,file=input.files[0];if(!file)return;
             try{const response=await fetch('./api/import?name='+encodeURIComponent(file.name)+'&kind='+assetKind,{method:'POST',body:file});
-              if(!response.ok)throw Error((await response.json()).error);const imported=await response.json();await checkAssets();newSource=imported.path;}
+              if(!response.ok)throw Error((await response.json()).error);const imported=await response.json();recordFile(imported.edit);await checkAssets();newSource=imported.path;}
             catch(err){error=err.message;}finally{input.value='';}
           }}></label>
           <div class="row asset-bar">
@@ -740,7 +782,7 @@
               <option value="none">None</option>{#each Object.entries(roomShaders) as [value,label]}<option {value}>{label}</option>{/each}
             </select></label>
             {#if room.shader && room.shader.kind!=='none'}
-              {#if room.shader.kind!=='ripple'}<label class="stack">Color<input type="color" value={room.shader.color??'#000000'} onchange={e=>setRoom('shader',{...room.shader,color:e.currentTarget.value})}></label>{/if}
+              {#if !['ripple','hd'].includes(room.shader.kind)}<label class="stack">Color<input type="color" value={room.shader.color??'#000000'} onchange={e=>setRoom('shader',{...room.shader,color:e.currentTarget.value})}></label>{/if}
               <label class="stack">Strength ({room.shader.strength??35}%)<input type="range" min="0" max="100" value={room.shader.strength??35} onchange={e=>setRoom('shader',{...room.shader,strength:e.currentTarget.valueAsNumber})}></label>
               {#if ['scanlines','grid'].includes(room.shader.kind)}
                 <label class="stack">Spacing ({room.shader.spacing??3} px)<input type="range" min="2" max="12" value={room.shader.spacing??3} onchange={e=>setRoom('shader',{...room.shader,spacing:e.currentTarget.valueAsNumber})}></label>

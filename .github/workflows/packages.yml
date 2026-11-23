@@ -3,6 +3,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      launch_packages:
+        description: Launch the installed desktop apps and the Android emulator
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -79,6 +84,36 @@ jobs:
         run: |
           & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" packaging\windows.nsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Launch the installed Windows apps
+        if: runner.os == 'Windows' && inputs.launch_packages
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP gw-installed
+          $install = Start-Process -Wait -PassThru .\GameWaffle-Setup.exe -ArgumentList "/S", "/D=$target"
+          if ($install.ExitCode) { throw "Installer failed" }
+          $studio = Start-Process -PassThru "$target\gamewaffle-studio.exe"
+          try {
+            $deadline = (Get-Date).AddSeconds(45)
+            while (!$studio.HasExited -and !$studio.MainWindowHandle -and (Get-Date) -lt $deadline) {
+              Start-Sleep -Milliseconds 500
+              $studio.Refresh()
+            }
+            if (!$studio.MainWindowHandle) { throw "Studio did not open a window" }
+          } finally { if (!$studio.HasExited) { Stop-Process -Id $studio.Id } }
+          $env:SDL_VIDEO_DRIVER = "dummy"
+          $env:SDL_AUDIO_DRIVER = "dummy"
+          & "$target\gamewaffle-player.exe" --verify "$target\web-built\demo.waffle"
+          if ($LASTEXITCODE) { throw "Installed player failed" }
+      - name: Launch the Linux Studio AppImage
+        if: runner.os == 'Linux' && inputs.launch_packages
+        run: |
+          sudo apt-get install -y xvfb xdotool
+          xvfb-run -a bash -ec '
+            ./GameWaffle-x86_64.AppImage --appimage-extract-and-run &
+            pid=$!
+            trap "kill $pid 2>/dev/null || true" EXIT
+            timeout 45 xdotool search --sync --onlyvisible --name "GameWaffle Studio"
+          '
       - uses: actions/upload-artifact@v4
         with:
           name: package-${{ runner.os }}
@@ -123,6 +158,16 @@ jobs:
           export RELEASE_VERSION_CODE="$GITHUB_RUN_NUMBER" RELEASE_VERSION_NAME="${GITHUB_REF_NAME#v}"
           export SDL_SOURCE="$RUNNER_TEMP/SDL"
           BUILD_LIBRETRO=1 bash player/android/build.sh web-built/demo.waffle GameWaffle-Player.apk
+      - name: Enable emulator acceleration
+        if: inputs.launch_packages
+        run: sudo chmod a+rw /dev/kvm
+      - name: Launch the Android APK and core
+        if: inputs.launch_packages
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          script: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018" ANDROID_NDK_LATEST_HOME="$ANDROID_HOME/ndk/27.2.12479018" bash packaging/check-android.sh
       - uses: actions/upload-artifact@v4
         with:
           name: package-Android

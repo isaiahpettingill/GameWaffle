@@ -69,6 +69,7 @@ Open the room inspector. Select **Room → Shader**. Select a preset, then set i
 | Scanlines or LCD grid | Color, strength, and spacing in game pixels |
 | Vignette | Edge color, strength, and clear radius |
 | Water ripple | Strength, wavelength in game pixels, and speed in cycles per second |
+| HD pixel smoothing | Edge blend strength at 2× output |
 
 The player applies the effect to the room, sprites, and particles before it draws the HUD. Each room can use one preset. Select **None** to clear the effect.
 
@@ -272,3 +273,21 @@ executable. Run `npm run check:editor`.
 
 GitHub builds packages when you start the workflow manually or push a version
 tag such as v2.0.0. A version tag also publishes a release.
+
+## Recover an edit
+
+Studio writes a recovery file when you change the project, a block workspace, or a text script. Open the same project path after a restart. Select **Recover edits** or **Discard draft** for a project draft. Open the same sprite or module to recover its script. Select **Save script** to keep it. A draft can contain incomplete text or disconnected blocks.
+
+Use **Edit → Undo project edit** or **Redo project edit** for room edits, game settings, asset definitions, file imports, and saved script or module changes. Studio keeps the last 50 project edits in the current session. Blockly and the text editor have their own edit histories.
+
+## Debug a room
+
+Select **Tools → Debug room**. Studio starts a separate simulation and pauses before its first script instruction. Select **Step instruction** to execute one register instruction. Select **Continue** to run the game. Click the game display to send keyboard input.
+
+To set a breakpoint, enter the event name and its instruction number. Use actor 0 to match any instance, or enter one instance ID. Select **Set breakpoint**, then **Continue**. The inspector shows the active script, local variables, global variables, and set flags. For a block script, the displayed line refers to its WaffleScript text form.
+
+## HD pixel smoothing
+
+Select **HD pixel smoothing** in the room shader tab. The player draws the scene at twice the width and height. **Strength** controls the blend across diagonal edges. The HUD keeps sharp pixels. The logical viewport, collisions, and input coordinates use the original resolution.
+
+This preset uses the contrast-sensitive edge reconstruction used by Lemuroid's HD shader family as a design reference. GameWaffle uses its own fixed 2× Rust filter. See the [Lemuroid shader selection](https://github.com/Swordfish90/Lemuroid/blob/3625bc121d5d79fd4b80ce930fb0f3236c9334e8/lemuroid-app/src/main/java/com/swordfish/lemuroid/app/shared/game/ShaderChooser.kt) and the [LibretroDroid CUT shaders](https://github.com/Swordfish90/LibretroDroid/blob/8835c3098514390a271e36983957f7bb5f40abf1/libretrodroid/src/main/cpp/shadermanager.cpp).
