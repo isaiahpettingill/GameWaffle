@@ -4,3 +4,4 @@ web-built/
 *.waffle
 
 player/target/
+studio/target/

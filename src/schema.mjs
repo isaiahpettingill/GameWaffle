@@ -30,3 +30,5 @@ export const Opcodes = Object.freeze({
   walk:0, jump:1, damage:2, fire:3, chase:4, sound:5, velocity:6, animate:7, room:8, spawn:9, give:18, take:19, say:20, counter:21, hide:22, follow:23, camera:24, release_camera:25, remove_self:26, burst:27, emit:28, stop_fx:29,
 });
 export const buttons = ['up','down','left','right','a','b','x','menu'];
+
+export const readings=['id','x','y','vx','vy','health','grounded','player','other','damage','other_player'];

@@ -86,6 +86,7 @@ pub struct Program {
 }
 
 pub struct Machine {
+    payload: [i64; 2],
     program: Rc<Program>,
     registers: Vec<Integer>,
     real_registers: [Option<f32>; REGISTERS],
@@ -153,9 +154,10 @@ impl Program {
                     b'k' => index < raw.k.len(),
                     b'f' => index < raw.f.len(),
                     b'N' => index < raw.n.len(),
+                    b'n' if opcode == 11 && args[1] == 5 => index < 11,
                     b'n' if opcode == 11 && args[1] == 3 => index < 8,
                     b'n' => index < raw.n.len(),
-                    b's' => index < if opcode == 11 { 5 } else { 3 },
+                    b's' => index < if opcode == 11 { 6 } else { 3 },
                     b'o' => index < 11,
                     _ => true,
                 };
@@ -235,8 +237,9 @@ impl Program {
 }
 
 impl Machine {
-    pub fn new(program: Rc<Program>) -> Self {
+    pub fn new(program: Rc<Program>, payload: [i64; 2]) -> Self {
         Self {
+            payload,
             registers: vec![Integer::default(); program.registers],
             real_registers: [None; REGISTERS],
             program,
@@ -311,6 +314,26 @@ fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'
                 input.menu,
             ][key as usize],
         ))
+    } else if scope == 5 {
+        let a = &cx.runtime.actors[&cx.id];
+        Integer::from(match key {
+            0 => i64::from(cx.id),
+            1 => a.p.x.round() as i64,
+            2 => a.p.y.round() as i64,
+            3 => a.v.x.round() as i64,
+            4 => a.v.y.round() as i64,
+            5 => a.health.round() as i64,
+            6 => i64::from(cx.runtime.grounded(cx.id)),
+            7 => a.player.map_or(0, |p| p as i64 + 1),
+            8 => m.payload[0],
+            9 => m.payload[1],
+            _ => cx
+                .runtime
+                .actors
+                .get(&(m.payload[0] as u32))
+                .and_then(|a| a.player)
+                .map_or(0, |p| p as i64 + 1),
+        })
     } else if scope == 4 {
         Integer::from(i64::from(
             *cx.runtime

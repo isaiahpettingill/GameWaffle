@@ -48,3 +48,15 @@ canvas { display:block; image-rendering:pixelated; }
 .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; }
 .error { color:#ffabaa; }
 .row { display:flex; flex-wrap:wrap; align-items:center; gap:.45rem; }
+
+.studio{--bg:#1b2025;--panel:#272d32;--well:#1d2328;--line:#42494f;--muted:#b9c3c8;--accent:#e5bc72;--mint:#93ced6;background:var(--bg);color:#e4e8ea;font-family:Inter,"Segoe UI",sans-serif;}
+.studio :is(.card,button,.button,input,select,summary,.logo,.banner,nav){border-radius:1px;}
+.studio :is(button,.button):has(svg){display:inline-flex;align-items:center;justify-content:center;gap:.38em;}
+.studio svg.lucide{flex:none;stroke-width:1.7;}
+.studio .appbar{background:#23292e;}
+.studio .export-menu summary{list-style:none;background:transparent;border-color:transparent;}
+.studio .export-menu[open] summary,.studio .export-menu summary:hover{background:var(--line);}
+.studio .export-menu>div{min-width:12rem;box-shadow:0 4px 12px #0006;}
+.studio .export-menu button{text-align:left;border:0;}
+.studio .export-menu button:hover,.studio .item.selected,.studio .tools button.selected{background:#35444a;color:#c8edf0;}
+@media(max-width:880px){.studio .export-menu>div{position:fixed;left:.5rem;right:.5rem;top:auto;min-width:0;}}

@@ -14,7 +14,7 @@ npm run build
 npm start
 ```
 
-Open [GameWaffle Studio](http://localhost:4871). Select **Play game** to start the Basalt Works demo. Select **Top-down Courtyard**, then select **Play room** to try the top-down controls.
+Studio opens a Tauri window. Select **Create project**, **Open project**, or **Open Basalt Works example**. On Linux, install the WebKitGTK 4.1 and GTK 3 development packages before building Studio. Use `npm run studio:browser` for the browser edition. Select **Top-down Courtyard**, then select **Play room** to try the top-down controls.
 
 To open a different project, run this command.
 
@@ -87,7 +87,7 @@ Use integers for variable arithmetic. Use decimal constants for engine parameter
 
 ## Export a game
 
-In Studio, open **Export** and select **Standalone web game**. Studio saves the project and downloads one HTML file. The file contains the game cartridge and the WebAssembly runtime. Open it in a browser or put it on a static web server. The game can run offline. On Android, use a browser that supports WebAssembly and use the touch controls.
+In Studio, open **File** and select **Standalone web game**. Studio saves the project and downloads one HTML file. The file contains the game cartridge and the WebAssembly runtime. Open it in a browser or put it on a static web server. The game can run offline. On Android, use a browser that supports WebAssembly and use the touch controls.
 
 Select **Cartridge** to download only the `.waffle` file. To play this file, select **Open cartridge** in the player.
 
@@ -103,7 +103,7 @@ npm run export:web -- path/to/game.waffle path/to/game.html
 
 ### Web
 
-In Studio, select **Export → Web player** to get a separate copy. Run `npm run build:player` to build only the web player. Open `web-built/standalone/gamewaffle-player.html` in a browser. Select **Open cartridge**. The player can run offline.
+In Studio, select **File → Web player** to get a separate copy. Run `npm run build:player` to build only the web player. Open `web-built/standalone/gamewaffle-player.html` in a browser. Select **Open cartridge**. The player can run offline.
 
 ### Desktop
 
@@ -148,7 +148,7 @@ Connect standard-mapped gamepads or use the keyboard. The players support four l
 To play on a local network with the web player, start a host.
 
 ```sh
-npm start -- --cart path/to/game.waffle --lan
+npm run studio:browser -- --cart path/to/game.waffle --lan
 ```
 
 On each device, open `http://HOST_IP:4871/player.html`. Select the number of players on that device. Then select **Join LAN**. All devices share the same room. The host assigns a total of four player slots.
@@ -165,13 +165,13 @@ The Box2D Rust port uses its [upstream license](runtime/vendor/box2d-rs/LICENSE)
 
 Open a folder to work on its source files. Use **Assets → Import image or sound** to add a PNG, Aseprite file, or sound. Select **Add sprite** or **Add tile** to use the image. A PNG supplies one frame.
 
-Select **Export → Editable project** to copy the project to a single `.waffleproj` file. Studio keeps its files in a virtual filesystem. A save replaces the archive. Use this command to open an archive or a folder after you build Studio.
+Select **File → Editable project** to copy the project to a single `.waffleproj` file. Studio keeps its files in a virtual filesystem. A save replaces the archive. Use this command to open an archive or a folder after you build Studio.
 
 ```sh
 node packaging/studio.mjs path/to/game.waffleproj
 ```
 
-Select **Export → Cartridge** to distribute a game. The cartridge contains compiled instructions and room atlases. The player checks an Ed25519 signature before it runs the game. The public key travels with the cartridge. A third party can build and sign a different cartridge.
+Select **File → Cartridge** to distribute a game. The cartridge contains compiled instructions and room atlases. The player checks an Ed25519 signature before it runs the game. The public key travels with the cartridge. A third party can build and sign a different cartridge.
 
 ## Edit on Android
 
@@ -201,7 +201,7 @@ Each save includes the current room, player positions, global variables, flags, 
 
 ## Build release packages
 
-Pull requests build a Linux AppImage, a Windows NSIS installer, an Android player APK, and an Android Studio archive. Desktop packages include Studio and the SDL3 player. To start only the Linux player, use `GameWaffle-x86_64.AppImage --player`.
+Manual runs and release tags build a Linux AppImage, a Windows NSIS installer, an Android player APK, and an Android Studio archive. Desktop packages include Studio and the SDL3 player. To start only the Linux player, use `GameWaffle-x86_64.AppImage --player`.
 
 Run this command from the checkout with Bash, Python 3, the JDK, and an authenticated GitHub CLI. Use a new path. Keep the key and its password for future Android updates.
 

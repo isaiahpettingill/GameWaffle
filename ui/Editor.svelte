@@ -1,4 +1,6 @@
 <script>
+  import {Network,Grid2x2,Blocks,Images,Settings2,Play} from '@lucide/svelte';
+  const viewIcons={world:Network,room:Grid2x2,blocks:Blocks,assets:Images,game:Settings2};
   import { effects, platformGravity, roomBorder } from '../src/schema.mjs';
   import Sections from './Sections.svelte';
   import World from './World.svelte';
@@ -443,21 +445,27 @@
   </div>
   <div class="row actions">
     <span class="status" role="status">{status}</span>
-    <button onclick={rebuild} disabled={busy||!project}>Rebuild assets</button>
-    <button onclick={saveProject} disabled={!dirty||busy}>Save project</button>
-    <details class="export-menu">
-      <summary>Export</summary>
-      <div class="card">
+    <details name="studio-menu" class="export-menu"><summary>File</summary><div class="card">
+        <a href="./projects" onclick={e=>{if((dirty||scriptDirty)&&!confirm('Leave with unsaved changes?'))e.preventDefault();}}>New or open project</a>
+        <button onclick={saveProject} disabled={!dirty||busy}>Save project</button>
         <a download={exportName+'.waffleproj'} href="./api/archive" onclick={saveThenOpen}>Editable project</a>
         <a download={exportName+'.html'} href="./export.html" onclick={saveThenOpen}>Standalone web game</a>
         <a href="./api/desktop?target=linux-x64" onclick={downloadDesktop}>Linux game</a>
         <a href="./api/desktop?target=windows-x64" onclick={downloadDesktop}>Windows game</a>
-        <button onclick={()=>{updatesOpen=!updatesOpen;release=null;}}>Updates</button>
+
         <a download="gamewaffle-player.html" href="./gamewaffle-player.html">Web player</a>
         <a download={exportName+'.waffle'} href="./demo.waffle" onclick={saveThenOpen}>Cartridge</a>
       </div>
     </details>
-    <a class="button primary" href="./player.html" onclick={saveThenOpen}>Play game ↗</a>
+    <details name="studio-menu" class="export-menu"><summary>Edit</summary><div class="card">
+      <button disabled={!historyStatus.canUndo} onclick={()=>restoreRoom(true)}>Undo room edit</button>
+      <button disabled={!historyStatus.canRedo} onclick={()=>restoreRoom(false)}>Redo room edit</button>
+    </div></details>
+    <details name="studio-menu" class="export-menu"><summary>Tools</summary><div class="card">
+      <button onclick={rebuild} disabled={busy||!project}>Rebuild assets</button>
+        <button onclick={()=>{updatesOpen=!updatesOpen;release=null;}}>Updates</button>
+    </div></details>
+    <a class="button primary" href="./player.html" onclick={saveThenOpen}><Play size={14}/>Play game</a>
   </div>
 </header>
 {#if updatesOpen}
@@ -509,7 +517,7 @@
     {/if}</aside>
     <div class="work">
       <nav class="row" aria-label="Editor views">
-        {#each tabs as [id,title]}<button class:active={tab===id} onclick={()=>openTab(id)}>{title}</button>{/each}
+        {#each tabs as [id,title]}{@const Icon=viewIcons[id]}<button class:active={tab===id} onclick={()=>openTab(id)}><Icon size={15}/>{title}</button>{/each}
       </nav>
       {#if tab==='world' && room}
         <World rooms={project.rooms} flags={Object.keys(project.flags??{})} {roomId} onSelect={id=>{roomId=id;layerIndex=chooseInitialLayer(project.rooms[id]);selectedEntity=-1;}} onEdit={replaceRoom}/>
@@ -803,12 +811,12 @@
   </main>
 {/if}
 <style>
-  .appbar{display:flex;justify-content:space-between;align-items:center;gap:1rem;border-bottom:1px solid var(--line);padding:.8rem 1.1rem;}
+  .appbar{display:flex;justify-content:space-between;align-items:center;gap:1rem;border-bottom:1px solid var(--line);padding:.4rem .65rem;}
   .status{font-size:.76rem;color:var(--muted);margin-right:.35rem;}
   .banner{margin:.6rem 1.1rem 0;padding:.55rem .65rem;border:1px solid #79505d;border-radius:7px;background:#30242f;}
-  main{display:grid;grid-template-columns:minmax(155px,185px) minmax(300px,1fr) minmax(210px,255px);gap:.8rem;align-items:start;padding:.85rem 1.1rem;}
+  main{display:grid;grid-template-columns:minmax(155px,185px) minmax(300px,1fr) minmax(210px,255px);gap:1px;align-items:stretch;padding:0;background:var(--line);}
   .project,.inspector{padding:.65rem;}
-  .work{min-width:0;}
+  .work{min-width:0;background:var(--bg);padding:.45rem;}
   .heading{justify-content:space-between;margin-bottom:.55rem;}
   h2{font-size:.94rem;}
   h3{font-size:.72rem;font-weight:700;color:var(--muted);}
@@ -821,9 +829,9 @@
   .item i,.item img{width:12px;height:12px;object-fit:contain;image-rendering:pixelated;flex-shrink:0;}
   .room-icon{border:1px solid #9e9cb4;border-radius:2px;background:#514765;}
   .sprite-icon{border:1px solid #abd8bc;border-radius:50%;background:#4d6b69;}
-  nav{margin-bottom:.65rem;}
+  nav{margin-bottom:.4rem;border-bottom:1px solid var(--line);gap:1px;}
   nav button{background:none;border-color:transparent;font-size:.8rem;}
-  nav .active{color:var(--accent);border-color:#6b5769;background:#322b3c;}
+  nav .active{color:var(--accent);border-bottom:2px solid var(--accent);background:var(--panel);}
   .panel-tabs{border-bottom:1px solid var(--line);padding-bottom:.45rem;margin-bottom:.45rem;}
   .panel-tabs button,.layer-actions button{font-size:.73rem;padding:.3rem .35rem;}
   .layer-actions,.remove,.crop-note{margin-top:.55rem;}

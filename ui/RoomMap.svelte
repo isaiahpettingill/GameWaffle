@@ -1,4 +1,6 @@
 <script>
+  import {Brush,Eraser,Square,Pipette,CopyPlus,MousePointer2,Hand,Undo2,Redo2,Play,ZoomIn,ZoomOut} from '@lucide/svelte';
+  const icons={paint:Brush,erase:Eraser,rect:Square,pick:Pipette,spawn:CopyPlus,select:MousePointer2,hand:Hand};
   import { platformGravity, roomBorder } from '../src/schema.mjs';
 import { tick } from 'svelte';
   import { newInstanceName, spriteDragType } from '../src/instances.mjs';
@@ -422,14 +424,15 @@ import { tick } from 'svelte';
       <small>{room.cols} × {room.rows} tiles</small>
     </div>
     <div class="row">
-      <button aria-label="Undo room edit" title="Undo (Ctrl+Z)" disabled={!canUndo || busy} onclick={onUndo}>↶</button>
-      <button aria-label="Redo room edit" title="Redo (Ctrl+Shift+Z)" disabled={!canRedo || busy} onclick={onRedo}>↷</button>
-      <a class="button" title="Play the saved room" aria-disabled={busy} href={busy ? undefined : `./player.html?room=${encodeURIComponent(roomId)}`} target="_blank" rel="noopener" onclick={onPlay}>Play room ↗</a>
+      <button aria-label="Undo room edit" title="Undo (Ctrl+Z)" disabled={!canUndo || busy} onclick={onUndo}><Undo2 size={15}/></button>
+      <button aria-label="Redo room edit" title="Redo (Ctrl+Shift+Z)" disabled={!canRedo || busy} onclick={onRedo}><Redo2 size={15}/></button>
+      <a class="button" title="Play the saved room" aria-disabled={busy} href={busy ? undefined : `./player.html?room=${encodeURIComponent(roomId)}`} target="_blank" rel="noopener" onclick={onPlay}><Play size={14}/>Play room</a>
     </div>
   </header>
   <div class="tools row" aria-label="Map tools">
     {#each tools as [id,shortcut,label]}
-      <button class:selected={tool===id} aria-pressed={tool===id} title={`${label} (${shortcut})`} onclick={()=>chooseTool(id)}>{label}</button>
+      {@const Icon=icons[id]}
+      <button class:selected={tool===id} aria-pressed={tool===id} title={`${label} (${shortcut})`} onclick={()=>chooseTool(id)}><Icon size={15}/>{label}</button>
     {/each}
   </div>
   <div class="view-tools row">
@@ -439,9 +442,9 @@ import { tick } from 'svelte';
       {#if spriteTool}<button aria-pressed={snap} onclick={()=>snap=!snap}>Snap</button>{/if}
     </div>
     <div class="row">
-      <button aria-label="Zoom out" onclick={()=>changeZoom(scale/1.25)}>−</button>
+      <button aria-label="Zoom out" onclick={()=>changeZoom(scale/1.25)}><ZoomOut size={15}/></button>
       <button title="Fit room to view" onclick={()=>changeZoom(null)}>{zoom == null ? 'Fit' : `${Math.round(scale*100)}%`}</button>
-      <button aria-label="Zoom in" onclick={()=>changeZoom(scale*1.25)}>+</button>
+      <button aria-label="Zoom in" onclick={()=>changeZoom(scale*1.25)}><ZoomIn size={15}/></button>
     </div>
   </div>
   <div class="viewport" bind:this={viewport} bind:clientWidth={viewportWidth} bind:clientHeight={viewportHeight}>

@@ -65,7 +65,7 @@ export function mountBlocks(node, onChange, sprites) {
     toolbox:{kind:'categoryToolbox',contents:[
       {kind:'category',name:'Events',colour:41,contents:[{kind:'block',type:eventBlock}]},
       {kind:'category',name:'Routines',colour:200,contents:blocks(['proc','fn','call','function_call','param','use'])},
-      {kind:'category',name:'Logic',colour:276,contents:blocks(['set','if','while','wait','get','integer','bool','button','calc','not'])},
+      {kind:'category',name:'Logic',colour:276,contents:blocks(['set','if','while','wait','get','integer','bool','actor','button','calc','not'])},
       {kind:'category',name:'Items',colour:45,contents:blocks(['give','take','item'])},
       {kind:'category',name:'Dialogue & HUD',colour:286,contents:blocks(['say','counter','hide'])},
       {kind:'category',name:'Particles',colour:24,contents:blocks(['burst','emit','stop_fx'])},

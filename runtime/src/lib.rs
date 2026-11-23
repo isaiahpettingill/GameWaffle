@@ -620,7 +620,7 @@ impl Runtime {
             .collect();
         for (id, event) in suspended {
             if event != "tick" {
-                self.run_script(id, &event, &inputs, &mut actions, false);
+                self.run_script(id, &event, &inputs, &mut actions, false, [0; 2]);
             }
         }
         let event = if std::mem::take(&mut self.restored) {
@@ -711,8 +711,8 @@ impl Runtime {
             } else {
                 "end_contact"
             };
-            self.run(a, event, &inputs, &mut actions);
-            self.run(b, event, &inputs, &mut actions);
+            self.run_script(a, event, &inputs, &mut actions, true, [i64::from(b), 0]);
+            self.run_script(b, event, &inputs, &mut actions, true, [i64::from(a), 0]);
         }
         self.apply(&mut actions, &inputs);
         let size = self.game.rooms[&self.room].size;
@@ -728,7 +728,7 @@ impl Runtime {
     }
 
     fn run(&mut self, id: u32, event: &str, inputs: &[Input; 4], actions: &mut Vec<Action>) {
-        self.run_script(id, event, inputs, actions, true);
+        self.run_script(id, event, inputs, actions, true, [0; 2]);
     }
 
     fn run_script(
@@ -738,6 +738,7 @@ impl Runtime {
         inputs: &[Input; 4],
         actions: &mut Vec<Action>,
         start: bool,
+        payload: [i64; 2],
     ) -> bool {
         let Some(actor) = self.actors.get_mut(&id) else {
             return false;
@@ -761,7 +762,7 @@ impl Runtime {
                 return true;
             }
             Some(machine) => machine,
-            None if start => vm::Machine::new(program.clone()),
+            None if start => vm::Machine::new(program.clone(), payload),
             None => return true,
         };
         let input = actor.player.map_or(Input::default(), |slot| inputs[slot]);
@@ -1014,7 +1015,14 @@ impl Runtime {
                         amount,
                     });
                     let dead = actor.health <= 0.0;
-                    self.run(id, "damage", inputs, actions);
+                    self.run_script(
+                        id,
+                        "damage",
+                        inputs,
+                        actions,
+                        true,
+                        [i64::from(source), amount.round() as i64],
+                    );
                     if dead {
                         actions.push(Action::Remove(id));
                     }
