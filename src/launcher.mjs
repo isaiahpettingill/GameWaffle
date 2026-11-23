@@ -3,6 +3,7 @@ import {spawn} from 'node:child_process';
 import {mkdir,writeFile,cp,mkdtemp} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {homedir} from 'node:os';
+import {zipSync} from 'fflate';
 import {projectStore} from './project-store.mjs';
 
 export async function launch(port,open){
@@ -10,11 +11,16 @@ export async function launch(port,open){
   const children=new Set();
   for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>process.exit());
   process.on('exit',()=>{for(const child of children)child.kill();});
-  const page=`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>GameWaffle Studio</title>
-<style>body{background:#20202b;color:#eee;font:17px system-ui;margin:10vh auto;width:min(90%,34rem)}form{display:grid;gap:.7rem;margin:2rem 0}input,button{font:inherit;padding:.65rem;border-radius:.4rem}button{cursor:pointer}label{display:grid;gap:.4rem}</style>
-<h1>GameWaffle Studio</h1><form method="post"><label>New project name<input name="name" required></label><button name="action" value="new">Create project</button></form>
+  const page=`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GameWaffle Studio</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#1b2025;color:#e4e8ea;font:15px system-ui,sans-serif;color-scheme:dark}header{padding:.65rem 1rem;border-bottom:1px solid #42494f;background:#23292e;font-weight:650}main{max-width:37rem;margin:clamp(1rem,8vh,5rem) auto;padding:0 1rem}
+h1{font-size:1.3rem}form{display:grid;gap:.65rem;background:#272d32;border:1px solid #42494f;padding:1rem;margin-top:-1px}label{display:grid;gap:.3rem;color:#c1cbd0}button,input,select{font:inherit;color:inherit;background:#1d2328;border:1px solid #58646b;padding:.5rem;border-radius:1px}button{justify-self:start;cursor:pointer;background:#344047}button:hover,button:focus-visible{border-color:#93ced6}button[value=new]{background:#e5bc72;color:#24282a}
+</style><header>GameWaffle Studio</header><main><h1>Projects</h1><form method="post"><label>New project name<input name="name" required maxlength="80"></label>
+<label>Storage<select name="storage"><option value="folder">Project folder</option><option value="archive">Single project file (.waffleproj)</option></select></label>
+<label>First room<select name="view"><option value="platformer">Platformer</option><option value="top_down">Top-down</option></select></label>
+<button name="action" value="new">Create project</button></form>
 <form method="post"><label>Existing project folder or .waffleproj file<input name="path" required></label><button name="action" value="open">Open project</button></form>
-<form method="post"><button name="action" value="demo">Open Basalt Works example</button></form>`;
+<form method="post"><button name="action" value="demo">Open Basalt Works example</button></form></main></html>`;
   const server=createServer(async(req,res)=>{
     try{
       if(req.method==='GET'){res.setHeader('Content-Type','text/html; charset=utf-8');res.end(page);return;}
@@ -29,10 +35,17 @@ export async function launch(port,open){
         else{
           const name=form.get('name')?.trim();
           if(action!=='new'||!name||!/^[-\p{L}\p{N} _]{1,80}$/u.test(name))throw Error('Use letters, numbers, spaces, underscores, or hyphens');
-          project=join(home,name);await mkdir(project);
-          await mkdir(join(project,'assets'));await mkdir(join(project,'scripts'));
-          const room={title:'First room',cols:24,rows:16,view:'platformer',entities:[],layers:[{name:'Ground',order:0,collidable:true,cells:[]}]};
-          await writeFile(join(project,'project.json'),JSON.stringify({name,start:'room',tileSize:16,sprites:{},tiles:{},audio:{},rooms:{room}},null,2));
+          const view=form.get('view')==='top_down'?'top_down':'platformer';
+          const room={title:'First room',cols:24,rows:16,view,entities:[],layers:[{name:'Ground',order:0,collidable:true,cells:[]}]};
+          const manifest=JSON.stringify({name,start:'room',tileSize:16,sprites:{},tiles:{},audio:{},rooms:{room}},null,2);
+          if(form.get('storage')==='archive'){
+            project=join(home,name+'.waffleproj');
+            await writeFile(project,zipSync({'project.json':Buffer.from(manifest)}),{flag:'wx'});
+          }else{
+            project=join(home,name);await mkdir(project);
+            await mkdir(join(project,'assets'));await mkdir(join(project,'scripts'));
+            await writeFile(join(project,'project.json'),manifest);
+          }
         }
       }
       const url=await new Promise((ok,fail)=>{
