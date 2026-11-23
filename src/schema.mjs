@@ -1,12 +1,14 @@
 export const effects=['sparks','dust','smoke','flame','bubbles','rain','snow'];
 export const platformGravity = 16;
 export const roomBorder = (room, topDown) => room.border ?? (room.closedEdges == null ? (topDown ? 'closed' : 'sides') : room.closedEdges ? 'closed' : 'open');
-export const Events = ['start', 'restored', 'tick', 'a', 'b', 'x', 'menu', 'begin_contact', 'end_contact', 'damage', 'destroy'];
+export const Events = ['start','use_item', 'restored', 'tick', 'a', 'b', 'x', 'menu', 'begin_contact', 'end_contact', 'damage', 'destroy'];
 export const Blocks = {
   burst: ['Burst %1 with %2 particles', [['effect',effects,'sparks'],['count','number',12]]],
   emit: ['Emit %1 at %2 per second', [['effect',effects,'smoke'],['rate','number',16]]],
   stop_fx: ['Stop particle emitter', []],
   remove_self: ['Remove this instance', []],
+  use_player_item:['Use %1 for player %2',[['item','text','key'],['player','number',1]]],
+  item_icon:['Draw item %1 at X %2 Y %3',[['item','text','key'],['x','number',2],['y','number',2]]],
   bar:['Show bar %1 value %2 maximum %3',[['label','text','Health'],['value','number',1],['maximum','number',10]]],
   checkpoint:['Set checkpoint',[]],
   retry_checkpoint:['Return to checkpoint',[]],
@@ -35,7 +37,7 @@ export const Blocks = {
   spawn: ['Add instance of %1 at offset X %2 Y %3', [['sprite','text','drone'],['x','number',0],['y','number',0]]],
 };
 export const Opcodes = Object.freeze({
-  walk:0, jump:1, damage:2, fire:3, chase:4, sound:5, velocity:6, animate:7, room:8, spawn:9, give:18, take:19, say:20, counter:21, hide:22, follow:23, camera:24, release_camera:25, remove_self:26, burst:27, emit:28, stop_fx:29,group_camera:30,checkpoint:31,retry_checkpoint:32,ask:33,give_player:34,take_player:35,count_player:36,bar:37,
+  walk:0, jump:1, damage:2, fire:3, chase:4, sound:5, velocity:6, animate:7, room:8, spawn:9, give:18, take:19, say:20, counter:21, hide:22, follow:23, camera:24, release_camera:25, remove_self:26, burst:27, emit:28, stop_fx:29,group_camera:30,checkpoint:31,retry_checkpoint:32,ask:33,give_player:34,take_player:35,count_player:36,bar:37,use_player_item:38,item_icon:39,
 });
 export const buttons = ['up','down','left','right','a','b','x','menu'];
 

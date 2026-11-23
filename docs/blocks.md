@@ -19,6 +19,7 @@
 | `give_player(item, player, count)` | Give item to player player count count | 34 |
 | `group_camera()` | Follow all players | 30 |
 | `hide(label)` | Hide counter label | 22 |
+| `item_icon(item, x, y)` | Draw item item at X x Y y | 39 |
 | `jump(speed)` | Jump at speed | 1 |
 | `release_camera()` | Follow player 1 | 25 |
 | `remove_self()` | Remove this instance | 26 |
@@ -30,12 +31,13 @@
 | `stop_fx()` | Stop particle emitter | 29 |
 | `take(item, count)` | Remove item × count | 19 |
 | `take_player(item, player, count)` | Take item from player player count count | 35 |
+| `use_player_item(item, player)` | Use item for player player | 38 |
 | `velocity(x, y)` | Set velocity x x y y | 6 |
 | `walk(speed)` | Move with D-pad at speed | 0 |
 
 ## Events
 
-`start`, `restored`, `tick`, `a`, `b`, `x`, `menu`, `begin_contact`, `end_contact`, `damage`, `destroy`
+`start`, `use_item`, `restored`, `tick`, `a`, `b`, `x`, `menu`, `begin_contact`, `end_contact`, `damage`, `destroy`
 
 ## Actor readings
 

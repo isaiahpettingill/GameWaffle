@@ -90,8 +90,9 @@ The final 96 bytes contain a 32-byte Ed25519 public key and a 64-byte signature.
 See the [engine command reference](blocks.md) for commands, events, and actor readings.
 Run `node packaging/sdk-reference.mjs` after you change the schema.
 
-Set **Remember removal** on a named instance to keep it removed after a room
-change or a save. Keep the instance name stable across game updates. Set
+Select **Save instance state** to keep the position, velocity, health,
+animation, facing direction, local variables, and removal state of a named
+instance when you leave the room or save the game. Keep the instance name stable across game updates. Set
 **Remember destroyed tiles** to keep a removed tile absent at its layer and cell.
 
 Use **Follow all players** to center the view between the outermost players.

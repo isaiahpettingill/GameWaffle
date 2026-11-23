@@ -206,4 +206,24 @@ await writeFile('demo/scripts/sprites/key.cbor',encodeCbor({events:{begin_contac
     {op:'counter',label:'Keys',value:{item:'key'}},{op:'say',text:'You found the courtyard key!'},{op:'remove_self'}
   ]}
 ]}}));
+project.sprites.guardian={...sprites.drone,script:'scripts/sprites/guardian.ws',width:36,height:36,alwaysActive:true,physics:{...sprites.drone.physics,health:12}};
+project.rooms.arena=room('Pump Hall','#182b31',[],360);
+project.rooms.arena.groupCamera=true;
+project.rooms.arena.entities=[...playerSpawns.slice(0,2),{name:'Pump guardian',sprite:'guardian',persistRemoval:true,x:330,y:288}];
+project.rooms.courtyard.exits.left={mode:'fixed',targets:['arena']};
+project.rooms.arena.exits={left:{mode:'fixed',targets:['courtyard']}};
+await writeFile('demo/scripts/sprites/guardian.ws',`on tick
+  chase(1)
+  bar("Guardian", actor.health, 12)
+end
+
+on damage
+  if actor.health <= 0
+    give_player("pump_key", actor.other_player, 1)
+    flag.guardian_defeated = true
+    hide("Guardian")
+    burst("sparks", 32)
+  end
+end
+`);
 await writeFile('demo/project.json',JSON.stringify(project,null,2)+'\n');

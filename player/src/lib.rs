@@ -287,6 +287,15 @@ fn draw<T: sdl3::render::RenderTarget>(
             Ok(())
         };
         canvas.set_draw_color(Color::RGB(38, 35, 52));
+        for (id, [x, y]) in snapshot.icons {
+            if let Some(r) = source.rect(&format!("ui/item/{id}")) {
+                canvas.copy(
+                    atlas,
+                    r,
+                    FRect::new(*x as f32, *y as f32, r.width() as f32, r.height() as f32),
+                )?;
+            }
+        }
         let mut y = 2.;
         for (label, value) in snapshot.counters {
             let line = format!("{label} {value}");

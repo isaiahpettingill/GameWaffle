@@ -103,6 +103,7 @@ enum Action {
         amount: f32,
     },
     Remove(u32),
+    Used(u32),
     Fire(u32, String, f32, f32),
     Instance(u32, Spawn),
 }
@@ -135,6 +136,7 @@ pub struct Runtime {
     rng: u32,
     camera_actor: Option<u32>,
     group_camera: bool,
+    memory: progress::WorldMemory,
     removed: BTreeMap<String, std::collections::BTreeSet<String>>,
     camera_point: Option<[f32; 2]>,
     view_size: [u32; 2],
@@ -143,6 +145,7 @@ pub struct Runtime {
     retry: bool,
     inventory: BTreeMap<String, u32>,
     dialog: std::collections::VecDeque<(String, Option<u32>)>,
+    icons: BTreeMap<String, [i32; 2]>,
     bars: BTreeMap<String, [i32; 2]>,
     counters: BTreeMap<String, i32>,
     script_fuel: usize,
@@ -223,6 +226,8 @@ impl Runtime {
         self.retry = false;
         self.inventory.clear();
         self.removed.clear();
+        self.memory.clear();
+        self.actors.clear();
         self.set_seed(self.seed.wrapping_mul(1664525).wrapping_add(1013904223));
         self.reset_variables();
         self.load(&self.game.start.clone())
@@ -296,6 +301,7 @@ impl Runtime {
             actors,
             focus: self.focus(),
             dialog: self.dialog.front().map(|d| d.0.as_str()),
+            icons: &self.icons,
             bars: &self.bars,
             counters: &self.counters,
             sounds: &self.sounds,
@@ -409,6 +415,7 @@ impl Runtime {
             rng: 1,
             camera_actor: None,
             group_camera: false,
+            memory: Default::default(),
             removed: Default::default(),
             camera_point: None,
             view_size: [512, 512],
@@ -417,6 +424,7 @@ impl Runtime {
             retry: false,
             inventory: Default::default(),
             dialog: Default::default(),
+            icons: Default::default(),
             bars: Default::default(),
             counters: Default::default(),
             script_fuel: 0,
@@ -428,17 +436,22 @@ impl Runtime {
 
     fn load(&mut self, id: &str) -> Result<(), String> {
         let room = self.game.rooms.get(id).ok_or("Unknown room")?.clone();
+        if !self.actors.is_empty() {
+            let state = self.room_memory();
+            self.memory.insert(self.room.clone(), state);
+        }
         self.actors.clear();
         self.particles.clear();
         (self.world, self.contacts) = physics::world(room.gravity);
         self.room = id.into();
         self.camera_actor = None;
-        self.group_camera = false;
+        self.group_camera = room.group_camera;
         self.camera_point = None;
         self.blocked = room.blockers.iter().copied().collect();
         self.static_ids.clear();
         self.dialog.clear();
         self.counters.clear();
+        self.icons.clear();
         self.bars.clear();
         self.restored = false;
         self.pending_start.clear();
@@ -539,7 +552,18 @@ impl Runtime {
         if let Some(animation) = spawn.animation {
             actor.animation = animation;
         }
-        if spawn.flip_x == Some(true) {
+        if let Some(state) = actor
+            .persistence
+            .as_ref()
+            .and_then(|key| self.memory.get(&self.room)?.get(key))
+        {
+            actor.teleport(Vec2::new(state.xy[0], state.xy[1]));
+            actor.velocity(Vec2::new(state.motion[0], state.motion[1]));
+            actor.health = state.health;
+            actor.variables = progress::variables(&state.locals)?;
+            actor.animation = state.animation.clone();
+            actor.facing = state.facing;
+        } else if spawn.flip_x == Some(true) {
             actor.face(Vec2::new(-1.0, 0.0), false);
         }
         Ok(())
@@ -972,12 +996,39 @@ impl Runtime {
             21 if self.counters.contains_key(name) || self.counters.len() < 4 => {
                 self.counters.insert(name.into(), args[1] as i32);
             }
+            38 => {
+                let slot = args[1] as usize;
+                if let Some(item) = self.game.items.get(name)
+                    && (1..=4).contains(&slot)
+                    && let Some(count) = self.personal[slot - 1].get_mut(name)
+                    && *count > 0
+                {
+                    if item.consumable {
+                        *count -= 1;
+                    }
+                    if let Some(flag) = &item.flag {
+                        self.flags.insert(flag.as_str().into(), 1.into());
+                        self.gates_dirty = true;
+                    }
+                    if let Some(target) = self.actors.values().find(|a| a.player == Some(slot - 1))
+                    {
+                        actions.push(Action::Used(target.id));
+                    }
+                }
+            }
+            39 if self.game.items.contains_key(name)
+                && (self.icons.contains_key(name) || self.icons.len() < 32) =>
+            {
+                self.icons
+                    .insert(name.into(), [args[1] as i32, args[2] as i32]);
+            }
             37 if self.bars.contains_key(name) || self.bars.len() < 4 => {
                 let max = (args[2] as i32).max(1);
                 self.bars
                     .insert(name.into(), [(args[1] as i32).clamp(0, max), max]);
             }
             22 => {
+                self.icons.remove(name);
                 self.bars.remove(name);
                 self.counters.remove(name);
             }
@@ -1039,7 +1090,10 @@ impl Runtime {
                             .total_cmp(&(b.p - p).length_squared())
                     })
                     .map(|a| a.p);
-                if !top_down {
+                if !top_down
+                    && self.actors[&id].physics.gravity > 0.
+                    && self.actors[&id].physics.mode == Mode::Dynamic
+                {
                     let Some(to) = destination else { return };
                     let a = &self.actors[&id];
                     let ladder = self.actors.values().any(|r| {
@@ -1138,6 +1192,7 @@ impl Runtime {
             }
             budget -= 1;
             match action {
+                Action::Used(id) => self.run(id, "use_item", inputs, actions),
                 Action::Fire(id, aim, speed, damage) => self.fire(id, aim, speed, damage),
                 Action::Instance(owner, spawn) => {
                     if self.pending_instances.len() < MAX_ACTORS {

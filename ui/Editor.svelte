@@ -28,6 +28,7 @@
   let inspector=$derived(assetKind==='tile' ? tile : sprite);
   let artFiles=$derived(assets.filter(file=>/\.(ase|aseprite|png)$/i.test(file)));
   let audioFiles=$derived(assets.filter(file=>/\.(wav|ogg|oga|opus|qoa)$/i.test(file)));
+  let newItem=$state('');
   let gameSection=$state('Variables'),spriteSection=$state('Appearance'),roomSection=$state('Size'),instanceSection=$state('Placement'),mobilePane=$state('Editor');
   const tabs=[['world','World'],['room','Room'],['blocks','Blocks'],['assets','Assets'],['game','Game']];
   let variableId=$state(''), variableKind=$state('variables');
@@ -537,8 +538,17 @@
       {:else if tab==='game'}
         <section class="card asseteditor">
           <h2>Game settings</h2>
-          <Sections labels={['Variables','Display']} bind:value={gameSection}/>
-          {#if gameSection==='Variables'}
+          <Sections labels={['Variables','Items','Display']} bind:value={gameSection}/>
+          {#if gameSection==='Items'}
+            <form class="row" onsubmit={e=>{e.preventDefault();if(!/^[A-Za-z_]\w{0,63}$/.test(newItem)||Object.hasOwn(project.items??{},newItem)){error='Choose a unique item ID';return;}set(project.items??={},newItem,{consumable:false});newItem='';}}>
+              <input aria-label="Item ID" placeholder="Item ID" bind:value={newItem}><button>Add item</button>
+            </form>
+            {#each Object.entries(project.items??{}) as [id,item]}
+              <h3>{id}</h3><label class="stack">Icon<select value={item.icon??''} onchange={e=>set(item,'icon',e.currentTarget.value)}><option value="">None</option>{#each artFiles as file}<option>{file}</option>{/each}</select></label>
+              <label class="check"><input type="checkbox" checked={item.consumable} onchange={e=>set(item,'consumable',e.currentTarget.checked)}>Consume on use</label>
+              <label class="stack">Set flag on use<select value={item.flag??''} onchange={e=>set(item,'flag',e.currentTarget.value)}><option value="">None</option>{#each Object.keys(project.flags??{}) as f}<option>{f}</option>{/each}</select></label>
+            {/each}
+          {:else if gameSection==='Variables'}
             {#each Object.entries(project.variables??{}) as [id,value]}
               <label class="row variable">{id}<input type="number" step="1" {value} onchange={e=>{
                 const next=e.currentTarget.valueAsNumber;
@@ -694,6 +704,7 @@
             {#if (project.start??Object.keys(project.rooms)[0])===roomId}<small>Starting room</small>
             {:else}<button class="small-button" onclick={()=>set(project,'start',roomId)}>Set as starting room</button>{/if}
           </div>
+          <label class="check"><input type="checkbox" checked={room.groupCamera??false} onchange={e=>setRoom('groupCamera',e.currentTarget.checked)}> Follow all players</label>
           <label class="stack">Room name <input value={room.title??roomId} onchange={e=>setRoom('title',e.currentTarget.value)}></label>
           <label class="stack">Room view <select aria-label="Room view" value={roomView} onchange={e=>setView(e.currentTarget.value)}>
             <option value="platformer">Platformer</option><option value="top_down">Top-down</option>
@@ -788,7 +799,7 @@
                 <option value="">Definition default</option>
                 {#each new Set(['default',...(art[definition?.source]?.tags??[])]) as tag}<option value={tag}>{tag}</option>{/each}
               </select></label>
-              <label class="check"><input type="checkbox" checked={actor.persistRemoval??false} onchange={e=>changeActor('persistRemoval',e.currentTarget.checked)}> Remember removal</label>
+              <label class="check"><input type="checkbox" checked={actor.persistRemoval??false} onchange={e=>changeActor('persistRemoval',e.currentTarget.checked)}> Save instance state</label>
               <label class="check"><input type="checkbox" checked={actor.flipX??false} onchange={e=>changeActor('flipX',e.currentTarget.checked || '')}> Face left at start</label>
               <label class="stack">Spawn flag<select value={actor.flag??''} onchange={e=>changeActor('flag',e.currentTarget.value)}>
                 <option value="">Always</option>{#each Object.keys(project.flags??{}) as flag}<option>{flag}</option>{/each}

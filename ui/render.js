@@ -92,6 +92,9 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
         x+=6;
       }
     };
+    for(const [id,[x,y]] of Object.entries(snapshot.icons??{})){
+      const r=atlas.entries['ui/item/'+id];if(r)ctx.drawImage(image,...r,x,y,r[2],r[3]);
+    }
     let y=2;
     ctx.fillStyle='#262334';
     for(const [label,value] of Object.entries(snapshot.counters??{})){
