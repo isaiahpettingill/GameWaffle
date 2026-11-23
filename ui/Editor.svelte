@@ -1,5 +1,7 @@
 <script>
+  import productIcon from '../packaging/gamewaffle.svg?inline';
   import {Network,Grid2x2,Blocks,Images,Settings2,Play,Map as RoomIcon,SquareUserRound,Plus} from '@lucide/svelte';
+  import {roomShaders} from '../src/room-shaders.mjs';
   const viewIcons={world:Network,room:Grid2x2,blocks:Blocks,assets:Images,game:Settings2};
   import { effects, platformGravity, roomBorder } from '../src/schema.mjs';
   import Sections from './Sections.svelte';
@@ -449,7 +451,7 @@
 
 <header class="appbar">
   <div class="brand">
-    <span class="logo" aria-hidden="true">{#each Array(9) as _}<i></i>{/each}</span>
+    <img src={productIcon} width="32" height="32" alt="">
     <div><h1>GameWaffle Studio</h1><small>{project?.name ?? 'Sprite game editor'}</small></div>
   </div>
   <div class="row actions">
@@ -708,7 +710,7 @@
           {/each}
         </div>
         {#if roomPanel==='room'}
-          <Sections labels={['Size','Physics','Sound & color']} bind:value={roomSection}/>
+          <Sections labels={['Size','Physics','Sound & color','Shader']} bind:value={roomSection}/>
           {#if roomSection==='Size'}<div class="row start-room">
             {#if (project.start??Object.keys(project.rooms)[0])===roomId}<small>Starting room</small>
             {:else}<button class="small-button" onclick={()=>set(project,'start',roomId)}>Set as starting room</button>{/if}
@@ -733,6 +735,22 @@
             <label class="stack">Room borders <select value={roomBorder(room,roomView==='top_down')} onchange={e=>setRoom('border',e.currentTarget.value)}>
               <option value="sides">Side walls</option><option value="closed">All four walls</option><option value="open">Open</option>
             </select></label>
+          {:else if roomSection==='Shader'}
+            <label class="stack">Room shader<select value={room.shader?.kind??'none'} onchange={e=>setRoom('shader',{...room.shader,kind:e.currentTarget.value})}>
+              <option value="none">None</option>{#each Object.entries(roomShaders) as [value,label]}<option {value}>{label}</option>{/each}
+            </select></label>
+            {#if room.shader && room.shader.kind!=='none'}
+              {#if room.shader.kind!=='ripple'}<label class="stack">Color<input type="color" value={room.shader.color??'#000000'} onchange={e=>setRoom('shader',{...room.shader,color:e.currentTarget.value})}></label>{/if}
+              <label class="stack">Strength ({room.shader.strength??35}%)<input type="range" min="0" max="100" value={room.shader.strength??35} onchange={e=>setRoom('shader',{...room.shader,strength:e.currentTarget.valueAsNumber})}></label>
+              {#if ['scanlines','grid'].includes(room.shader.kind)}
+                <label class="stack">Spacing ({room.shader.spacing??3} px)<input type="range" min="2" max="12" value={room.shader.spacing??3} onchange={e=>setRoom('shader',{...room.shader,spacing:e.currentTarget.valueAsNumber})}></label>
+              {:else if room.shader.kind==='ripple'}
+                <label class="stack">Wavelength ({room.shader.wavelength??32} px)<input type="range" min="8" max="128" value={room.shader.wavelength??32} onchange={e=>setRoom('shader',{...room.shader,wavelength:e.currentTarget.valueAsNumber})}></label>
+                <label class="stack">Speed ({room.shader.speed??1} cycles/s)<input type="range" min="0" max="8" value={room.shader.speed??1} onchange={e=>setRoom('shader',{...room.shader,speed:e.currentTarget.valueAsNumber})}></label>
+              {:else if room.shader.kind==='vignette'}
+                <label class="stack">Clear radius ({room.shader.radius??55}%)<input type="range" min="0" max="95" value={room.shader.radius??55} onchange={e=>setRoom('shader',{...room.shader,radius:e.currentTarget.valueAsNumber})}></label>
+              {/if}
+            {/if}
           {:else}
             <label class="stack">Background <input type="color" value={room.background??'#171829'} onchange={e=>setRoom('background',e.currentTarget.value)}></label>
             {#if roomView==='top_down'}

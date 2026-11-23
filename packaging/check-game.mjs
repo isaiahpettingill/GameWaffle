@@ -108,3 +108,18 @@ assert.deepEqual(progress.removed.yard,['sprite/guardian']);
 battle.reset();battle.load_game(checkpoint);
 assert.ok(!JSON.parse(battle.snapshot()).actors.some(a=>a.image.startsWith('sprite/drone/')));
 battle.free();
+
+const shaderProject=JSON.parse(await readFile('demo/project.json','utf8'));
+const startRoom=shaderProject.rooms[shaderProject.start];
+for(const [kind,passes] of Object.entries({
+  tint:['screen'],scanlines:['rows'],grid:['columns','rows'],vignette:['screen'],ripple:[],
+})){
+  startRoom.shader={kind,color:'#274869',strength:50,spacing:7};
+  const packed=unpack(pack(await compileProject('demo',{project:shaderProject})));
+  const names=Object.keys(packed.atlases[packed.start].entries).filter(k=>k.startsWith('post/')).sort();
+  assert.deepEqual(names,passes.map(p=>'post/'+p));
+  assert.deepEqual(packed.rooms[packed.start].ripple,kind==='ripple'?[6,32,1]:null);
+}
+startRoom.shader={kind:'ripple',wavelength:0};
+await assert.rejects(compileProject('demo',{project:shaderProject}),/wavelength/);
+console.log('Passed room shader cartridge and parameter checks');

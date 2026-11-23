@@ -1,4 +1,5 @@
 <script>
+  import productIcon from '../packaging/gamewaffle.svg?inline';
   import { onMount } from 'svelte';
   import { unpack } from '../src/cartridge.mjs';
   import { buttons } from '../src/schema.mjs';
@@ -229,7 +230,7 @@
 <main>
   <header>
     <div class="brand">
-      <span class="logo" aria-hidden="true">{#each Array(9) as _}<i></i>{/each}</span>
+      <img src={productIcon} width="32" height="32" alt="">
       <div><h1>GameWaffle</h1><small>Cartridge player</small></div>
     </div>
     <div class="row">

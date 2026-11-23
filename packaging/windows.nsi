@@ -1,5 +1,7 @@
 Unicode true
 RequestExecutionLevel user
+Icon "..\studio\icons\icon.ico"
+UninstallIcon "..\studio\icons\icon.ico"
 Name "GameWaffle"
 OutFile "..\GameWaffle-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\GameWaffle"

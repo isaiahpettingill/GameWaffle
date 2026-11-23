@@ -59,6 +59,19 @@ The top-down view uses zero gravity. **Move with D-pad** moves the sprite on bot
 
 Use a collidable layer for walls. Top-down enemies use four-direction A* on the tile grid. Platform enemies search for supported landing cells and use gravity to estimate jumps and falls.
 
+## Set a room shader
+
+Open the room inspector. Select **Room → Shader**. Select a preset, then set its strength. Select **Play room** to see the result at the game resolution.
+
+| Preset | Controls |
+|---|---|
+| Color wash | Color and strength |
+| Scanlines or LCD grid | Color, strength, and spacing in game pixels |
+| Vignette | Edge color, strength, and clear radius |
+| Water ripple | Strength, wavelength in game pixels, and speed in cycles per second |
+
+The player applies the effect to the room, sprites, and particles before it draws the HUD. Each room can use one preset. Select **None** to clear the effect.
+
 ## Prepare assets and scripts
 
 Use [demo/project.json](demo/project.json) as an example. Put art and audio files in the project's `assets/` directory. Studio rebuilds the saved project when these files change. Select **Rebuild assets** to start a rebuild manually.
