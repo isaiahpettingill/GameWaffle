@@ -398,7 +398,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       exits[edge]={mode:exit.mode,targets:exit.targets,flag:exit.flag||null,when:exit.when??true,adjacent:exit.adjacent??false};
     }
     atlases[id] = atlas(images);
-    rooms[id] = { title: room.title ?? id, ripple, exits, cols, rows, width, height, size, baked, solids, entities,
+    rooms[id] = { title: room.title ?? id, ripple, hd:room.shader?.kind==='hd'?(room.shader.strength??35):0, exits, cols, rows, width, height, size, baked, solids, entities,
       blockers: [...blockers], background: room.background ?? '#101a23', music: room.music,
       ambience: room.ambience, group_camera:room.groupCamera===true, gravity, view, ySort };
   }

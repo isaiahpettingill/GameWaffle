@@ -22,6 +22,7 @@ pub struct Media {
 
 #[derive(Deserialize)]
 pub struct Room {
+    pub hd: Option<u8>,
     pub ripple: Option<[u8; 3]>,
     #[serde(default)]
     pub seams: BTreeMap<String, bool>,

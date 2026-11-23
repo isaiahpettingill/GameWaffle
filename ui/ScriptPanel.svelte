@@ -1,4 +1,5 @@
 <script>
+  import {draftFile} from './recovery.js';
   import { onMount,tick } from 'svelte';
   import { mountBlocks } from './blocks.js';
   import {mountText,validateText} from './text-editor.js';
@@ -6,11 +7,17 @@
   let modules=$state([]),selected=$state(''),newModule=$state(''),adding=$state(false);
   const endpoint=()=>selected?'./api/module/'+encodeURIComponent(selected):'./api/script/'+encodeURIComponent(sprite);
   let mode=$state('blocks'),textHost,textEditor,original;
-  let { sprite, sprites, dirty = $bindable(false), onSave } = $props();
+  let { sprite, sprites, dirty = $bindable(false), onSave,onFileEdit } = $props();
+  let draft,recovered=$state(false);
+  function changed(){
+    if(!ready)return;
+    dirty=true;
+    draft.write(mode==='text'?{mode,source:textEditor.source()}:{mode,workspace:blockEditor.draft()});
+  }
   let host, blockEditor, version=0;
   let error=$state(''), ready=$state(false), busy=$state(false);
   onMount(()=>{
-    blockEditor=mountBlocks(host,()=>{dirty=true;},sprites);
+    blockEditor=mountBlocks(host,changed,sprites);
     fetch('./api/modules').then(r=>r.json()).then(data=>{if(Array.isArray(data))modules=data;}).catch(err=>error=err.message);
     open(sprite);
     return ()=>{version++;blockEditor.dispose();textEditor?.dispose();};
@@ -22,7 +29,7 @@
       if(next==='text'){
         const unit=blockEditor.save();
         const source=original?.source && formatScript(original)===formatScript(unit)?original.source:formatScript(unit);
-        mode=next;await tick();textEditor=mountText(textHost,source,()=>{dirty=true;},selected);textEditor.focus();
+        mode=next;await tick();textEditor=mountText(textHost,source,changed,selected);textEditor.focus();
       }else{
         const source=textEditor.source(),unit=await validateText(source,selected);
         unit.layout=original?.layout;original={...unit,source};blockEditor.load(unit);
@@ -30,7 +37,7 @@
       }
     }catch(err){error=err.message;}finally{busy=false;}
   }
-  async function open(id){
+  async function open(id,discard=false){
     const current=++version;
     ready=false;
     error='';
@@ -39,8 +46,15 @@
       const data=await response.json();
       if(!response.ok)throw Error(data.error);
       if(current!==version)return;
+      draft=draftFile(endpoint(),message=>error=message);
+      const previous=discard?(await draft.write(null),null):await draft.read();
+      if(current!==version)return;
       original=data;textEditor?.dispose();textEditor=null;mode="blocks";blockEditor.load(data);
-      dirty=false;
+      recovered=!!previous;dirty=recovered;
+      if(previous?.mode==='text'){
+        mode='text';await tick();if(current!==version)return;
+        textEditor=mountText(textHost,previous.source,changed,selected);
+      }else if(previous)blockEditor.restoreDraft(previous.workspace);
       ready=true;
     }catch(err){if(current===version)error=err.message;}
   }
@@ -53,7 +67,7 @@
       else if(original?.source && formatScript(original)===formatScript(data))data.source=original.source;
       const result=await fetch(endpoint(),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
       if(!result.ok)throw Error((await result.json()).error);
-      dirty=false;
+      onFileEdit((await result.json()).edit);dirty=false;recovered=false;await draft.write(null);
       original=data;if(!selected)await onSave(sprite);
     }catch(err){error=err.message;}finally{busy=false;}
   }
@@ -62,12 +76,12 @@
   <div class="top row">
     <div><select aria-label="Script file" bind:value={selected} disabled={dirty || busy} onchange={()=>open(sprite)}>
       <option value="">{sprite}</option>{#each modules as name}<option value={name}>{name}.ws</option>{/each}
-    </select><small>{dirty ? 'Unsaved script' : 'Sprite behavior'}</small></div>
+    </select><small>{recovered ? 'Recovered script draft' : dirty ? 'Unsaved script' : 'Sprite behavior'}</small></div>
     <div class="row options">
       <button disabled={dirty||busy} onclick={()=>adding=!adding}>New module</button>
       <button aria-pressed={mode==='blocks'} disabled={!ready || busy} onclick={()=>switchMode('blocks')}>Blocks</button>
       <button aria-pressed={mode==='text'} disabled={!ready || busy} onclick={()=>switchMode('text')}>Text</button>
-      {#if dirty}<button disabled={busy} onclick={()=>open(sprite)}>Discard</button>{/if}
+      {#if dirty}<button disabled={busy} onclick={()=>open(sprite,true)}>Discard</button>{/if}
       <button class="primary" disabled={!ready || !dirty || busy} onclick={save}>Save script</button>
     </div>
   </div>
@@ -76,12 +90,12 @@
     try{
       const r=await fetch('./api/module/'+newModule,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({events:{}})});
       if(!r.ok)throw Error((await r.json()).error);
-      selected=newModule;modules=[...modules,newModule].sort();newModule='';adding=false;await open(sprite);
+      onFileEdit((await r.json()).edit);selected=newModule;modules=[...modules,newModule].sort();newModule='';adding=false;await open(sprite);
     }catch(err){error=err.message;}
   }}><input aria-label="Module name" bind:value={newModule} placeholder="Module name"/><button>Create</button></form>{/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
-  <div hidden={mode!=='blocks'} class="workspace" bind:this={host}></div>
-  <div hidden={mode!=='text'} class="workspace" bind:this={textHost}></div>
+  <div inert={busy||!ready} hidden={mode!=='blocks'} class="workspace" bind:this={host}></div>
+  <div inert={busy||!ready} hidden={mode!=='text'} class="workspace" bind:this={textHost}></div>
 </section>
 <style>
   section{overflow:hidden;}

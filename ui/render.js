@@ -1,4 +1,4 @@
-import {dialogue_lines} from '../web-built/runtime/runtime.js';
+import {dialogue_lines,hd_frame} from '../web-built/runtime/runtime.js';
 const images = new WeakMap();
 const rippleBuffers = new WeakMap();
 export function loadAtlas(atlas) {
@@ -26,8 +26,10 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
   const minWidth=clamp(config.min_width??128,128,512), minHeight=clamp(config.min_height??128,128,512);
   const width=clamp(Math.floor(box.width/zoom),minWidth,clamp(config.max_width??512,minWidth,512));
   const height=clamp(Math.floor(box.height/zoom),minHeight,clamp(config.max_height??512,minHeight,512));
-  if (canvas.width !== width) canvas.width = width;
-  if (canvas.height !== height) canvas.height = height;
+  const scale=room.hd>0?2:1;
+  canvas.dataset.viewWidth=width;canvas.dataset.viewHeight=height;
+  if (canvas.width !== width*scale) canvas.width = width*scale;
+  if (canvas.height !== height*scale) canvas.height = height*scale;
   const player = snapshot.actors.find(actor=>actor.player===0);
   const x = clamp(Math.round(snapshot.focus?.[0] ?? player?.x ?? room.width/2)-Math.floor(width/2),room.seams?.left?-Math.floor(width/2):0,Math.max(0,room.width-(room.seams?.right?Math.ceil(width/2):width)));
   const y = clamp(Math.round(snapshot.focus?.[1] ?? player?.y ?? room.height/2)-Math.floor(height/2),room.seams?.up?-Math.floor(height/2):0,Math.max(0,room.height-(room.seams?.down?Math.ceil(height/2):height)));
@@ -103,9 +105,13 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
     const r=atlas.entries[key];
     if(r)ctx.drawImage(image,r[0],r[1],key==='post/columns'?width:r[2],key==='post/rows'?height:r[3],0,0,width,height);
   }
+  if(scale===2){
+    const result=hd_frame(ctx.getImageData(0,0,width,height).data,width,height,room.hd);
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(result.buffer,result.byteOffset,result.length),width*2,height*2),0,0);
+  }
   const font=atlas.entries['ui/font'];
   if (!showGrid && font) {
-    ctx.setTransform(1,0,0,1,0,0);
+    ctx.setTransform(scale,0,0,scale,0,0);
     const text=(line,x,y)=>{
       for(const ch of line){
         const code=ch.codePointAt(0), i=(code>=32&&code<127?code:63)-32;

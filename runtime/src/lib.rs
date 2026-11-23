@@ -1,4 +1,5 @@
 mod camera;
+pub mod hd;
 mod model;
 mod particles;
 mod path;
@@ -149,6 +150,7 @@ pub struct Runtime {
     bars: BTreeMap<String, [i32; 2]>,
     counters: BTreeMap<String, i32>,
     script_fuel: usize,
+    debug: bool,
 }
 
 #[wasm_bindgen]
@@ -194,6 +196,20 @@ impl Runtime {
         Self::from_game(game, room)
     }
 
+    pub fn enable_debug(&mut self) {
+        self.debug = true;
+    }
+    pub fn inspect_actor(&self, id: u32) -> String {
+        let values = |table: &vm::Variables| {
+            table
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let actor = self.actors.get(&id);
+        serde_json::json!({"room":self.room,"tick":self.tick,"actor":id,"sprite":actor.and_then(|a|a.sprite.as_ref()),
+            "globals":values(&self.globals),"locals":actor.map(|a|values(&a.variables)),"flags":values(&self.flags)}).to_string()
+    }
     pub fn save_id(&self) -> String {
         self.game.id.clone()
     }
@@ -428,6 +444,7 @@ impl Runtime {
             bars: Default::default(),
             counters: Default::default(),
             script_fuel: 0,
+            debug: false,
         };
         rt.reset_variables();
         rt.load(&start)?;
@@ -862,7 +879,7 @@ impl Runtime {
             None => return true,
         };
         let input = actor.player.map_or(Input::default(), |slot| inputs[slot]);
-        match machine.run(self, id, input, actions) {
+        match machine.run(self, id, event, input, actions) {
             Ok(finished) if event == "tick" => {
                 if finished {
                     machine.restart();

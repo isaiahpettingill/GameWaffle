@@ -137,7 +137,7 @@
         if (socket?.readyState === WebSocket.OPEN) {
           if (socket.bufferedAmount < 64_000) socket.send(JSON.stringify({kind:'input',input:data}));
          } else if (runtime && !socket) {
-          runtime.set_view_size(canvas.width,canvas.height);
+          runtime.set_view_size(Number(canvas.dataset.viewWidth)||canvas.width,Number(canvas.dataset.viewHeight)||canvas.height);
           const mask = data.reduce((bits,input,slot)=>buttons.reduce((value,button,index)=>
             input[button] ? value | (1 << (slot*8+index)) : value,bits),0) >>> 0;
           show(JSON.parse(runtime.step_buttons(mask)));

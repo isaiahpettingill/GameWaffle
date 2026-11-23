@@ -1,6 +1,7 @@
 // The compiler samples each stock shader once. Players composite the samples
 // over the room in screen space. The HUD uses a separate pass.
 export const roomShaders = {
+  hd: 'HD pixel smoothing',
   ripple: 'Water ripple',
   tint: 'Color wash',
   scanlines: 'Scanlines',
@@ -16,7 +17,7 @@ export function bakeRoomShader(settings, images) {
   for (const [value, min, max, label] of [[strength,0,100,'strength'],[spacing,2,12,'spacing'],[radius,0,95,'radius']]) {
     if (!Number.isInteger(value) || value < min || value > max) throw Error('Invalid room shader '+label);
   }
-  if (strength === 0) return;
+  if (strength === 0 || kind==='hd') return;
   if (kind==='ripple') {
     const {wavelength=32,speed=1}=settings;
     if (!Number.isInteger(wavelength)||wavelength<8||wavelength>128||!Number.isInteger(speed)||speed<0||speed>8) throw Error('Invalid ripple wavelength or speed');

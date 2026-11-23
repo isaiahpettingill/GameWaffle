@@ -56,9 +56,9 @@ export async function projectStore(path){
   }
   async function save(changes){
     for(const [name] of changes)valid(name);
-    if(!archive){for(const [name,data] of changes)await atomic(resolve(path,name),data);return;}
+    if(!archive){for(const [name,data] of changes){if(data===null)await unlink(resolve(path,name));else await atomic(resolve(path,name),data); }return;}
     const next=new Map(entries);
-    for(const [name,data] of changes)next.set(name,Buffer.from(data));
+    for(const [name,data] of changes){if(data===null)next.delete(name);else next.set(name,Buffer.from(data));}
     await atomic(path,serialize(next));entries=next;
   }
   async function exportArchive(){

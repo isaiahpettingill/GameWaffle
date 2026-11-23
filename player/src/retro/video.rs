@@ -8,6 +8,7 @@ use self_cell::self_cell;
 struct RoomTextures<'a> {
     atlas: Texture<'a>,
     ripple: Option<Texture<'a>>,
+    hd: Option<Texture<'a>>,
 }
 self_cell!(
     struct CachedAtlas {
@@ -45,6 +46,14 @@ impl Video {
         let snapshot = game.runtime.view();
         let id = snapshot.room;
         let room = &game.media.rooms[id];
+        let [w, h] = self.dimensions;
+        let hd = room.hd.unwrap_or(0) > 0;
+        let scale = if hd { 2 } else { 1 };
+        if self.canvas.surface().width() != w * scale {
+            self.atlas = None;
+            self.canvas =
+                Surface::new(w * scale, h * scale, PixelFormat::XRGB8888)?.into_canvas()?;
+        }
         if self.atlas.as_ref().is_none_or(|a| a.0 != id) {
             let atlas = CachedAtlas::try_new(self.canvas.texture_creator(), |creator| {
                 let [w, h] = self.dimensions;
@@ -56,6 +65,11 @@ impl Video {
                 Ok::<_, Error>(RoomTextures {
                     atlas: game.media.atlases[id].texture(creator)?,
                     ripple,
+                    hd: if hd {
+                        Some(creator.create_texture_streaming(PixelFormat::RGBA32, w * 2, h * 2)?)
+                    } else {
+                        None
+                    },
                 })
             })?;
             self.atlas = Some((id.to_owned(), atlas));
@@ -94,11 +108,19 @@ impl Video {
                     view,
                     &mut self.rectangles,
                     textures.ripple.as_mut(),
+                    textures.hd.as_mut(),
                 )
             })?;
         self.canvas.present();
         let surface = self.canvas.surface();
-        surface.with_lock(|pixels| output(pixels.as_ptr().cast(), w, h, surface.pitch() as usize));
+        surface.with_lock(|pixels| {
+            output(
+                pixels.as_ptr().cast(),
+                w * scale,
+                h * scale,
+                surface.pitch() as usize,
+            )
+        });
         Ok(())
     }
 }

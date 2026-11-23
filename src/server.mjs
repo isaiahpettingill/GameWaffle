@@ -1,8 +1,10 @@
 import {checkUpdate,update,exportDesktop,nativeTarget} from './desktop.mjs';
-import {parseScript,formatScript} from './wafflescript.mjs';
+import {parseScript,formatScript,locations} from './wafflescript.mjs';
 import {compileScript} from './script.mjs';
 import {loadModules} from './modules.mjs';
 import {pack} from './pack.mjs';
+import {fileHistory} from './file-history.mjs';
+import {recoveryStore} from './recovery.mjs';
 import {projectStore} from './project-store.mjs';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -13,7 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import { compileProject, discoverAssets, describeArt, projectPath } from './compiler.mjs';
 import { encodeCbor, decodeCbor } from './cartridge.mjs';
-import { buttons } from './schema.mjs';
+import { buttons,Opcodes } from './schema.mjs';
 import { embedCartridge, playerTemplate } from './web-export.mjs';
 import { Runtime, initSync } from '../web-built/runtime/runtime.js';
 
@@ -28,6 +30,7 @@ const cartFile = option('--cart');
 const lan = args.includes('--lan');
 const port = Number(option('--port','4871'));
 const store = cartFile ? null : await projectStore(root);
+const recover=recoveryStore(root),history=fileHistory(store);
 const site = resolve('web-built/site');
 const wasm = await readFile('web-built/runtime/runtime_bg.wasm');
 initSync({ module: wasm });
@@ -58,12 +61,12 @@ function send(res, status, value, type = 'application/json; charset=utf-8') {
   res.writeHead(status, { 'Content-Type': type, 'X-Content-Type-Options': 'nosniff' });
   res.end(type.startsWith('application/json') ? JSON.stringify(value) : value);
 }
-async function jsonBody(req) {
+async function jsonBody(req,limit=2_000_000) {
   const data = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 2_000_000) throw Error('Request exceeds 2 MB');
+    if (size > limit) throw Error('Request exceeds the size limit');
     data.push(chunk);
   }
   return JSON.parse(Buffer.concat(data).toString());
@@ -90,6 +93,8 @@ const files = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; char
   '.css':'text/css; charset=utf-8', '.svg':'image/svg+xml', '.png':'image/png', '.gif':'image/gif', '.cur':'image/x-icon', '.mp3':'audio/mpeg', '.ogg':'audio/ogg', '.wav':'audio/wav', '.wasm':'application/wasm', '.txt':'text/plain; charset=utf-8' };
 
 const server = createServer(async (req, res) => {
+  res.setHeader('Cross-Origin-Opener-Policy','same-origin');
+  res.setHeader('Cross-Origin-Embedder-Policy','require-corp');
   const url = new URL(req.url, 'http://localhost');
   try {
     if(url.pathname==='/projects' && local(req)){
@@ -103,6 +108,17 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/lan.waffle') return send(res, 200, connections.size ? clientsCart : bytes, 'application/octet-stream');
     if (url.pathname.startsWith('/api/')) {
       if (cartFile || !local(req) || !sameSite(req)) return send(res, 403, {error:'The editor is available on the host computer'});
+      if(url.pathname==='/api/file-history' && req.method==='POST'){
+        const {id,back}=await jsonBody(req);
+        await change(()=>history.restore(id,back===true,recompile));
+        return send(res,200,{ok:true});
+      }
+      if(url.pathname.startsWith('/api/recovery/')){
+        const key=decodeURIComponent(url.pathname.slice('/api/recovery/'.length));
+        if(!key||key.length>250||!['GET','PUT','DELETE'].includes(req.method))throw Error('Invalid draft request');
+        const value=req.method==='PUT'?await jsonBody(req,16_000_000):null;
+        return send(res,200,await change(()=>recover(key,req.method,value)));
+      }
       if(url.pathname==='/api/desktop' && req.method==='GET'){
         await mutation;return send(res,200,await exportDesktop(bytes,url.searchParams.get('target')??nativeTarget),'application/zip');
       }
@@ -133,11 +149,12 @@ const server = createServer(async (req, res) => {
         for await(const chunk of req){if((size+=chunk.length)>32*1024*1024)throw Error('File exceeds 32 MiB');chunks.push(chunk);}
         const group=/\.(wav|ogg|opus|qoa)$/i.test(name)?'audio':url.searchParams.get('kind')==='tile'?'tiles':'sprites';
         const path='assets/'+group+'/'+name;
-        await change(async()=>{
+        const edit=await change(async()=>{
           if((await store.list('assets')).includes(path))throw Error('An asset with this name exists');
-          await store.save([[path,Buffer.concat(chunks)]]);revision++;
+          const data=Buffer.concat(chunks);
+          return history.save(path,data,async()=>{await store.save([[path,data]]);revision++;});
         });
-        return send(res,200,{path});
+        return send(res,200,{path,edit});
       }
       if (url.pathname === '/api/preview' && req.method === 'GET') return send(res,200,editorBytes,'application/octet-stream');
       if (url.pathname === '/api/status' && req.method === 'GET') return send(res, 200, {revision, sourceError});
@@ -168,13 +185,13 @@ const server = createServer(async (req, res) => {
           const draft=await jsonBody(req);
           const source=draft.source??formatScript(draft),unit=parseScript(source);
           if(Object.keys(unit.events).length)throw Error('Modules can contain procedures and functions only');
-          await change(async()=>{
+          const edit=await change(async()=>{
             const override={...store,read:(file,encoding)=>file===path?Promise.resolve(encoding?source:Buffer.from(source)):store.read(file,encoding)};
             const modules=await loadModules({imports:[mod[1]]},override.read);
             compileScript(unit,modules);
-            await recompile(undefined,undefined,()=>store.save([[path,source]]),override);
+            return history.save(path,source,()=>recompile(undefined,undefined,()=>store.save([[path,source]]),override));
           });
-          return send(res,200,{ok:true});
+          return send(res,200,{ok:true,edit});
         }
       }
       if(url.pathname==='/api/modules' && req.method==='POST'){
@@ -189,22 +206,48 @@ const server = createServer(async (req, res) => {
           if (!Object.hasOwn(project.sprites,id)) return send(res, 404, {error:'Unknown sprite'});
           const file = project.sprites[id].script ?? `scripts/sprites/${id}.cbor`;
           const data = await store.read(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
-          return send(res, 200, data ? (file.endsWith('.ws') ? {...parseScript(data.toString()),source:data.toString()} : decodeCbor(data)) : {events:{}});
+          const script=data ? (file.endsWith('.ws') ? {...parseScript(data.toString()),source:data.toString()} : decodeCbor(data)) : {events:{}};
+          if(url.searchParams.has('debug')){
+            const labels=new WeakMap();
+            function index(source,name){
+              const tree=parseScript(source),lines=source.split('\n');
+              function visit(node){
+                if(!node||typeof node!=='object')return;
+                const loc=locations.get(node);
+                if(loc){const line=source.slice(0,loc.from).split('\n').length;labels.set(node,{file:name,line,text:lines[line-1].trim()});}
+                Object.values(node).forEach(visit);
+              }
+              visit(tree);return tree;
+            }
+            const unit=index(script.source??formatScript(script),file);
+            const modules=await loadModules(unit,store.read);
+            for(const name of Object.keys(modules)){
+              const path='scripts/modules/'+name+'.ws';
+              modules[name]=index(await store.read(path,'utf8'),path);
+            }
+            const names=Object.fromEntries(Object.entries(Opcodes).map(([name,id])=>[id,name]));
+            Object.assign(names,{10:'constant',11:'load',12:'store',13:'calculate',14:'branch',15:'jump',16:'wait',17:'real'});
+            const events={};
+            compileScript(unit,modules,(event,op,node)=>(events[event]??=[]).push({...labels.get(node),op:names[op]}));
+            return send(res,200,events);
+          }
+          return send(res,200,script);
         }
         if (req.method === 'PUT') {
           const script = await jsonBody(req);
           if(script.source!=null && formatScript(parseScript(script.source))!==formatScript(script))throw Error('Text and blocks differ');
-          await change(async () => {
+          const edit=await change(async () => {
             const project = JSON.parse(await store.read('project.json','utf8'));
             if (!Object.hasOwn(project.sprites,id)) throw Error('Unknown sprite');
             const established = project.sprites[id].script;
             const file = established ?? `scripts/sprites/${id}.cbor`;
             project.sprites[id].script = established ?? `scripts/sprites/${id}.cbor`;
-            await recompile(project, new Map([[id,script]]), async () => {
-              await store.save([[file,file.endsWith('.ws')?(script.source??formatScript(script)):encodeCbor(script)],...(!established ? [['project.json',JSON.stringify(project,null,2)+'\n']] : [])]);
-            });
+            const data=file.endsWith('.ws')?(script.source??formatScript(script)):encodeCbor(script);
+            return history.save(file,data,()=>recompile(project,new Map([[id,script]]),async()=>{
+              await store.save([[file,data],...(!established ? [['project.json',JSON.stringify(project,null,2)+'\n']] : [])]);
+            }),file.endsWith('.ws')?Buffer.from(''):encodeCbor({events:{}}));
           });
-          return send(res, 200, {ok:true});
+          return send(res, 200, {ok:true,edit});
         }
       }
       return send(res, 404, {error:'Unknown editor route'});

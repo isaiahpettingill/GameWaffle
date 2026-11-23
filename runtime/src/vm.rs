@@ -72,6 +72,15 @@ pub struct Encoded {
     f: Vec<String>,
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(js_namespace=globalThis, js_name=waffleBreak)]
+    fn debug_break(id: u32, event: &str, pc: usize) -> bool;
+    #[wasm_bindgen::prelude::wasm_bindgen(js_namespace=globalThis, js_name=waffleInspect)]
+    fn debug_inspect(state: &str);
+}
+
 type Handler =
     fn(&Instruction, &Program, &mut Machine, &mut Context<'_>, usize) -> Result<(), &'static str>;
 
@@ -230,6 +239,7 @@ impl Machine {
         &mut self,
         runtime: &mut Runtime,
         id: u32,
+        _event: &str,
         input: Input,
         actions: &mut Vec<Action>,
     ) -> Result<bool, &'static str> {
@@ -249,6 +259,14 @@ impl Machine {
             let Some(first) = program.code.get(self.pc) else {
                 break;
             };
+            #[cfg(target_arch = "wasm32")]
+            if cx.runtime.debug {
+                if debug_break(id, _event, self.pc) {
+                    debug_inspect(&cx.runtime.inspect_actor(id));
+                }
+                (first.handler)(first, &program, self, &mut cx, 1)?;
+                continue;
+            }
             let count = (cx.runtime.script_fuel - floor).min(DISPATCH_BATCH);
             (first.handler)(first, &program, self, &mut cx, count)?;
         }
