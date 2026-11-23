@@ -9,11 +9,11 @@
     "build:native": "node src/build.mjs --native",
     "build:player": "node src/build.mjs --player-only",
     "build": "node src/compiler.mjs && node src/build.mjs",
-    "start": "cargo run --locked --manifest-path studio/Cargo.toml --",
+    "start": "node src/start-studio.mjs",
     "demo": "node src/demo.mjs",
     "cart": "node src/compiler.mjs",
     "export:web": "node src/web-export.mjs",
-    "studio:browser": "node src/server.mjs --open"
+    "studio:browser": "node src/start-studio.mjs --browser"
   },
   "type": "module",
   "dependencies": {

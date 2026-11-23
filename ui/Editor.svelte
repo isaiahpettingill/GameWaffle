@@ -1,9 +1,11 @@
 <script>
   import productIcon from '../packaging/gamewaffle.svg?inline';
-  import {Network,Grid2x2,Blocks,Images,Settings2,Play,Map as RoomIcon,SquareUserRound,Plus} from '@lucide/svelte';
+  import {Network,Blocks,Images,Settings2,Play,DoorOpen as RoomIcon,Layers3,Search,SquareUserRound,Plus} from '@lucide/svelte';
   import {roomShaders} from '../src/room-shaders.mjs';
-  const viewIcons={world:Network,room:Grid2x2,blocks:Blocks,assets:Images,game:Settings2};
+  const viewIcons={world:Network,room:RoomIcon,blocks:Blocks,assets:Images,game:Settings2};
   import { effects, platformGravity, roomBorder } from '../src/schema.mjs';
+  import PagedList from './PagedList.svelte';
+  let projectPath=$state(''),filter=$state(''),instanceFilter=$state('');
   import Sections from './Sections.svelte';
   import World from './World.svelte';
   import {draftFile} from './recovery.js';
@@ -116,7 +118,7 @@
         const names=instanceNames(map.entities);
         map.entities.forEach((entity,index)=>{entity.name=names[index];});
       }
-      project=value.project; assets=value.assets; art=value.art; revision=value.revision;
+      projectPath=value.path;project=value.project; assets=value.assets; art=value.art; revision=value.revision;
       currentProject=savedProject=JSON.stringify(value.project);
       recovery=await draft.read();
       if(recovery===savedProject){recovery=null;await draft.write(null);}
@@ -491,8 +493,14 @@
   </div>
   <div class="row actions">
 
+    <span class="status" role="status">{status}</span>
+    <a class="button primary" href="./player.html" onclick={saveThenOpen}><Play size={14}/>Play game</a>
+  </div>
+</header>
+<nav class="studio-menus" aria-label="Application menu">
     <details name="studio-menu" class="export-menu"><summary>File</summary><div class="card">
-        <a href="./projects" onclick={e=>{if((dirty||scriptDirty)&&!confirm('Leave with unsaved changes?'))e.preventDefault();}}>New or open project</a>
+        <a href="./projects?action=new" onclick={e=>{if((dirty||scriptDirty)&&!confirm('Leave with unsaved changes?'))e.preventDefault();}}>New project…</a>
+        <a href="./projects?action=open" onclick={e=>{if((dirty||scriptDirty)&&!confirm('Leave with unsaved changes?'))e.preventDefault();}}>Open project…</a>
         <button onclick={saveProject} disabled={!dirty||busy}>Save project</button>
         <a download={exportName+'.waffleproj'} href="./api/archive" onclick={saveThenOpen}>Editable project</a>
         <a download={exportName+'.html'} href="./export.html" onclick={saveThenOpen}>Standalone web game</a>
@@ -512,10 +520,7 @@
       <button onclick={rebuild} disabled={busy||!project}>Rebuild assets</button>
         <button onclick={()=>{updatesOpen=!updatesOpen;release=null;}}>Updates</button>
     </div></details>
-    <span class="status" role="status">{status}</span>
-    <a class="button primary" href="./player.html" onclick={saveThenOpen}><Play size={14}/>Play game</a>
-  </div>
-</header>
+</nav>
 {#if updatesOpen}
   <section class="row card" aria-label="Release updates">
     <select aria-label="Update component" bind:value={component} onchange={()=>release=null}><option value="runtime">Desktop runtime</option><option value="studio">Studio</option></select>
@@ -537,36 +542,38 @@
   <main class:wide={tab==='game'||tab==='world'||(tab==='assets'&&assetKind==='audio')} data-pane={mobilePane}>
     <aside class="project card">
       <div class="heading row"><h2>Project</h2></div>
+      <small class="project-path">{projectPath}</small>
+      <label class="project-filter"><Search size={14}/><input type="search" aria-label="Find rooms, sprites, and tiles" placeholder="Find in project" bind:value={filter}></label>
       <div class="category">
         <div class="heading row"><h3>Rooms</h3><button class="small-button" title="New room" aria-label="New room" aria-expanded={addPreset} disabled={busy} onclick={()=>addPreset=!addPreset}><Plus size={14}/></button></div>
         {#if addPreset}<div class="presets">
           <button onclick={()=>addRoom('platformer')}>New platformer room</button>
           <button onclick={()=>addRoom('top_down')}>New top-down room</button>
         </div>{/if}
-        {#each Object.entries(project.rooms) as [id,item]}
+        <PagedList items={Object.entries(project.rooms)} label="rooms" query={filter} text={entry=>entry[0]+' '+(entry[1].title??'')}>{#snippet children([id,item])}
           <button class="item" class:selected={roomId===id} onclick={()=>selectRoom(id)}>
             <RoomIcon size={14}/><span>{item.title??id}</span>
           </button>
-        {/each}
+        {/snippet}</PagedList>
       </div>
       <div class="category">
         <div class="heading row"><h3>Sprite definitions</h3><button class="small-button" title="Add sprite definition" aria-label="Add sprite definition" onclick={()=>openAssets('sprite',true)}><Plus size={14}/></button></div>
-        {#each Object.keys(project.sprites??{}) as id}
+        <PagedList items={Object.keys(project.sprites??{})} label="sprites" query={filter}>{#snippet children(id)}
           <button class="item" class:selected={tab==='room' ? mapTool==='spawn' && placementSprite===id : spriteId===id && assetKind==='sprite'}
             draggable={tab==='room'} ondragstart={event=>dragDefinition(event,id)}
             title={tab==='room' ? 'Click to place or drag to the map' : 'Select sprite definition'}
             onclick={()=>chooseDefinition(id)}>
             {#if spriteArt[id]}<img src={spriteArt[id]} alt="">{:else}<SquareUserRound size={14}/>{/if}<span>{id}</span>
           </button>
-        {/each}
+        {/snippet}</PagedList>
       </div>
       {#if tab!=='room'}<div class="category compact">
         <div class="heading row"><h3>Tiles</h3><button class="small-button" title="Add tile" aria-label="Add tile" onclick={()=>openAssets('tile',true)}><Plus size={14}/></button></div>
-        {#each Object.keys(project.tiles??{}) as id}
+        <PagedList items={Object.keys(project.tiles??{})} label="tiles" query={filter}>{#snippet children(id)}
           <button class="item" class:selected={tileId===id} onclick={()=>{tileId=id;assetKind='tile';if(tab!=='assets')openTab('room');}}>
-            {#if tileArt[id]?.[0]}<img src={tileArt[id][0]} alt="">{:else}<RoomIcon size={14}/>{/if}<span>{id}</span>
+            {#if tileArt[id]?.[0]}<img src={tileArt[id][0]} alt="">{:else}<Layers3 size={14}/>{/if}<span>{id}</span>
           </button>
-        {/each}
+        {/snippet}</PagedList>
       </div>
     {/if}</aside>
     <div class="work">
@@ -808,7 +815,7 @@
           <div class="heading row mini"><h3>Draw order</h3><button class="small-button" disabled={busy} onclick={addLayer}>Add layer</button></div>
           {#each sortedLayers as {layer:item,index}}
             <button class="item" class:selected={layerIndex===index} onclick={()=>chooseLayer(index)}>
-              <span>{item.name}</span><small>{item.collidable?'Collision on':'Visual only'}</small>
+              <Layers3 size={14}/><span>{item.name}</span><small>{item.collidable?'Collision on':'Visual only'}</small>
             </button>
           {/each}
           {#if layer}
@@ -835,11 +842,13 @@
           </div>
           {#if !room.entities.length}<p class="muted">Choose a sprite definition to add an instance.</p>{/if}
           <div class="instance-list">
-            {#each room.entities as entity,index}
+            {#if room.entities.length>8}<input type="search" aria-label="Find instances" placeholder="Find instances" bind:value={instanceFilter}>{/if}
+            <PagedList items={Object.entries(room.entities)} text={entry=>(entry[1].name??'')+' '+entry[1].sprite} query={room.entities.length>8?instanceFilter:''} label="instances">{#snippet children([key,entity])}
+              {@const index=Number(key)}
               <button class="item" class:selected={selectedEntity===index} onclick={()=>{selectedEntity=index;mapTool='select';}}>
                 <span>{entity.name ?? entity.sprite}</span>{#if entity.player!=null}<small>Player {entity.player+1}</small>{/if}
               </button>
-            {/each}
+            {/snippet}</PagedList>
           </div>
           {#if actor}
             {@const definition=project.sprites[actor.sprite]}
@@ -893,7 +902,7 @@
   </main>
 {/if}
 <style>
-  .actions{flex:1;}
+  .project-path{display:block;overflow-wrap:anywhere;font-size:.69rem;margin-bottom:.4rem}.project-filter{display:flex;align-items:center;gap:.3rem}.project-filter input{min-width:0}.actions{flex:1;}
   .actions .status{margin-left:auto;}
   .appbar{display:flex;justify-content:space-between;align-items:center;gap:1rem;border-bottom:1px solid var(--line);padding:.4rem .65rem;}
   .status{font-size:.76rem;color:var(--muted);margin-right:.35rem;}
@@ -911,8 +920,6 @@
   .item.selected{background:#352e3e;border-color:#62536b;}
   .item small{margin-left:auto;font-size:.66rem;}
   .item i,.item img{width:12px;height:12px;object-fit:contain;image-rendering:pixelated;flex-shrink:0;}
-  .room-icon{border:1px solid #9e9cb4;border-radius:2px;background:#514765;}
-  .sprite-icon{border:1px solid #abd8bc;border-radius:50%;background:#4d6b69;}
   nav{margin-bottom:.4rem;border-bottom:1px solid var(--line);gap:1px;}
   nav button{background:none;border-color:transparent;font-size:.8rem;}
   nav .active{color:var(--accent);border-bottom:2px solid var(--accent);background:var(--panel);}
@@ -943,7 +950,7 @@
   .variable input{max-width:9rem;margin-left:auto;}
   .variable{margin-top:.45rem;}
   .asset-bar{justify-content:space-between;margin-top:.65rem;}
-  .instance-list{max-height:14rem;overflow:auto;}
+  .instance-list{display:grid;gap:1px;}
   .instance-source{margin-top:.55rem;}
   .instance-source small{flex-basis:100%;font-size:.72rem;}
   .mobile-tabs{display:none;}
@@ -956,11 +963,12 @@
     .work,.project,.inspector{overflow:auto;min-height:0;max-height:none;scrollbar-gutter:stable;}
   }
   @media(max-width:880px){
-    main,main.wide{display:block;padding:.5rem;}
+    main,main.wide{display:block;padding:.4rem;min-height:0;overflow:auto;flex:1;}
+    :global(.studio #app){height:100dvh;display:flex;flex-direction:column;}
     .mobile-tabs{display:block;margin:0 .5rem;}
     main[data-pane="Editor"]>aside,main[data-pane="Project"]>:not(.project),main[data-pane="Settings"]>:not(.inspector){display:none;}
     main.wide[data-pane="Settings"]>.work{display:block;}
-    .appbar{flex-wrap:wrap;padding:.6rem;gap:.4rem;}.actions{flex-basis:100%;gap:.3rem;}.status{order:1;flex-basis:100%;}
+    .appbar{padding:.4rem;gap:.3rem;}.actions{justify-content:flex-end}.status{display:none;}
     .inspector,.instance-list{max-height:none;overflow:visible;}
   }
 </style>

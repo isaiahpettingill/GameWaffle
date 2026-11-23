@@ -38,7 +38,9 @@ initSync({ module: wasm });
 const initial = cartFile ? null : await compileProject(root,{store});
 let bytes = cartFile ? await readFile(resolve(cartFile)) : pack(initial);
 let editorBytes = initial ? pack(initial,{editor:true}) : null;
-let runtime = createRuntime(bytes);
+let runtime;
+try{runtime=createRuntime(bytes);}
+catch(error){console.error('Could not load the cartridge: '+String(error?.message??error));process.exit(1);}
 let clientsCart = bytes;
 let mutation = Promise.resolve();
 let revision = 0, sourceError = '';
@@ -92,14 +94,15 @@ async function recompile(project, scripts, save, sourceStore=store) {
 const files = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',
   '.css':'text/css; charset=utf-8', '.svg':'image/svg+xml', '.png':'image/png', '.gif':'image/gif', '.cur':'image/x-icon', '.mp3':'audio/mpeg', '.ogg':'audio/ogg', '.wav':'audio/wav', '.wasm':'application/wasm', '.txt':'text/plain; charset=utf-8' };
 
+let launcher;
 const server = createServer(async (req, res) => {
   res.setHeader('Cross-Origin-Opener-Policy','same-origin');
   res.setHeader('Cross-Origin-Embedder-Policy','require-corp');
   const url = new URL(req.url, 'http://localhost');
   try {
     if(url.pathname==='/projects' && local(req)){
-      if(process.env.GAMEWAFFLE_LAUNCHER){res.writeHead(302,{Location:process.env.GAMEWAFFLE_LAUNCHER});res.end();return;}
-      return send(res,200,'Start Studio without a project path to open the project chooser.','text/plain');
+      launcher??=process.env.GAMEWAFFLE_LAUNCHER||(await import('./launcher.mjs')).launch(0,false);
+      res.writeHead(302,{Location:new URL('/'+url.search,await launcher).href});res.end();return;
     }
     if (url.pathname === '/export.html' && req.method === 'GET') {
       return send(res, 200, embedCartridge(await readFile(playerTemplate, 'utf8'), bytes), 'text/html; charset=utf-8');
@@ -164,7 +167,7 @@ const server = createServer(async (req, res) => {
       }
       if (url.pathname === '/api/project' && req.method === 'GET') {
         await mutation;
-        return send(res, 200, {project:JSON.parse(await store.read('project.json','utf8')), assets:await discoverAssets(root,store), art:await describeArt(root,store), revision});
+        return send(res, 200, {path:root,project:JSON.parse(await store.read('project.json','utf8')), assets:await discoverAssets(root,store), art:await describeArt(root,store), revision});
       }
       if (url.pathname === '/api/project' && req.method === 'PUT') {
         const project = await jsonBody(req);

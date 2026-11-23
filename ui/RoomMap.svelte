@@ -1,5 +1,7 @@
 <script>
-  import {Brush,Eraser,Square,Pipette,CopyPlus,MousePointer2,Hand,Undo2,Redo2,Play,ZoomIn,ZoomOut} from '@lucide/svelte';
+  import PagedList from './PagedList.svelte';
+  let spriteFilter=$state('');
+  import {Layers3,SquareUserRound,Brush,Eraser,Square,Pipette,CopyPlus,MousePointer2,Hand,Undo2,Redo2,Play,ZoomIn,ZoomOut} from '@lucide/svelte';
   const icons={paint:Brush,erase:Eraser,rect:Square,pick:Pipette,spawn:CopyPlus,select:MousePointer2,hand:Hand};
   import { platformGravity, roomBorder } from '../src/schema.mjs';
 import { tick } from 'svelte';
@@ -459,15 +461,15 @@ import { tick } from 'svelte';
   {#if spriteTool}
     <div class="palette">
       {#if tool==='spawn'}
-        <strong>Sprite definitions</strong>
+        <div class="palette-head row"><strong>Sprites</strong><input type="search" aria-label="Find a sprite" placeholder="Find a sprite" bind:value={spriteFilter}></div>
         <div class="tile-list">
-          {#each Object.keys(sprites) as id}
+          <PagedList items={Object.keys(sprites)} query={spriteFilter} label="sprite choices" size={12}>{#snippet children(id)}
             <button class:selected={spriteId===id} aria-pressed={spriteId===id}
               aria-label={`Use ${id} for placement`} onclick={()=>spriteId=id}>
-              {#if spriteArt[id]}<img src={spriteArt[id]} alt="">{:else}<span class="tile-fallback"></span>{/if}
+              {#if spriteArt[id]}<img src={spriteArt[id]} alt="">{:else}<SquareUserRound size={22}/>{/if}
               <span>{id}</span>
             </button>
-          {/each}
+          {/snippet}</PagedList>
         </div>
       {:else if room.entities[selectedEntity]}
         <span>{room.entities[selectedEntity].name ?? room.entities[selectedEntity].sprite} selected</span>
@@ -482,12 +484,12 @@ import { tick } from 'svelte';
       </div>
       {#if tileChoices.length}
         <div class="tile-list">
-          {#each tileChoices as id}
+          <PagedList items={tileChoices} query={query} label="tile choices" size={12}>{#snippet children(id)}
             <button class:selected={tileId===id} aria-pressed={tileId===id} onclick={()=>chooseTile(id)}>
-              {#if tileArt[id]?.[0]}<img src={tileArt[id][0]} alt="">{:else}<span class="tile-fallback"></span>{/if}
+              {#if tileArt[id]?.[0]}<img src={tileArt[id][0]} alt="">{:else}<Layers3 size={22}/>{/if}
               <span>{id}</span>
             </button>
-          {/each}
+          {/snippet}</PagedList>
         </div>
       {:else}<p class="muted">{query ? 'No tiles match the search.' : 'Add a tile in Assets.'}</p>{/if}
       <div class="brush-options row">
@@ -515,8 +517,8 @@ import { tick } from 'svelte';
   h2{font-size:1rem;}
   .maphead button,.maphead a,.tools button,.view-tools button,.brush-options button{font-size:.78rem;padding:.35rem .5rem;}
   .tools,.view-tools{padding:.4rem .7rem;border-top:1px solid var(--line);}
-  .tools button.selected,.view-tools button[aria-pressed=true]{background:#372f41;border-color:#79627b;color:#f4c77e;}
-  .viewport{height:clamp(245px,46vh,610px);overflow:auto;background:#15151f;overscroll-behavior:contain;border-block:1px solid var(--line);}
+  .tools button.selected,.view-tools button[aria-pressed=true]{background:#313244;border-color:#b4befe;color:#cba6f7;}
+  .viewport{height:clamp(245px,46vh,610px);overflow:auto;background:var(--well);overscroll-behavior:contain;border-block:1px solid var(--line);}
   .canvas-space{display:grid;place-items:center;box-sizing:border-box;width:max-content;min-width:100%;min-height:100%;padding:16px;}
   canvas{touch-action:none;cursor:crosshair;box-shadow:0 0 0 1px #514958,0 8px 25px #0007;}
   canvas.hand{cursor:grab;}
@@ -530,8 +532,7 @@ import { tick } from 'svelte';
   .palette-head input{width:min(11rem,40%);margin-left:auto;}
   .tile-list{display:flex;gap:.4rem;overflow:auto;margin:.5rem 0;padding:.2rem 0;}
   .tile-list button{display:grid;place-items:center;gap:.25rem;min-width:58px;max-width:110px;overflow-wrap:anywhere;padding:.26rem .4rem;font-size:.74rem;}
-  .tile-list img,.tile-fallback{width:25px;height:25px;image-rendering:pixelated;object-fit:contain;}
-  .tile-fallback{background:#736485;}
+  .tile-list img{width:25px;height:25px;image-rendering:pixelated;object-fit:contain;}
   .brush-options{margin-top:.4rem;}
   label{display:flex;gap:.35rem;align-items:center;color:var(--muted);}
   select{width:auto;padding:.3rem .35rem;max-width:10rem;}

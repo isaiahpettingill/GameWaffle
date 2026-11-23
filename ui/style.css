@@ -60,3 +60,19 @@ canvas { display:block; image-rendering:pixelated; }
 .studio .export-menu button{text-align:left;border:0;}
 .studio .export-menu button:hover,.studio .item.selected,.studio .tools button.selected{background:#35444a;color:#c8edf0;}
 @media(max-width:880px){.studio .export-menu>div{position:fixed;left:.5rem;right:.5rem;top:auto;min-width:0;}}
+
+/* Catppuccin Mocha */
+body.studio{--bg:#1e1e2e;--panel:#181825;--well:#11111b;--line:#45475a;--muted:#bac2de;--accent:#cba6f7;--mint:#89dceb;background:var(--bg);color:#cdd6f4}
+.studio .appbar,.studio .projectbar{background:var(--panel)}
+.studio .studio-menus{display:flex;align-items:center;flex:none;gap:1px;margin:0;padding:0 .4rem;background:var(--panel);border-block:1px solid var(--line);position:relative;z-index:30}
+.studio .studio-menus details{position:relative}
+.studio .studio-menus summary{display:block;padding:.35rem .7rem;cursor:pointer;font-size:.85rem;list-style:none}
+.studio .studio-menus summary::-webkit-details-marker{display:none}
+.studio .studio-menus details>div{position:absolute;z-index:31;left:0;right:auto;top:100%;display:grid;min-width:12rem;padding:.25rem;background:var(--panel)}
+.studio .studio-menus :is(a,button){padding:.4rem .55rem;color:inherit;text-decoration:none;text-align:left;background:transparent}
+.studio .studio-menus :is(button,a):hover,.studio .item.selected,.studio .tools button.selected{background:#313244;color:#b4befe}
+.studio .work>nav{position:sticky;top:-.45rem;z-index:3;background:var(--bg)}
+.studio .project .item{justify-content:flex-start}
+.studio .project .item svg{color:#89b4fa}
+.studio .project .item.selected{border-left:2px solid var(--accent)}
+@media(max-width:480px){.studio .studio-menus details:last-child>div{left:-4rem}}

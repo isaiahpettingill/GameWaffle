@@ -18,10 +18,10 @@
   <div class="graph">
     <div class="world" style:width={columns*176+'px'} style:height={Math.ceil(ids.length/columns)*96+'px'}>
       <svg width="100%" height="100%" aria-label="Room connections">
-        <defs><marker id="arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0 0L6 3L0 6Z" fill="#f4c77e"/></marker></defs>
+        <defs><marker id="arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0 0L6 3L0 6Z" fill="var(--accent)"/></marker></defs>
         {#each ids as id}{#each Object.values(rooms[id].exits??{}) as route}{#each route.targets as target}
           {@const a=pos(id)}{@const b=pos(target)}
-          <line x1={a[0]} y1={a[1]} x2={b[0]+Math.sign(a[0]-b[0])*55} y2={b[1]+Math.sign(a[1]-b[1])*19} stroke="#f4c77e" marker-end="url(#arrow)"/>
+          <line x1={a[0]} y1={a[1]} x2={b[0]+Math.sign(a[0]-b[0])*55} y2={b[1]+Math.sign(a[1]-b[1])*19} stroke="var(--accent)" marker-end="url(#arrow)"/>
         {/each}{/each}{/each}
       </svg>
       {#each ids as id}{@const p=pos(id)}
