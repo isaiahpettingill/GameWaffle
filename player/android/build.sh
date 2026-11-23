@@ -3,7 +3,6 @@ set -euo pipefail
 
 workspace=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$workspace"
-: "${ANDROID_NDK_HOME:?Set the path to Android NDK r27c or later}"
 : "${ANDROID_PLATFORM_JAR:?Set the path to the Android 35 android.jar}"
 : "${ANDROID_BUILD_TOOLS:?Set the path to Android build-tools 35.0.0}"
 : "${SDL_SOURCE:?Set the path to the SDL 3.4.2 source directory}"
@@ -12,42 +11,17 @@ cd "$workspace"
 cart=${1:-web-built/demo.waffle}
 output=${2:-web-built/android/GameWaffle-Player.apk}
 stage="$workspace/web-built/android/build"
-ndk_host=${NDK_HOST_TAG:-linux-x86_64}
-toolchain="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$ndk_host/bin"
 tools=$ANDROID_BUILD_TOOLS
 mkdir -p "$stage/classes" "$stage/dex" "$stage/assets" "$(dirname "$output")"
 cp "$cart" "$stage/assets/demo.waffle"
 
 for abi in arm64-v8a x86_64; do
-    case "$abi" in
-        arm64-v8a) target=aarch64-linux-android; linker_variable=CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER ;;
-        x86_64) target=x86_64-linux-android; linker_variable=CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER ;;
-    esac
-    build="$stage/sdl-$abi"
-    cmake -S "$SDL_SOURCE" -B "$build" -G Ninja \
-        -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-        -DANDROID_ABI="$abi" -DANDROID_PLATFORM=android-24 -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
-        -DSDL_SHARED=ON -DSDL_STATIC="$([[ ${BUILD_LIBRETRO:-0} == 1 ]] && echo ON || echo OFF)" \
-        -DCMAKE_BUILD_TYPE=Release -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
-    cmake --build "$build" --parallel "${JOBS:-4}"
-    env "$linker_variable=$toolchain/${target}24-clang" \
-        RUSTFLAGS="-L native=$build -C link-arg=-Wl,-z,max-page-size=16384" \
-        cargo build --locked --release --lib --manifest-path player/Cargo.toml --target "$target"
-    mkdir -p "$stage/lib/$abi"
-    cp "$build/libSDL3.so" "$stage/lib/$abi/"
-    cp "player/target/$target/release/libmain.so" "$stage/lib/$abi/"
-    "$toolchain/llvm-strip" "$stage/lib/$abi/"*.so
-    if [[ ${BUILD_LIBRETRO:-0} == 1 ]]; then
-        env "$linker_variable=$toolchain/${target}24-clang" \
-            RUSTFLAGS="-L native=$build -C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-landroid -C link-arg=-llog -C link-arg=-lOpenSLES -C link-arg=-lGLESv1_CM -C link-arg=-lGLESv2 -C link-arg=-lEGL -C link-arg=-ldl" \
-            cargo build --locked --release --lib --features libretro --manifest-path player/Cargo.toml --target "$target"
-        core="player/target/$target/release/libmain.so"
-        "$toolchain/llvm-strip" "$core"
-        if "$toolchain/llvm-readelf" -d "$core" | grep -q 'NEEDED.*libSDL'; then
-            echo 'The core requires a separate SDL library.' >&2
-            exit 1
-        fi
-        python3 packaging/core-zip.py "$core" "android-$abi"
+    if [[ ${USE_PREBUILT_ANDROID_LIBS:-0} == 1 ]]; then
+        for library in libmain.so libSDL3.so; do
+            test -s "$stage/lib/$abi/$library" || { echo "Missing $abi/$library" >&2; exit 1; }
+        done
+    else
+        bash player/android/build-native.sh "$abi"
     fi
 done
 
