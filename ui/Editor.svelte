@@ -585,6 +585,10 @@
               {/if}
             </label>
             {#if inspector}
+              <label class="stack">Active flag<select value={inspector.flag??''} onchange={e=>set(inspector,'flag',e.currentTarget.value)}>
+                <option value="">Always active</option>{#each Object.keys(project.flags??{}) as flag}<option>{flag}</option>{/each}
+              </select></label>
+              {#if inspector.flag}<label class="check"><input type="checkbox" checked={inspector.when??true} onchange={e=>set(inspector,'when',e.currentTarget.checked)}> Flag must be on</label>{/if}
               <label class="stack">Source <select value={inspector.source} onchange={e=>{
                 const previous=inspector.source;
                 if(previous!==e.currentTarget.value){
@@ -687,6 +691,10 @@
           {#if layer}
             <label class="stack">Layer name <input value={layer.name} onchange={e=>changeLayer('name',e.currentTarget.value)}></label>
             <label class="check"><input type="checkbox" checked={layer.collidable} onchange={e=>changeLayer('collidable',e.currentTarget.checked)}> Enable collision</label>
+            <label class="stack">Layer flag<select value={layer.flag??''} onchange={e=>changeLayer('flag',e.currentTarget.value)}>
+              <option value="">Always active</option>{#each Object.keys(project.flags??{}) as flag}<option>{flag}</option>{/each}
+            </select></label>
+            {#if layer.flag}<label class="check"><input type="checkbox" checked={layer.when??true} onchange={e=>changeLayer('when',e.currentTarget.checked)}> Flag must be on</label>{/if}
             <label class="stack">Layer order <input type="number" min="-10000" max="10000" value={layer.order??layerIndex} onchange={e=>{
               const value=e.currentTarget.valueAsNumber;
               if(Number.isInteger(value)&&Math.abs(value)<=10000)changeLayer('order',value);

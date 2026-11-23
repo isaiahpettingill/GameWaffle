@@ -342,6 +342,9 @@ fn store(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &
     };
     let name = &m.program.names[key as usize];
     let value = &m.registers[source as usize];
+    if scope == 2 && table.contains_key(name) == value.zero() {
+        cx.runtime.gates_dirty = true;
+    }
     if value.zero() {
         table.remove(name);
     } else {

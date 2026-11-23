@@ -209,6 +209,12 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     }));
   }
   const globals = variables(project.variables,false), flags = variables(project.flags,true);
+  function conditions(...sources){
+    return sources.filter(s=>s?.flag).map(s=>{
+      if(!Object.hasOwn(flags,s.flag))throw Error('Unknown condition flag: '+s.flag);
+      return [s.flag,s.when??true];
+    });
+  }
   const camera = {
     min_width:integer(project.camera?.min_width??128,128,512,'camera minimum width'),
     min_height:integer(project.camera?.min_height??128,128,512,'camera minimum height'),
@@ -298,7 +304,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         players.add(entry.player);
       }
       const physics = entry.physics ? props({ ...definition.physics, ...entry.physics }, definition.physics.mode) : undefined;
-      entities.push({ ...entry, name, animation, physics });
+      entities.push({ ...entry, conditions:conditions(project.sprites[entry.sprite],entry), name, animation, physics });
     }
     for (const sound of [room.music, room.ambience].filter(Boolean)) {
       if (!Object.hasOwn(audio, sound)) throw Error(`Unknown room audio: ${sound}`);
@@ -319,7 +325,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         const clip = tile.variants[variant ?? ((x * 37 + y * 17) % tile.variants.length)];
         if (!clip) throw Error(`Unknown variant for ${tileId}`);
         const physics = layer.collidable ? tile.physics : { ...tile.physics, mode: 'none' };
-        const dynamic = !['static','none'].includes(physics.mode);
+        const gates=conditions(layer,project.tiles[tileId]);
+        const dynamic = gates.length>0 || !['static','none'].includes(physics.mode);
         if (!dynamic && clip.length === 1) {
           const col = Math.floor(x/chunkSize)*chunkSize, row = Math.floor(y/chunkSize)*chunkSize;
           const image = `layer/${index}/${col}/${row}`;
@@ -332,9 +339,10 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         } else {
           for (const frame of clip) images.set(frame.image, frames.get(frame.image));
           entities.push({ x: (x+.5)*size, y:(y+.5)*size, tile: tileId, clip,
-            physics: physics.mode === 'static' ? { ...physics, mode: 'none' } : physics, layer: order });
+            conditions:gates, blocker:gates.length && physics.mode==='static'?y*cols+x:null,
+            physics: !gates.length && physics.mode === 'static' ? { ...physics, mode: 'none' } : physics, layer: order });
         }
-        if (physics.mode === 'static') {
+        if (!gates.length && physics.mode === 'static') {
           zone.set(y * cols + x, physics);
           blockers.add(y * cols + x);
         }

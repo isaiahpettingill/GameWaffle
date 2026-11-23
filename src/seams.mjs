@@ -27,7 +27,7 @@ export function addSeams(rooms,atlases,sprites,packAtlas){
       const source=image(neighborId);
       const entries=[...other.baked.filter(layer=>!layer.image.startsWith('seam/'))];
       for(const entity of other.entities){
-        if(entity.player!=null || entity.flag || entity.sprite)continue;
+        if(entity.player!=null || entity.conditions?.length || entity.sprite)continue;
         const sprite=sprites[entity.sprite];
         const frame=entity.clip?.[0]??sprite?.clips[entity.animation??sprite?.animation]?.frames[0]??sprite?.clips.default.frames[0];
         if(frame)entries.push({image:frame.image,x:entity.x-(sprite?.width??other.size)/2,y:entity.y-(sprite?.height??other.size)/2,layer:entity.layer??sprite?.layer??0});

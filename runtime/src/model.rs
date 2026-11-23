@@ -148,8 +148,9 @@ pub struct Sprite {
 
 #[derive(Clone, Default, Deserialize)]
 pub struct Spawn {
-    pub flag: Option<String>,
-    pub when: Option<bool>,
+    #[serde(default)]
+    pub conditions: Vec<(String, bool)>,
+    pub blocker: Option<usize>,
     #[serde(deserialize_with = "read_float")]
     pub x: f32,
     #[serde(deserialize_with = "read_float")]

@@ -20,6 +20,7 @@ jobs:
           curl -fsSL https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.105/wasm-bindgen-0.2.105-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
           cp "$RUNNER_TEMP/wasm-bindgen-0.2.105-x86_64-unknown-linux-musl/wasm-bindgen" "$HOME/.cargo/bin/"
 
+      - run: cargo test --manifest-path runtime/Cargo.toml --locked
       - run: npm ci && npm run build && node packaging/check-game.mjs
       - name: Check editor at four screen widths
         run: |
@@ -80,6 +81,7 @@ jobs:
         with: {distribution: temurin, java-version: 21}
       - uses: actions/download-artifact@v4
         with: {name: studio-assets, path: web-built}
+      - uses: android-actions/setup-android@v3
       - run: |
           sdkmanager "ndk;27.2.12479018" "platforms;android-35" "build-tools;35.0.0"
           rustup target add aarch64-linux-android x86_64-linux-android
@@ -101,6 +103,7 @@ jobs:
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
           export ANDROID_PLATFORM_JAR="$ANDROID_HOME/platforms/android-35/android.jar"
           export ANDROID_BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          export RELEASE_VERSION_CODE="$GITHUB_RUN_NUMBER" RELEASE_VERSION_NAME="${GITHUB_REF_NAME#v}"
           export SDL_SOURCE="$RUNNER_TEMP/SDL"
           bash player/android/build.sh web-built/demo.waffle GameWaffle-Player.apk
       - uses: actions/upload-artifact@v4

@@ -115,6 +115,8 @@ pub struct Runtime {
     next: u32,
     inputs: [Input; 4],
     blocked: HashSet<usize>,
+    gates: Vec<(Spawn, Option<u32>)>,
+    gates_dirty: bool,
     sounds: Vec<String>,
     events: Vec<RuntimeEvent>,
     transition: Option<String>,
@@ -361,6 +363,8 @@ impl Runtime {
             next: 1,
             inputs: [Input::default(); 4],
             blocked: HashSet::new(),
+            gates: Vec::new(),
+            gates_dirty: false,
             sounds: Vec::new(),
             events: Vec::new(),
             transition: None,
@@ -414,20 +418,50 @@ impl Runtime {
             );
             self.static_ids.insert(id);
         }
+        self.gates.clear();
         for spawn in room.entities {
-            self.add_scene_actor(spawn, room.size)?;
+            if spawn.conditions.is_empty() {
+                self.add_scene_actor(spawn, room.size)?;
+            } else {
+                self.gates.push((spawn, None));
+            }
         }
+        self.gates_dirty = true;
+        self.sync_gates()
+    }
+
+    fn sync_gates(&mut self) -> Result<(), String> {
+        if !std::mem::take(&mut self.gates_dirty) || self.gates.is_empty() {
+            return Ok(());
+        }
+        let mut gates = std::mem::take(&mut self.gates);
+        let room = &self.game.rooms[&self.room];
+        let size = room.size;
+        self.blocked = room.blockers.iter().copied().collect();
+        for (spawn, id) in &mut gates {
+            if spawn
+                .conditions
+                .iter()
+                .all(|(flag, on)| self.flag(flag) == *on)
+            {
+                if let Some(cell) = spawn.blocker {
+                    self.blocked.insert(cell);
+                }
+                if id.is_none() {
+                    *id = Some(self.next);
+                    self.add_scene_actor(spawn.clone(), size)?;
+                }
+            } else if let Some(actor) = id.take().and_then(|id| self.actors.remove(&id)) {
+                if let Some(body) = actor.body {
+                    self.world.borrow_mut().destroy_body(body);
+                }
+            }
+        }
+        self.gates = gates;
         Ok(())
     }
 
     fn add_scene_actor(&mut self, spawn: Spawn, size: f32) -> Result<(), String> {
-        if spawn
-            .flag
-            .as_ref()
-            .is_some_and(|flag| self.flag(flag) != spawn.when.unwrap_or(true))
-        {
-            return Ok(());
-        }
         let definition = match spawn.sprite.as_ref() {
             Some(key) => Some(self.game.sprites.get(key).ok_or("Unknown sprite in room")?),
             None => None,
@@ -609,6 +643,7 @@ impl Runtime {
             return self.load(&room);
         }
 
+        self.sync_gates()?;
         self.zones(&inputs, &mut actions);
         self.move_bullets(&mut actions);
         {
@@ -659,6 +694,7 @@ impl Runtime {
             }
             self.add_scene_actor(spawn, size)?;
         }
+        self.sync_gates()?;
         self.particles.update(self.focus(), self.view_size);
         self.cross_exit(&inputs)
     }
