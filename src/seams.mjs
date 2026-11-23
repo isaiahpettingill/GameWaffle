@@ -10,7 +10,7 @@ export function addSeams(rooms,atlases,sprites,packAtlas){
   };
   const updates={};
   for(const [id,room] of Object.entries(rooms)){
-    room.seams={};
+    room.seams={};room.neighbors=[];
     const images=new Map();
     for(const [edge,exit] of Object.entries(room.exits)){
       if(!exit.adjacent||exit.mode!=='fixed'||exit.flag)continue;
@@ -19,6 +19,7 @@ export function addSeams(rooms,atlases,sprites,packAtlas){
       const horizontal=edge==='left'||edge==='right';
       if(horizontal?room.height!==other.height:room.width!==other.width)throw Error('Connected edges must have the same length');
       room.seams[edge]=true;
+      if(!room.neighbors.includes(neighborId))room.neighbors.push(neighborId);
       const w=horizontal?Math.min(256,other.width):other.width,h=horizontal?other.height:Math.min(256,other.height);
       const sx=edge==='left'?other.width-w:0,sy=edge==='up'?other.height-h:0;
       const rgba=Buffer.alloc(w*h*4);

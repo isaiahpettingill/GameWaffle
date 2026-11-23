@@ -258,7 +258,7 @@
   }
   function chooseDefinition(id){
     if(tab==='room'){
-      placementSprite=id;
+      mobilePane='Editor';placementSprite=id;
       mapTool='spawn';
       return;
     }

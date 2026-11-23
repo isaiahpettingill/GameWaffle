@@ -57,3 +57,18 @@ try{
   assert.equal(unpack(pack(await compileProject(path))).name,project.name);
 }finally{await rm(tmp,{recursive:true,force:true});rt.free();}
 console.log('Passed cartridge, jump, room crossing, inventory, dialogue, save, PNG, and archive checks');
+
+// A flag-controlled layer changes its visible tiles and collision bodies in play.
+const conditional=await compileProject(resolve('demo'),{
+  project:await (async()=>{
+    const p=JSON.parse(await readFile('demo/project.json','utf8'));
+    p.rooms.yard.layers.push({name:'Gate',flag:'found_key',collidable:true,cells:[[4,8,'stone']]});
+    return p;
+  })(),
+  scripts:new Map([['maker',{events:{b:[{op:'set',scope:'flag',name:'found_key',value:true}]}}]])
+});
+const gated=Runtime.from_cartridge(pack(conditional));
+const gatePresent=frame=>JSON.parse(frame).actors.some(a=>a.x===108 && a.y===204);
+assert.equal(gatePresent(gated.snapshot()),false);
+assert.equal(gatePresent(gated.step_buttons(32)),true);
+gated.free();

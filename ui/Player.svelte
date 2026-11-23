@@ -41,6 +41,12 @@
     error = '';
   }
   function show(frame) {
+    if (snapshot?.room!==frame.room || snapshot?.tick>frame.tick) {
+      const current=cart;
+      for(const id of cart.rooms[frame.room].neighbors??[]){
+        loadAtlas(cart.atlases[id]).then(image=>{if(current===cart)atlasImages[id]=image;}).catch(e=>{if(current===cart)error=e.message;});
+      }
+    }
     snapshot = frame;
     if (atlasImages[frame.room]) {
       if (canvas) drawRoom(canvas,cart,frame,atlasImages);

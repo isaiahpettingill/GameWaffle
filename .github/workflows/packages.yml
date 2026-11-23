@@ -82,6 +82,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with: {name: studio-assets, path: web-built}
       - uses: android-actions/setup-android@v3
+        with: {packages: platform-tools, log-accepted-android-sdk-licenses: false}
       - run: |
           sdkmanager "ndk;27.2.12479018" "platforms;android-35" "build-tools;35.0.0"
           rustup target add aarch64-linux-android x86_64-linux-android

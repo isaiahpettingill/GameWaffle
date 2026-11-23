@@ -263,7 +263,7 @@ fn draw(
                 batch.size as f32,
             )
         }));
-        canvas.fill_rects(&rectangles)?;
+        canvas.fill_rects(rectangles)?;
     }
     if let Some(font) = source.rect("ui/font") {
         let text =
@@ -624,7 +624,7 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
                     .rooms
                     .get(room_id)
                     .ok_or("Room graphics are missing")?;
-                if mixer.room(room_id) {
+                if mixer.room(room.music.as_deref(), room.ambience.as_deref()) {
                     for (id, gain) in [
                         (room.music.as_deref(), 0.55),
                         (room.ambience.as_deref(), 0.4),
