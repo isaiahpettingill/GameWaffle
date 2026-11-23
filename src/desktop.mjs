@@ -64,6 +64,7 @@ export async function exportDesktop(bytes,t=nativeTarget){
   const cached=await installedRuntime(t);
   let player=cached && await optional(cached.path);
   if(!player && t===nativeTarget)player=await optional(join(app,binary(t)));
+  if(!player && t===nativeTarget)player=await optional(join(app,'web-built','native',binary(t)));
   if(!player)throw Error('Install the '+t+' runtime from Updates before export');
   return zipSync({[binary(t)]:[player,{os:3,attrs:(0o100755<<16)>>>0}],'game.waffle':bytes,'LICENSE':await readFile(join(app,'LICENSE'))},{level:4});
 }

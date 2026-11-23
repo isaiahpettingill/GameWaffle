@@ -22,9 +22,9 @@
       if(next==='text'){
         const unit=blockEditor.save();
         const source=original?.source && formatScript(original)===formatScript(unit)?original.source:formatScript(unit);
-        mode=next;await tick();textEditor=mountText(textHost,source,()=>{dirty=true;});textEditor.focus();
+        mode=next;await tick();textEditor=mountText(textHost,source,()=>{dirty=true;},selected);textEditor.focus();
       }else{
-        const source=textEditor.source(),unit=await validateText(source);
+        const source=textEditor.source(),unit=await validateText(source,selected);
         unit.layout=original?.layout;original={...unit,source};blockEditor.load(unit);
         textEditor.dispose();textEditor=null;mode=next;
       }
@@ -48,7 +48,7 @@
     busy=true;
     error='';
     try{
-      const data=mode==='text'?await validateText(textEditor.source()):blockEditor.save();
+      const data=mode==='text'?await validateText(textEditor.source(),selected):blockEditor.save();
       if(mode==='text'){data.layout=original?.layout;data.source=textEditor.source();}
       else if(original?.source && formatScript(original)===formatScript(data))data.source=original.source;
       const result=await fetch(endpoint(),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});

@@ -15,11 +15,15 @@ const language=StreamLanguage.define({token(stream){
   if(stream.match(/[a-zA-Z_]\w*/))return 'variableName';
   stream.next();return null;
 }});
-export async function validateText(source){
+export async function validateText(source,moduleName){
   const unit=parseScript(source);
+  if(moduleName && Object.keys(unit.events).length){
+    const from=source.search(/^\s*on\s/m);
+    throw Object.assign(Error('Modules can contain procedures and functions only'),{from:Math.max(0,from)});
+  }
   let modules={};
   if(unit.imports.length){
-    const res=await fetch('./api/modules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({imports:unit.imports})});
+    const res=await fetch('./api/modules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({imports:unit.imports,moduleName})});
     modules=await res.json();if(!res.ok)throw Error(modules.error);
   }
   try{
@@ -27,7 +31,7 @@ export async function validateText(source){
   }catch(err){Object.assign(err,locations.get(err.node));throw err;}
   return unit;
 }
-export function mountText(parent,source,changed){
+export function mountText(parent,source,changed,moduleName){
   const view=new EditorView({parent,state:EditorState.create({doc:source,extensions:[
     lineNumbers(),history(),language,syntaxHighlighting(defaultHighlightStyle),highlightActiveLine(),lintGutter(),
     keymap.of([indentWithTab,...defaultKeymap,...historyKeymap,...lintKeymap]),EditorView.lineWrapping,
@@ -35,7 +39,7 @@ export function mountText(parent,source,changed){
     EditorView.updateListener.of(update=>{if(update.docChanged)changed();}),
     linter(async view=>{
       const doc=view.state.doc;
-      try{await validateText(doc.toString());return [];}catch(err){
+      try{await validateText(doc.toString(),moduleName);return [];}catch(err){
         const from=Math.min(doc.length,err.from??0);
         return [{from,to:Math.min(doc.length,err.to??doc.lineAt(from).to),severity:'error',message:err.message}];
       }

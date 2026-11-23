@@ -170,7 +170,7 @@ const server = createServer(async (req, res) => {
         }
       }
       if(url.pathname==='/api/modules' && req.method==='POST'){
-        const {imports}=await jsonBody(req);return send(res,200,await loadModules({imports},store.read));
+        const {imports,moduleName}=await jsonBody(req);return send(res,200,await loadModules({imports},store.read,Object.create(null),new Set(moduleName?[moduleName]:[])));
       }
       const match = url.pathname.match(/^\/api\/script\/([a-zA-Z0-9_-]+)$/);
       if (match) {
