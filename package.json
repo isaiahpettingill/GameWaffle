@@ -1,8 +1,13 @@
 {
   "name": "gamewaffle",
+  "license": "0BSD",
   "version": "0.1.0",
   "description": "Sprite game studio and Rust cartridge runtime",
   "scripts": {
+    "check": "cargo test --manifest-path runtime/Cargo.toml --locked && npm run build && node packaging/check-game.mjs && node packaging/check-scripts.mjs && node packaging/check-desktop.mjs",
+    "check:editor": "node packaging/check-editor.cjs",
+    "build:native": "node src/build.mjs --native",
+    "build:player": "node src/build.mjs --player-only",
     "build": "node src/compiler.mjs && node src/build.mjs",
     "start": "node src/server.mjs",
     "demo": "node src/demo.mjs",
@@ -11,8 +16,14 @@
   },
   "type": "module",
   "dependencies": {
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/lint": "^6.9.8",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.15",
     "blockly": "13.5.0",
     "cbor-x": "1.6.9",
+    "fflate": "0.8.3",
     "pngjs": "7.0.0",
     "qoa-format": "1.0.1",
     "svelte": "5.59.1",

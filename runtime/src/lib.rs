@@ -1,11 +1,17 @@
+mod camera;
 mod model;
+mod particles;
 mod path;
 mod physics;
+mod progress;
+mod vm;
+
+pub use camera::{Camera, viewport};
+pub use model::{ActorView, Input, RuntimeEvent, Snapshot};
 
 use box2d_rs::b2_math::B2vec2 as Vec2;
 use model::*;
 use physics::{Body, Contacts, PPM, World};
-use serde_json::Value;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashSet},
@@ -15,6 +21,7 @@ use wasm_bindgen::prelude::*;
 
 const STEP: f32 = 1.0 / 60.0;
 const MAX_ACTORS: usize = 4096;
+const MAX_ACTIONS: usize = MAX_ACTORS * 8;
 
 struct Bullet {
     aim: String,
@@ -25,6 +32,8 @@ struct Bullet {
 }
 
 struct Actor {
+    dormant: bool,
+    emitter: Option<particles::Emitter>,
     id: u32,
     name: Option<String>,
     sprite: Option<String>,
@@ -45,6 +54,9 @@ struct Actor {
     animation: String,
     animation_start: u64,
     bullet: Option<Bullet>,
+    variables: vm::Variables,
+    scripts: BTreeMap<String, vm::Machine>,
+    tick_script: Option<vm::Machine>,
 }
 
 impl Actor {
@@ -93,6 +105,7 @@ enum Action {
 
 #[wasm_bindgen]
 pub struct Runtime {
+    particles: particles::Particles,
     game: Game,
     room: String,
     world: World,
@@ -103,11 +116,26 @@ pub struct Runtime {
     next: u32,
     inputs: [Input; 4],
     blocked: HashSet<usize>,
+    gates: Vec<(Spawn, Option<u32>)>,
+    gates_dirty: bool,
     sounds: Vec<String>,
     events: Vec<RuntimeEvent>,
     transition: Option<String>,
     pending_start: Vec<u32>,
+    restored: bool,
     pending_instances: Vec<Spawn>,
+    programs: BTreeMap<String, vm::Programs>,
+    globals: vm::Variables,
+    flags: vm::Variables,
+    seed: u32,
+    rng: u32,
+    camera_actor: Option<u32>,
+    camera_point: Option<[f32; 2]>,
+    view_size: [u32; 2],
+    inventory: BTreeMap<String, u32>,
+    dialog: std::collections::VecDeque<String>,
+    counters: BTreeMap<String, i32>,
+    script_fuel: usize,
 }
 
 #[wasm_bindgen]
@@ -120,32 +148,83 @@ impl Runtime {
 
     /// Load a GameWaffle cartridge, optionally starting at a different room.
     pub fn from_cartridge(bytes: &[u8], room: Option<String>) -> Result<Runtime, String> {
-        let payload = bytes
-            .strip_prefix(b"GWAF\x00\x01")
-            .ok_or("Unsupported cartridge format")?;
-        #[derive(serde::Deserialize)]
-        struct CartridgeMetadata {
-            start: String,
-            rooms: Value,
-            sprites: Value,
+        if bytes.len() < 111 || bytes.len() > 256 * 1024 * 1024 {
+            return Err("Invalid cartridge size".into());
         }
-        let metadata: CartridgeMetadata =
-            ciborium::from_reader(payload).map_err(|error| error.to_string())?;
-        let game = Game {
-            start: metadata.start,
-            rooms: serde_json::from_value(metadata.rooms).map_err(|error| error.to_string())?,
-            sprites: serde_json::from_value(metadata.sprites).map_err(|error| error.to_string())?,
+        let (bytes, signature) = bytes.split_at(bytes.len() - 96);
+        let key = ed25519_dalek::VerifyingKey::from_bytes(signature[..32].try_into().unwrap())
+            .map_err(|_| "Invalid cartridge signing key")?;
+        key.verify_strict(
+            bytes,
+            &ed25519_dalek::Signature::from_bytes(signature[32..].try_into().unwrap()),
+        )
+        .map_err(|_| "Invalid cartridge signature")?;
+        let game = if bytes.starts_with(b"GWAF\x00\x02") && bytes.len() >= 14 {
+            let packed = u32::from_le_bytes(bytes[6..10].try_into().unwrap()) as usize;
+            let size = u32::from_le_bytes(bytes[10..14].try_into().unwrap()) as usize;
+            let end = 14usize
+                .checked_add(packed)
+                .ok_or("Invalid cartridge size")?;
+            if packed == 0 || size == 0 || size > 32 * 1024 * 1024 || end >= bytes.len() {
+                return Err("Invalid cartridge section lengths".into());
+            }
+            let data = miniz_oxide::inflate::decompress_to_vec_with_limit(&bytes[14..end], size)
+                .map_err(|_| "Cannot decompress simulation data")?;
+            if data.len() != size {
+                return Err("Invalid simulation data length".into());
+            }
+            let game: Game = ciborium::from_reader(&data[..]).map_err(|error| error.to_string())?;
+            game
+        } else {
+            return Err("Unsupported cartridge format".into());
         };
         Self::from_game(game, room)
     }
 
+    pub fn save_id(&self) -> String {
+        self.game.id.clone()
+    }
+    pub fn set_view_size(&mut self, w: u32, h: u32) {
+        self.view_size = [w.clamp(128, 512), h.clamp(128, 512)];
+    }
+    pub fn step_buttons(&mut self, buttons: u32) -> Result<String, String> {
+        self.step_inputs(std::array::from_fn(|index| {
+            Input::from_bits((buttons >> (index * 8)) as u8)
+        }))?;
+        self.snapshot()
+    }
+
     pub fn step(&mut self, input_json: &str) -> Result<String, String> {
         let inputs: [Input; 4] = serde_json::from_str(input_json).map_err(|err| err.to_string())?;
-        self.advance(inputs)?;
+        self.step_inputs(inputs)?;
         self.snapshot()
     }
 
     pub fn snapshot(&self) -> Result<String, String> {
+        serde_json::to_string(&self.view()).map_err(|error| error.to_string())
+    }
+
+    pub fn reset(&mut self) -> Result<(), String> {
+        self.inputs = [Input::default(); 4];
+        self.tick = 0;
+        self.transition = None;
+        self.inventory.clear();
+        self.set_seed(self.seed.wrapping_mul(1664525).wrapping_add(1013904223));
+        self.reset_variables();
+        self.load(&self.game.start.clone())
+    }
+}
+
+impl Runtime {
+    fn focus(&self) -> Option<[f32; 2]> {
+        self.camera_point.or_else(|| {
+            self.camera_actor
+                .and_then(|id| self.actors.get(&id))
+                .or_else(|| self.actors.values().find(|a| a.player == Some(0)))
+                .map(|a| [a.p.x, a.p.y])
+        })
+    }
+    pub fn view(&self) -> Snapshot<'_> {
         let actors = self
             .actors
             .values()
@@ -182,24 +261,69 @@ impl Runtime {
                 }
             })
             .collect();
-        serde_json::to_string(&Snapshot {
+        Snapshot {
+            particles: self.particles.visible_batches(),
             room: &self.room,
             tick: self.tick,
             actors,
+            focus: self.focus(),
+            dialog: self.dialog.front().map(String::as_str),
+            counters: &self.counters,
             sounds: &self.sounds,
             events: &self.events,
-        })
-        .map_err(|error| error.to_string())
+        }
     }
 
-    pub fn reset(&mut self) -> Result<(), String> {
-        self.inputs = [Input::default(); 4];
-        self.load(&self.game.start.clone())
+    pub fn room(&self) -> &str {
+        &self.room
     }
-}
 
-impl Runtime {
-    fn from_game(game: Game, room: Option<String>) -> Result<Self, String> {
+    pub fn sounds(&self) -> &[String] {
+        &self.sounds
+    }
+
+    pub fn events(&self) -> &[RuntimeEvent] {
+        &self.events
+    }
+
+    pub fn scripted_global(&self, name: &str) -> String {
+        self.globals
+            .get(name)
+            .map_or_else(|| "0".into(), ToString::to_string)
+    }
+
+    pub fn flag(&self, name: &str) -> bool {
+        self.flags.contains_key(name)
+    }
+
+    pub fn local(&self, actor: u32, name: &str) -> Option<String> {
+        Some(
+            self.actors
+                .get(&actor)?
+                .variables
+                .get(name)
+                .map_or_else(|| "0".into(), ToString::to_string),
+        )
+    }
+
+    fn reset_variables(&mut self) {
+        self.globals = self
+            .game
+            .globals
+            .iter()
+            .filter(|(_, value)| **value != 0)
+            .map(|(key, value)| (Rc::from(key.as_str()), (*value).into()))
+            .collect();
+        self.flags = self
+            .game
+            .flags
+            .iter()
+            .filter(|(_, value)| **value)
+            .map(|(key, _)| (Rc::from(key.as_str()), 1.into()))
+            .collect();
+    }
+
+    fn from_game(mut game: Game, room: Option<String>) -> Result<Self, String> {
         if !game.rooms.contains_key(&game.start) {
             return Err("Unknown starting room".into());
         }
@@ -215,9 +339,22 @@ impl Runtime {
                 return Err("Invalid room dimensions or actor count".into());
             }
         }
+        let mut programs = BTreeMap::new();
+        for (id, sprite) in &mut game.sprites {
+            let events = std::mem::take(&mut sprite.program)
+                .into_iter()
+                .map(|(event, encoded)| {
+                    let program = vm::Program::decode(encoded)
+                        .map_err(|error| format!("{id}/{event}: {error}"))?;
+                    Ok::<_, String>((event, Rc::new(program)))
+                })
+                .collect::<Result<_, _>>()?;
+            programs.insert(id.clone(), events);
+        }
         let (world, contacts) = physics::world(0.0);
         let start = room.unwrap_or_else(|| game.start.clone());
         let mut rt = Runtime {
+            particles: Default::default(),
             game,
             room: String::new(),
             world,
@@ -228,12 +365,28 @@ impl Runtime {
             next: 1,
             inputs: [Input::default(); 4],
             blocked: HashSet::new(),
+            gates: Vec::new(),
+            gates_dirty: false,
             sounds: Vec::new(),
             events: Vec::new(),
             transition: None,
             pending_start: Vec::new(),
+            restored: false,
             pending_instances: Vec::new(),
+            programs,
+            globals: Default::default(),
+            flags: Default::default(),
+            seed: 1,
+            rng: 1,
+            camera_actor: None,
+            camera_point: None,
+            view_size: [512, 512],
+            inventory: Default::default(),
+            dialog: Default::default(),
+            counters: Default::default(),
+            script_fuel: 0,
         };
+        rt.reset_variables();
         rt.load(&start)?;
         Ok(rt)
     }
@@ -241,10 +394,16 @@ impl Runtime {
     fn load(&mut self, id: &str) -> Result<(), String> {
         let room = self.game.rooms.get(id).ok_or("Unknown room")?.clone();
         self.actors.clear();
+        self.particles.clear();
         (self.world, self.contacts) = physics::world(room.gravity);
         self.room = id.into();
+        self.camera_actor = None;
+        self.camera_point = None;
         self.blocked = room.blockers.iter().copied().collect();
         self.static_ids.clear();
+        self.dialog.clear();
+        self.counters.clear();
+        self.restored = false;
         self.pending_start.clear();
         self.pending_instances.clear();
         self.sounds.clear();
@@ -261,9 +420,46 @@ impl Runtime {
             );
             self.static_ids.insert(id);
         }
+        self.gates.clear();
         for spawn in room.entities {
-            self.add_scene_actor(spawn, room.size)?;
+            if spawn.conditions.is_empty() {
+                self.add_scene_actor(spawn, room.size)?;
+            } else {
+                self.gates.push((spawn, None));
+            }
         }
+        self.gates_dirty = true;
+        self.sync_gates()
+    }
+
+    fn sync_gates(&mut self) -> Result<(), String> {
+        if !std::mem::take(&mut self.gates_dirty) || self.gates.is_empty() {
+            return Ok(());
+        }
+        let mut gates = std::mem::take(&mut self.gates);
+        let room = &self.game.rooms[&self.room];
+        let size = room.size;
+        self.blocked = room.blockers.iter().copied().collect();
+        for (spawn, id) in &mut gates {
+            if spawn
+                .conditions
+                .iter()
+                .all(|(flag, on)| self.flag(flag) == *on)
+            {
+                if let Some(cell) = spawn.blocker {
+                    self.blocked.insert(cell);
+                }
+                if id.is_none() {
+                    *id = Some(self.next);
+                    self.add_scene_actor(spawn.clone(), size)?;
+                }
+            } else if let Some(actor) = id.take().and_then(|id| self.actors.remove(&id)) {
+                if let Some(body) = actor.body {
+                    self.world.borrow_mut().destroy_body(body);
+                }
+            }
+        }
+        self.gates = gates;
         Ok(())
     }
 
@@ -321,6 +517,8 @@ impl Runtime {
         self.actors.insert(
             id,
             Actor {
+                dormant: false,
+                emitter: definition.and_then(|s| s.emitter),
                 id,
                 name: None,
                 sprite,
@@ -341,26 +539,116 @@ impl Runtime {
                 animation,
                 animation_start: self.tick,
                 bullet: None,
+                variables: Default::default(),
+                scripts: Default::default(),
+                tick_script: None,
             },
         );
         id
     }
 
-    fn advance(&mut self, inputs: [Input; 4]) -> Result<(), String> {
+    fn update_activity(&mut self) {
+        let room = &self.game.rooms[&self.room];
+        let [w, h] = self.view_size.map(|v| v as f32);
+        let center = |v: f32, size: f32, extent: f32| {
+            (v - size / 2.).clamp(0., (extent - size).max(0.)) + size / 2.
+        };
+        let views: Vec<_> = self
+            .actors
+            .values()
+            .filter(|a| a.player.is_some())
+            .map(|a| [a.p.x, a.p.y])
+            .chain(self.focus())
+            .map(|[x, y]| {
+                [
+                    center(x, w, room.cols as f32 * room.size),
+                    center(y, h, room.height),
+                ]
+            })
+            .collect();
+        for actor in self.actors.values_mut() {
+            let Some(sprite) = actor
+                .sprite
+                .as_ref()
+                .filter(|_| actor.player.is_none() && actor.bullet.is_none())
+            else {
+                continue;
+            };
+            let dormant = !self.game.sprites[sprite].always_active
+                && !views.is_empty()
+                && views.iter().all(|p| {
+                    (actor.p.x - p[0]).abs() > w / 2. + 64. + actor.width / 2.
+                        || (actor.p.y - p[1]).abs() > h / 2. + 64. + actor.height / 2.
+                });
+            if actor.dormant != dormant {
+                actor.dormant = dormant;
+                if let Some(body) = &actor.body {
+                    box2d_rs::b2_body::B2body::set_enabled(body.clone(), !dormant);
+                }
+            }
+        }
+    }
+
+    pub fn step_inputs(&mut self, inputs: [Input; 4]) -> Result<(), String> {
         self.sounds.clear();
         self.events.clear();
+        if !self.dialog.is_empty() {
+            if inputs
+                .iter()
+                .zip(self.inputs)
+                .any(|(now, old)| now.a && !old.a)
+            {
+                self.dialog.pop_front();
+            }
+            self.inputs = inputs;
+            return Ok(());
+        }
         self.tick += 1;
+        self.script_fuel = 262144;
+        self.update_activity();
         let mut actions = Vec::new();
+        let suspended: Vec<_> = self
+            .actors
+            .values()
+            .filter(|a| !a.dormant)
+            .flat_map(|actor| {
+                actor
+                    .scripts
+                    .keys()
+                    .map(move |event| (actor.id, event.clone()))
+            })
+            .collect();
+        for (id, event) in suspended {
+            if event != "tick" {
+                self.run_script(id, &event, &inputs, &mut actions, false);
+            }
+        }
+        let event = if std::mem::take(&mut self.restored) {
+            "restored"
+        } else {
+            "start"
+        };
         for id in std::mem::take(&mut self.pending_start) {
-            self.run(id, "start", &inputs, &mut actions);
+            self.run(id, event, &inputs, &mut actions);
         }
         let scripted: Vec<_> = self
             .actors
             .values()
-            .filter(|actor| actor.sprite.is_some() && actor.bullet.is_none())
+            .filter(|actor| actor.sprite.is_some() && actor.bullet.is_none() && !actor.dormant)
             .map(|actor| (actor.id, actor.player))
             .collect();
         for (id, player) in scripted {
+            let actor = self.actors.get_mut(&id).unwrap();
+            if let Some(emitter) = &mut actor.emitter {
+                emitter.phase += emitter.rate.min(240);
+                let count = emitter.phase / 60;
+                emitter.phase %= 60;
+                if count > 0 {
+                    self.particles
+                        .emit(emitter.effect, [actor.p.x, actor.p.y], usize::from(count));
+                }
+            }
+
             self.run(id, "tick", &inputs, &mut actions);
             if let Some(slot) = player {
                 let now = inputs[slot];
@@ -383,6 +671,7 @@ impl Runtime {
             return self.load(&room);
         }
 
+        self.sync_gates()?;
         self.zones(&inputs, &mut actions);
         self.move_bullets(&mut actions);
         {
@@ -398,7 +687,7 @@ impl Runtime {
         }
         self.world.borrow_mut().step(STEP, 8, 3);
         let height = self.game.rooms[&self.room].height;
-        for actor in self.actors.values_mut() {
+        for actor in self.actors.values_mut().filter(|a| !a.dormant) {
             if let Some(body) = &actor.body {
                 let body = body.borrow();
                 actor.p = PPM * body.get_position();
@@ -433,118 +722,239 @@ impl Runtime {
             }
             self.add_scene_actor(spawn, size)?;
         }
-        Ok(())
+        self.sync_gates()?;
+        self.particles.update(self.focus(), self.view_size);
+        self.cross_exit(&inputs)
     }
 
     fn run(&mut self, id: u32, event: &str, inputs: &[Input; 4], actions: &mut Vec<Action>) {
-        let Some(actor) = self.actors.get(&id) else {
-            return;
+        self.run_script(id, event, inputs, actions, true);
+    }
+
+    fn run_script(
+        &mut self,
+        id: u32,
+        event: &str,
+        inputs: &[Input; 4],
+        actions: &mut Vec<Action>,
+        start: bool,
+    ) -> bool {
+        let Some(actor) = self.actors.get_mut(&id) else {
+            return false;
         };
-        let Some(code) = actor
+        let Some(program) = actor
             .sprite
             .as_ref()
-            .and_then(|s| self.game.sprites.get(s))
-            .and_then(|s| s.code.get(event))
-            .cloned()
+            .and_then(|sprite| self.programs.get(sprite))
+            .and_then(|events| events.get(event))
         else {
-            return;
+            return false;
+        };
+        let previous = if event == "tick" {
+            actor.tick_script.take()
+        } else {
+            actor.scripts.remove(event)
+        };
+        let mut machine = match previous {
+            Some(machine) if event != "tick" && start => {
+                actor.scripts.insert(event.into(), machine);
+                return true;
+            }
+            Some(machine) => machine,
+            None if start => vm::Machine::new(program.clone()),
+            None => return true,
         };
         let input = actor.player.map_or(Input::default(), |slot| inputs[slot]);
-        let top_down = self.game.rooms[&self.room].is_top_down();
-        for op in code {
-            let arg = |index: usize| op.get(index).and_then(Value::as_f64).unwrap_or(0.0) as f32;
-            let name = |index: usize| op.get(index).and_then(Value::as_str).unwrap_or("");
-            match op.first().and_then(Value::as_u64) {
-                Some(0) => {
-                    let actor = self.actors.get_mut(&id).unwrap();
-                    let dx = f32::from(input.right) - f32::from(input.left);
-                    let dy = f32::from(input.down) - f32::from(input.up);
-                    let direction = Vec2::new(dx, if top_down { dy } else { 0.0 });
-                    actor.face(direction, top_down);
-                    let velocity = if top_down {
-                        arg(1) * unit(direction)
-                    } else {
-                        Vec2::new(dx * arg(1), actor.v.y)
-                    };
-                    actor.velocity(velocity);
+        match machine.run(self, id, input, actions) {
+            Ok(finished) if event == "tick" => {
+                if finished {
+                    machine.restart();
                 }
-                Some(1) if !top_down && !input.down && self.grounded(id) => {
-                    let actor = self.actors.get_mut(&id).unwrap();
-                    actor.velocity(Vec2::new(actor.v.x, -arg(1)));
-                }
-                Some(2) if arg(1) > 0.0 && arg(2) > 0.0 => {
-                    let owner = &self.actors[&id];
-                    let range = arg(2);
-                    let width = if arg(3) > 0.0 { arg(3) } else { owner.height };
-                    for target in self
-                        .actors
-                        .values()
-                        .filter(|target| self.hittable(owner, target))
-                    {
-                        if attack_intersects(owner, target, range, width) {
-                            actions.push(Action::Damage {
-                                source: id,
-                                target: target.id,
-                                amount: arg(1),
-                            });
-                        }
-                    }
-                }
-                Some(3) if arg(2) > 0.0 && arg(3) > 0.0 => {
-                    actions.push(Action::Fire(id, name(1).into(), arg(2).min(100.0), arg(3)))
-                }
-                Some(4) => {
-                    // Stagger search across actors and keep their last velocity between searches.
-                    if self.tick % 6 != u64::from(id % 6) {
-                        continue;
-                    }
-                    let p = self.actors[&id].p;
-                    let destination = self
-                        .actors
-                        .values()
-                        .filter(|a| a.player.is_some())
-                        .min_by(|a, b| {
-                            (a.p - p)
-                                .length_squared()
-                                .total_cmp(&(b.p - p).length_squared())
-                        })
-                        .map(|a| a.p);
-                    let v = destination
-                        .and_then(|to| {
-                            path::waypoint(&self.game.rooms[&self.room], p, to, &self.blocked)
-                        })
-                        .map_or(Vec2::zero(), |to| arg(1) * unit(to - p));
-                    let actor = self.actors.get_mut(&id).unwrap();
-                    actor.face(v, top_down);
-                    actor.velocity(v);
-                }
-                Some(5) if self.sounds.len() < 64 => self.sounds.push(name(1).into()),
-                Some(6) => self
-                    .actors
+                self.actors.get_mut(&id).unwrap().tick_script = Some(machine);
+            }
+            Ok(false) => {
+                self.actors
                     .get_mut(&id)
                     .unwrap()
-                    .velocity(Vec2::new(arg(1), arg(2))),
-                Some(7) => {
+                    .scripts
+                    .insert(event.into(), machine);
+            }
+            Ok(true) => {}
+            Err(message) if self.events.len() < 256 => {
+                self.events.push(RuntimeEvent::ScriptError {
+                    actor: id,
+                    event: event.into(),
+                    message: message.into(),
+                })
+            }
+            Err(_) => {}
+        }
+        true
+    }
+
+    fn engine(
+        &mut self,
+        id: u32,
+        input: Input,
+        opcode: u64,
+        args: [f32; 3],
+        name: &str,
+        actions: &mut Vec<Action>,
+    ) {
+        if actions.len() >= MAX_ACTIONS {
+            return;
+        }
+        let arg = |index: usize| args[index - 1];
+        let top_down = self.game.rooms[&self.room].is_top_down();
+        match opcode {
+            27 | 28 => {
+                if let Some(effect) = particles::Effect::named(name) {
                     let actor = self.actors.get_mut(&id).unwrap();
-                    if actor.animation != name(1) {
-                        actor.animation = name(1).into();
-                        actor.animation_start = self.tick;
+                    if opcode == 27 {
+                        self.particles.emit(
+                            effect,
+                            [actor.p.x, actor.p.y],
+                            args[1].max(0.) as usize,
+                        );
+                    } else {
+                        actor.emitter = Some(particles::Emitter {
+                            effect,
+                            rate: args[1].clamp(0., 240.) as u16,
+                            phase: 0,
+                        });
                     }
                 }
-                Some(8) if self.game.rooms.contains_key(name(1)) && name(1) != self.room => {
-                    self.transition = Some(name(1).into())
-                }
-                Some(9) if self.game.sprites.contains_key(name(1)) => {
-                    let p = self.actors[&id].p;
-                    actions.push(Action::Instance(Spawn {
-                        sprite: Some(name(1).into()),
-                        x: p.x + arg(2),
-                        y: p.y + arg(3),
-                        ..Spawn::default()
-                    }));
-                }
-                _ => {}
             }
+            29 => self.actors.get_mut(&id).unwrap().emitter = None,
+
+            26 => actions.push(Action::Remove(id)),
+            23 => {
+                self.camera_actor = Some(id);
+                self.camera_point = None;
+            }
+            24 => {
+                self.camera_actor = None;
+                self.camera_point = Some([args[0], args[1]]);
+            }
+            25 => {
+                self.camera_actor = None;
+                self.camera_point = None;
+            }
+
+            18 | 19 => {
+                let current = self.inventory.get(name).copied().unwrap_or(0);
+                let change = args[1].max(0.) as u32;
+                let count = if opcode == 18 {
+                    current.saturating_add(change)
+                } else {
+                    current.saturating_sub(change)
+                };
+                if count == 0 {
+                    self.inventory.remove(name);
+                } else if current > 0 || self.inventory.len() < 1024 {
+                    self.inventory.insert(name.into(), count);
+                }
+            }
+            20 if self.dialog.len() < 32 && !name.is_empty() => self.dialog.push_back(name.into()),
+            21 if self.counters.contains_key(name) || self.counters.len() < 4 => {
+                self.counters.insert(name.into(), args[1] as i32);
+            }
+            22 => {
+                self.counters.remove(name);
+            }
+
+            0 => {
+                let actor = self.actors.get_mut(&id).unwrap();
+                let dx = f32::from(input.right) - f32::from(input.left);
+                let dy = f32::from(input.down) - f32::from(input.up);
+                let direction = Vec2::new(dx, if top_down { dy } else { 0.0 });
+                actor.face(direction, top_down);
+                let velocity = if top_down {
+                    arg(1) * unit(direction)
+                } else {
+                    Vec2::new(dx * arg(1), actor.v.y)
+                };
+                actor.velocity(velocity);
+            }
+            1 if !top_down && !input.down && self.grounded(id) => {
+                let actor = self.actors.get_mut(&id).unwrap();
+                actor.velocity(Vec2::new(actor.v.x, -arg(1)));
+            }
+            2 if arg(1) > 0.0 && arg(2) > 0.0 => {
+                let owner = &self.actors[&id];
+                let range = arg(2);
+                let width = if arg(3) > 0.0 { arg(3) } else { owner.height };
+                for target in self
+                    .actors
+                    .values()
+                    .filter(|target| self.hittable(owner, target))
+                {
+                    if actions.len() >= MAX_ACTIONS {
+                        break;
+                    }
+                    if attack_intersects(owner, target, range, width) {
+                        actions.push(Action::Damage {
+                            source: id,
+                            target: target.id,
+                            amount: arg(1),
+                        });
+                    }
+                }
+            }
+            3 if arg(2) > 0.0 && arg(3) > 0.0 => {
+                actions.push(Action::Fire(id, name.into(), arg(2).min(100.0), arg(3)))
+            }
+            4 => {
+                // Stagger search across actors and keep their last velocity between searches.
+                if self.tick % 6 != u64::from(id % 6) {
+                    return;
+                }
+                let p = self.actors[&id].p;
+                let destination = self
+                    .actors
+                    .values()
+                    .filter(|a| a.player.is_some())
+                    .min_by(|a, b| {
+                        (a.p - p)
+                            .length_squared()
+                            .total_cmp(&(b.p - p).length_squared())
+                    })
+                    .map(|a| a.p);
+                let v = destination
+                    .and_then(|to| {
+                        path::waypoint(&self.game.rooms[&self.room], p, to, &self.blocked)
+                    })
+                    .map_or(Vec2::zero(), |to| arg(1) * unit(to - p));
+                let actor = self.actors.get_mut(&id).unwrap();
+                actor.face(v, top_down);
+                actor.velocity(v);
+            }
+            5 if self.sounds.len() < 64 => self.sounds.push(name.into()),
+            6 => self
+                .actors
+                .get_mut(&id)
+                .unwrap()
+                .velocity(Vec2::new(arg(1), arg(2))),
+            7 => {
+                let actor = self.actors.get_mut(&id).unwrap();
+                if actor.animation != name {
+                    actor.animation = name.into();
+                    actor.animation_start = self.tick;
+                }
+            }
+            8 if self.game.rooms.contains_key(name) && name != self.room => {
+                self.transition = Some(name.into())
+            }
+            9 if self.game.sprites.contains_key(name) => {
+                let p = self.actors[&id].p;
+                actions.push(Action::Instance(Spawn {
+                    sprite: Some(name.into()),
+                    x: p.x + arg(2),
+                    y: p.y + arg(3),
+                    ..Spawn::default()
+                }));
+            }
+            _ => {}
         }
     }
 
@@ -563,7 +973,8 @@ impl Runtime {
     }
 
     fn hittable(&self, owner: &Actor, target: &Actor) -> bool {
-        owner.id != target.id
+        !target.dormant
+            && owner.id != target.id
             && !self.static_ids.contains(&target.id)
             && target.bullet.is_none()
             && (target.sprite.is_some() || target.physics.mode == Mode::Breakable)
@@ -572,7 +983,7 @@ impl Runtime {
 
     fn apply(&mut self, actions: &mut Vec<Action>, inputs: &[Input; 4]) {
         let mut queue = std::collections::VecDeque::from(std::mem::take(actions));
-        let mut budget = MAX_ACTORS * 8;
+        let mut budget = MAX_ACTIONS;
         while let Some(action) = queue.pop_front() {
             if budget == 0 {
                 break;
@@ -635,10 +1046,14 @@ impl Runtime {
         for actor in self
             .actors
             .values_mut()
-            .filter(|a| a.physics.mode == Mode::Dynamic)
+            .filter(|a| !a.dormant && a.physics.mode == Mode::Dynamic)
         {
             let mut gravity = actor.physics.gravity;
             let mut fluid_drag = 0.0_f32;
+            let mut submerged = 0.0;
+            let body_density = actor.physics.mass.map_or(actor.physics.density, |mass| {
+                mass * PPM * PPM / (actor.width * actor.height)
+            });
             let mut ladder = false;
             for (id, p, w, h, zone) in &zones {
                 if !physics::allows(&actor.physics, zone)
@@ -649,21 +1064,31 @@ impl Runtime {
                 if zone.mode == Mode::Ladder {
                     ladder = true;
                 } else {
-                    gravity = gravity.min(
-                        actor.physics.gravity
-                            * (1.0 - zone.buoyancy * zone.density / actor.physics.density),
-                    );
-                    fluid_drag = fluid_drag.max(zone.drag);
-                    if zone.damage > 0.0 && actor.sprite.is_some() {
+                    let submerged_axis = |center: f32, extent: f32, water: f32, span: f32| {
+                        ((center + extent / 2.).min(water + span / 2.)
+                            - (center - extent / 2.).max(water - span / 2.))
+                            / extent
+                    };
+                    let fraction = submerged_axis(actor.p.x, actor.width, p.x, *w)
+                        * submerged_axis(actor.p.y, actor.height, p.y, *h);
+                    let portion = fraction.min(1.0 - submerged);
+                    submerged += portion;
+                    gravity -= actor.physics.gravity * portion * zone.buoyancy * zone.density
+                        / body_density;
+                    fluid_drag += portion * zone.drag;
+                    if portion > 0.0 && zone.damage > 0.0 && actor.sprite.is_some() {
                         actions.push(Action::Damage {
                             source: *id,
                             target: actor.id,
-                            amount: zone.damage * STEP,
+                            amount: portion * zone.damage * STEP,
                         });
                     }
                 }
             }
-            if ladder && !self.game.rooms[&self.room].is_top_down() && actor.player.is_some() {
+            if ladder
+                && !self.game.rooms[&self.room].is_top_down()
+                && actor.player.is_some_and(|p| inputs[p].up || inputs[p].down)
+            {
                 let input = inputs[actor.player.unwrap()];
                 gravity = 0.0;
                 let dy = (f32::from(input.down) - f32::from(input.up)) * 3.5;
@@ -858,4 +1283,32 @@ fn segment(p: Vec2, delta: Vec2, q: Vec2, w: f32, h: f32) -> Option<f32> {
         }
     }
     Some(near)
+}
+
+/// Split dialogue at word boundaries for the active pixel viewport.
+#[wasm_bindgen]
+pub fn dialogue_lines(text: &str, columns: usize) -> String {
+    let columns = columns.max(1);
+    let mut lines = String::new();
+    let mut col = 0;
+    for word in text.split_whitespace() {
+        if col > 0 {
+            if col + 1 + word.chars().count() > columns {
+                lines.push('\n');
+                col = 0;
+            } else {
+                lines.push(' ');
+                col += 1;
+            }
+        }
+        for ch in word.chars() {
+            if col == columns {
+                lines.push('\n');
+                col = 0;
+            }
+            lines.push(ch);
+            col += 1;
+        }
+    }
+    lines
 }

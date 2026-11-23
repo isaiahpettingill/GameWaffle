@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+if [ "${1:-}" = --player ]; then shift; exec "$APPDIR/gamewaffle-player" "$@"; fi
+case "${1:-}" in *.waffle) exec "$APPDIR/gamewaffle-player" "$1";; esac
+cd "$APPDIR"
+exec ./node packaging/studio.mjs "$@"

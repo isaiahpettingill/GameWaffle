@@ -1,7 +1,11 @@
 <script>
+  import { effects, platformGravity, roomBorder } from '../src/schema.mjs';
+  import Sections from './Sections.svelte';
+  import World from './World.svelte';
   import { onMount } from 'svelte';
   import ScriptPanel from './ScriptPanel.svelte';
   import Physics from './Physics.svelte';
+  import { tileSizes, variableName } from '../src/script.mjs';
   import { unpack } from '../src/cartridge.mjs';
   import RoomMap from './RoomMap.svelte';
   import { instanceNames, newInstanceName, spriteDragType } from '../src/instances.mjs';
@@ -20,9 +24,19 @@
   let room=$derived(project?.rooms[roomId]), layer=$derived(room?.layers?.[layerIndex]);
   let sprite=$derived(project?.sprites?.[spriteId]), tile=$derived(project?.tiles?.[tileId]);
   let inspector=$derived(assetKind==='tile' ? tile : sprite);
-  let artFiles=$derived(assets.filter(file=>/\.(ase|aseprite)$/i.test(file)));
+  let artFiles=$derived(assets.filter(file=>/\.(ase|aseprite|png)$/i.test(file)));
   let audioFiles=$derived(assets.filter(file=>/\.(wav|ogg|oga|opus|qoa)$/i.test(file)));
-  const tabs=[['room','Room'],['blocks','Blocks'],['assets','Assets']];
+  let gameSection=$state('Variables'),spriteSection=$state('Appearance'),roomSection=$state('Size'),instanceSection=$state('Placement'),mobilePane=$state('Editor');
+  const tabs=[['world','World'],['room','Room'],['blocks','Blocks'],['assets','Assets'],['game','Game']];
+  let variableId=$state(''), variableKind=$state('variables');
+  function addVariable() {
+    const id=variableId.trim();
+    if(!variableName(id)){error='Use a name with letters, digits, and underscores.';return;}
+    const table=project[variableKind]??={};
+    if(Object.hasOwn(table,id)){error='This name is already in use.';return;}
+    table[id]=variableKind==='flags' ? false : 0;
+    variableId='';error='';mark();
+  }
   const historyStatus=$derived.by(()=>{
     const revision=historyVersion;
     const edits=history.get(roomId);
@@ -31,10 +45,32 @@
   const sortedLayers=$derived((room?.layers ?? []).map((layer,index)=>({layer,index,order:layer.order??index}))
     .sort((a,b)=>b.order-a.order || b.index-a.index));
   const maxTiles=$derived(Math.floor(4096/(project?.tileSize??24)));
-  const roomView=$derived(room?.view ?? (Math.abs(room?.gravity??24) < .01 ? 'top_down' : 'platformer'));
+  const roomView=$derived(room?.view ?? (Math.abs(room?.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer'));
   const actor=$derived(room?.entities[selectedEntity]);
   const exportName=$derived((project?.name??'game').toLowerCase().replace(/[^a-z0-9]+/g,'-') || 'game');
 
+  let updatesOpen=$state(false),component=$state('runtime'),platform=$state('linux-x64'),release=$state(null);
+  async function checkRelease(install=false){
+    error='';busy=true;
+    try{
+      const result=await request('./api/update','POST',{component,target:component==='runtime'?platform:undefined,install});
+      release=install?null:result;
+      status=install?(component==='studio'?'Restart Studio to finish the update':'Runtime installed'):result.available?'Update available':'Current version installed';
+    }catch(err){release=null;error=err.message;}finally{busy=false;}
+  }
+  async function downloadDesktop(event){
+    event.preventDefault();
+    const href=event.currentTarget.href;
+    if(busy)return;
+    if(scriptDirty){error='Save the script first';return;}
+    if(dirty && !await saveProject())return;
+    try{
+      const res=await fetch(href);
+      if(!res.ok)throw Error((await res.json()).error);
+      const url=URL.createObjectURL(await res.blob()),a=document.createElement('a');
+      a.href=url;a.download=exportName+'.zip';a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);
+    }catch(err){error=err.message;}
+  }
   async function request(path, method='GET', data) {
     const response=await fetch(path,{method,headers:data ? {'Content-Type':'application/json'} : {},body:data ? JSON.stringify(data) : undefined});
     const result=await response.json();
@@ -42,7 +78,7 @@
     return result;
   }
   async function updatePreviews() {
-    const response=await fetch('./demo.waffle',{cache:'no-store'});
+    const response=await fetch('./api/preview',{cache:'no-store'});
     if(!response.ok)throw Error('Could not open project preview');
     const next=unpack(new Uint8Array(await response.arrayBuffer()));
     for(const url of previewUrls) URL.revokeObjectURL(url);
@@ -73,7 +109,7 @@
       spriteId=Object.keys(project.sprites ?? {})[0] ?? '';
       placementSprite=spriteId;
       tileId=Object.keys(project.tiles ?? {})[0] ?? '';
-      newSource=assets.find(file=>/\.(ase|aseprite)$/i.test(file)) ?? '';
+      newSource=assets.find(file=>/\.(ase|aseprite|png)$/i.test(file)) ?? '';
       layerIndex=chooseInitialLayer(project.rooms[roomId]);
       await updatePreviews();
       status='Ready';
@@ -149,8 +185,9 @@
     editRoom(next=>{
       next.view=view;
       next.ySort=view==='top_down';
-      next.closedEdges=view==='top_down';
-      if(view==='platformer' && Math.abs(next.gravity??24)<.01)next.gravity=24;
+      delete next.closedEdges;
+      delete next.border;
+      if(view==='platformer' && Math.abs(next.gravity ?? platformGravity)<.01)next.gravity=platformGravity;
     });
   }
   function resizeRoom(key,input){
@@ -233,6 +270,7 @@
     });
   }
   function openTab(id){
+    mobilePane='Editor';
     if(scriptDirty && id!=='blocks'){error='Save or discard the current script first.';return;}
     error='';tab=id;
   }
@@ -242,11 +280,11 @@
   }
   function chooseDefinition(id){
     if(tab==='room'){
-      placementSprite=id;
+      mobilePane='Editor';placementSprite=id;
       mapTool='spawn';
       return;
     }
-    selectSprite(id);
+    openDefinition(id,tab==='blocks'?'blocks':'assets');
   }
   function dragDefinition(event,id){
     event.dataTransfer.setData(spriteDragType,id);
@@ -293,7 +331,7 @@
     }catch(err){error=err.message;return false;}finally{busy=false;}
   }
   async function saveScript(id){
-    if(!project.sprites[id].script) project.sprites[id].script=`scripts/${id}.cbor`;
+    if(!project.sprites[id].script) project.sprites[id].script=`scripts/sprites/${id}.cbor`;
     await updatePreviews();
     revision=(await request('./api/status')).revision;
     status='Script saved';
@@ -410,16 +448,31 @@
     <details class="export-menu">
       <summary>Export</summary>
       <div class="card">
+        <a download={exportName+'.waffleproj'} href="./api/archive" onclick={saveThenOpen}>Editable project</a>
         <a download={exportName+'.html'} href="./export.html" onclick={saveThenOpen}>Standalone web game</a>
+        <a href="./api/desktop?target=linux-x64" onclick={downloadDesktop}>Linux game</a>
+        <a href="./api/desktop?target=windows-x64" onclick={downloadDesktop}>Windows game</a>
+        <button onclick={()=>{updatesOpen=!updatesOpen;release=null;}}>Updates</button>
+        <a download="gamewaffle-player.html" href="./gamewaffle-player.html">Web player</a>
         <a download={exportName+'.waffle'} href="./demo.waffle" onclick={saveThenOpen}>Cartridge</a>
       </div>
     </details>
     <a class="button primary" href="./player.html" onclick={saveThenOpen}>Play game ↗</a>
   </div>
 </header>
+{#if updatesOpen}
+  <section class="row card" aria-label="Release updates">
+    <select aria-label="Update component" bind:value={component} onchange={()=>release=null}><option value="runtime">Desktop runtime</option><option value="studio">Studio</option></select>
+    {#if component==='runtime'}<select aria-label="Runtime platform" bind:value={platform} onchange={()=>release=null}><option value="linux-x64">Linux x64</option><option value="windows-x64">Windows x64</option></select>{/if}
+    <button disabled={busy} onclick={()=>checkRelease()}>Check release</button>
+    {#if release?.available}<button disabled={busy} onclick={()=>checkRelease(true)}>Install {release.tag}</button>{/if}
+    <button onclick={()=>updatesOpen=false}>Close</button>
+  </section>
+{/if}
 {#if error || sourceError}<p role="alert" class="error banner">{error || sourceError}</p>{/if}
 {#if project}
-  <main>
+  <div class="mobile-tabs"><Sections labels={['Editor','Project','Settings']} bind:value={mobilePane}/></div>
+  <main class:wide={tab==='game'||tab==='world'||(tab==='assets'&&assetKind==='audio')} data-pane={mobilePane}>
     <aside class="project card">
       <div class="heading row"><h2>Project</h2></div>
       <div class="category">
@@ -458,7 +511,9 @@
       <nav class="row" aria-label="Editor views">
         {#each tabs as [id,title]}<button class:active={tab===id} onclick={()=>openTab(id)}>{title}</button>{/each}
       </nav>
-      {#if tab==='room' && room}
+      {#if tab==='world' && room}
+        <World rooms={project.rooms} flags={Object.keys(project.flags??{})} {roomId} onSelect={id=>{roomId=id;layerIndex=chooseInitialLayer(project.rooms[id]);selectedEntity=-1;}} onEdit={replaceRoom}/>
+      {:else if tab==='room' && room}
         {#key roomId}
           <RoomMap {room} {roomId} size={project.tileSize??24} tiles={project.tiles??{}} sprites={project.sprites??{}}
             {tileArt} {spriteArt} {previewModes} {layerIndex} bind:selectedEntity bind:tileId bind:spriteId={placementSprite} bind:tool={mapTool} {busy}
@@ -471,6 +526,41 @@
         {#if spriteId}
           {#key spriteId}<ScriptPanel sprite={spriteId} sprites={Object.keys(project.sprites??{})} bind:dirty={scriptDirty} onSave={saveScript} />{/key}
         {:else}<p class="empty card">Add a sprite in Assets to give it behavior.</p>{/if}
+      {:else if tab==='game'}
+        <section class="card asseteditor">
+          <h2>Game settings</h2>
+          <Sections labels={['Variables','Display']} bind:value={gameSection}/>
+          {#if gameSection==='Variables'}
+            {#each Object.entries(project.variables??{}) as [id,value]}
+              <label class="row variable">{id}<input type="number" step="1" {value} onchange={e=>{
+                const next=e.currentTarget.valueAsNumber;
+                if(Number.isSafeInteger(next))set(project.variables,id,next);
+                else e.currentTarget.value=value;
+              }}></label>
+            {/each}
+            {#each Object.entries(project.flags??{}) as [id,value]}
+              <label class="check"><input type="checkbox" checked={value} onchange={e=>set(project.flags,id,e.currentTarget.checked)}>{id}</label>
+            {/each}
+            <div class="row add extra">
+              <input aria-label="Variable name" placeholder="Name" bind:value={variableId}>
+              <select aria-label="Value type" bind:value={variableKind}><option value="variables">Variable</option><option value="flags">Flag</option></select>
+              <button onclick={addVariable}>Add</button>
+            </div>
+          {:else}
+            <div class="pair">
+              {#each [['min_width','Minimum width',128,128],['min_height','Minimum height',128,128],['max_width','Maximum width',512,128],['max_height','Maximum height',512,128],['zoom','Pixel zoom',2,1]] as [key,label,fallback,min]}
+                <label class="stack">{label}<input type="number" {min} max={key==='zoom'?8:512} value={project.camera?.[key]??fallback} onchange={e=>{
+                  const value=e.currentTarget.valueAsNumber;
+                  if(Number.isInteger(value)&&value>=min&&value<=(key==='zoom'?8:512))set((project.camera??={}),key,value);
+                  else e.currentTarget.value=project.camera?.[key]??fallback;
+                }}></label>
+              {/each}
+            </div>
+            <label class="stack">Bitmap font<select value={project.font??''} onchange={e=>set(project,'font',e.currentTarget.value)}>
+              <option value="">Built-in</option>{#each artFiles.filter(f=>art[f]?.width===96 && art[f]?.height===48) as file}<option>{file}</option>{/each}
+            </select></label>
+          {/if}
+        </section>
       {:else if tab==='assets'}
         <section class="card asseteditor">
           <div class="row heading">
@@ -481,10 +571,23 @@
               {/each}
             </div>
           </div>
+          <label class="stack">Import image or sound<input type="file" accept=".ase,.aseprite,.png,.wav,.qoa,.ogg,.opus" onchange={async e=>{
+            const input=e.currentTarget,file=input.files[0];if(!file)return;
+            try{const response=await fetch('./api/import?name='+encodeURIComponent(file.name)+'&kind='+assetKind,{method:'POST',body:file});
+              if(!response.ok)throw Error((await response.json()).error);const imported=await response.json();await checkAssets();newSource=imported.path;}
+            catch(err){error=err.message;}finally{input.value='';}
+          }}></label>
           <div class="row asset-bar">
             <h3>{assetKind==='audio' ? 'Audio files' : assetKind==='tile' ? 'Tile definitions' : 'Sprite definitions'}</h3>
             <button aria-expanded={addForm} onclick={()=>addForm=!addForm}>{addForm ? 'Cancel' : `Add ${assetKind}`}</button>
           </div>
+          {#if assetKind==='tile'}
+            <label class="stack">Tile size
+              <select aria-label="Tile size" value={project.tileSize??24} onchange={e=>set(project,'tileSize',Number(e.currentTarget.value))}>
+                {#each tileSizes as size}<option value={size}>{size} × {size}</option>{/each}
+              </select>
+            </label>
+          {/if}
           {#if addForm}
             <div class="row add">
               {#if assetKind==='audio'}
@@ -516,6 +619,10 @@
               {/if}
             </label>
             {#if inspector}
+              <label class="stack">Active flag<select value={inspector.flag??''} onchange={e=>set(inspector,'flag',e.currentTarget.value)}>
+                <option value="">Always active</option>{#each Object.keys(project.flags??{}) as flag}<option>{flag}</option>{/each}
+              </select></label>
+              {#if inspector.flag}<label class="check"><input type="checkbox" checked={inspector.when??true} onchange={e=>set(inspector,'when',e.currentTarget.checked)}> Flag must be on</label>{/if}
               <label class="stack">Source <select value={inspector.source} onchange={e=>{
                 const previous=inspector.source;
                 if(previous!==e.currentTarget.value){
@@ -532,8 +639,8 @@
                 </select></label>
               {:else}
                 <button class="extra" onclick={()=>openDefinition(spriteId,'blocks')}>Open script</button>
-                <details>
-                  <summary>Appearance</summary>
+                <Sections labels={['Appearance','Combat','Particles']} bind:value={spriteSection}/>
+                {#if spriteSection==='Appearance'}
                   <div class="pair">
                     <label class="stack">Visual layer <input type="number" value={sprite.layer??0} onchange={e=>set(sprite,'layer',e.currentTarget.valueAsNumber)}></label>
                     <label class="stack">Starting animation <select value={sprite.animation??''} onchange={e=>set(sprite,'animation',e.currentTarget.value)}>
@@ -543,23 +650,29 @@
                     <label class="stack">Body width <input type="number" min="1" placeholder="From source" value={sprite.width??''} onchange={e=>set(sprite,'width',e.currentTarget.value===''?'':e.currentTarget.valueAsNumber)}></label>
                     <label class="stack">Body height <input type="number" min="1" placeholder="From source" value={sprite.height??''} onchange={e=>set(sprite,'height',e.currentTarget.value===''?'':e.currentTarget.valueAsNumber)}></label>
                   </div>
-                </details>
-                <details>
-                  <summary>Combat</summary>
+                {:else if spriteSection==='Combat'}
                   <div class="pair">
                     <label class="stack">Team <input type="number" value={sprite.team??0} onchange={e=>set(sprite,'team',e.currentTarget.valueAsNumber)}></label>
                     <label class="stack">Projectile <select value={sprite.projectile??''} onchange={e=>set(sprite,'projectile',e.currentTarget.value)}>
                       <option value="">Default</option>{#each Object.keys(project.sprites??{}).filter(id=>id!==spriteId) as id}<option value={id}>{id}</option>{/each}
                     </select></label>
                   </div>
-                </details>
+                  <label class="check"><input type="checkbox" checked={sprite.alwaysActive??false} onchange={e=>set(sprite,'alwaysActive',e.currentTarget.checked)}> Run scripts off camera</label>
+                {:else}
+                  <label class="stack">Emitter<select value={sprite.emitter?.effect??''} onchange={e=>set(sprite,'emitter',e.currentTarget.value?{effect:e.currentTarget.value,rate:sprite.emitter?.rate??16}:'')}>
+                    <option value="">None</option>{#each effects as effect}<option>{effect}</option>{/each}
+                  </select></label>
+                  {#if sprite.emitter}<label class="stack">Particles per second<input type="number" min="1" max="240" value={sprite.emitter.rate} onchange={e=>{
+                    const n=e.currentTarget.valueAsNumber;if(Number.isInteger(n)&&n>=1&&n<=240)set(sprite,'emitter',{...sprite.emitter,rate:n});
+                  }}></label>{/if}
+                {/if}
               {/if}
             {/if}
           {/if}
         </section>
       {/if}
     </div>
-    {#if tab!=='assets' || assetKind!=='audio'}<aside class="inspector card">
+    {#if tab!=='game' && tab!=='world' && (tab!=='assets' || assetKind!=='audio')}<aside class="inspector card">
       {#if tab==='room' && room}
         <div class="panel-tabs row">
           {#each [['layers','Layers'],['room','Room'],['instances','Instances']] as [id,label]}
@@ -567,7 +680,8 @@
           {/each}
         </div>
         {#if roomPanel==='room'}
-          <div class="row start-room">
+          <Sections labels={['Size','Physics','Sound & color']} bind:value={roomSection}/>
+          {#if roomSection==='Size'}<div class="row start-room">
             {#if (project.start??Object.keys(project.rooms)[0])===roomId}<small>Starting room</small>
             {:else}<button class="small-button" onclick={()=>set(project,'start',roomId)}>Set as starting room</button>{/if}
           </div>
@@ -583,15 +697,14 @@
             <p class="crop-note">The new room size cuts off tiles or sprites.</p>
             <div class="row"><button onclick={cropRoom}>Resize and crop</button><button onclick={()=>dimensions=null}>Cancel</button></div>
           {/if}
-          <details>
-            <summary>Room physics</summary>
+          {:else if roomSection==='Physics'}
             {#if roomView==='platformer'}
-              <label class="stack">Gravity <input type="number" min="-100" max="100" step="any" value={room.gravity??24} onchange={e=>setRoom('gravity',e.currentTarget.valueAsNumber)}></label>
+              <label class="stack">Gravity <input type="number" min="-100" max="100" step="any" value={room.gravity ?? platformGravity} onchange={e=>setRoom('gravity',e.currentTarget.valueAsNumber)}></label>
             {/if}
-            <label class="check"><input type="checkbox" checked={room.closedEdges??roomView==='top_down'} onchange={e=>setRoom('closedEdges',e.currentTarget.checked)}> Solid room edges</label>
-          </details>
-          <details>
-            <summary>Appearance and sound</summary>
+            <label class="stack">Room borders <select value={roomBorder(room,roomView==='top_down')} onchange={e=>setRoom('border',e.currentTarget.value)}>
+              <option value="sides">Side walls</option><option value="closed">All four walls</option><option value="open">Open</option>
+            </select></label>
+          {:else}
             <label class="stack">Background <input type="color" value={room.background??'#171829'} onchange={e=>setRoom('background',e.currentTarget.value)}></label>
             {#if roomView==='top_down'}
               <label class="check"><input type="checkbox" checked={room.ySort??true} onchange={e=>setRoom('ySort',e.currentTarget.checked)}> Draw lower sprites in front</label>
@@ -601,7 +714,7 @@
                 <option value="">None</option>{#each Object.keys(project.audio??{}) as id}<option value={id}>{id}</option>{/each}
               </select></label>
             {/each}
-          </details>
+          {/if}
         {:else if roomPanel==='layers'}
           <div class="heading row mini"><h3>Draw order</h3><button class="small-button" disabled={busy} onclick={addLayer}>Add layer</button></div>
           {#each sortedLayers as {layer:item,index}}
@@ -612,6 +725,10 @@
           {#if layer}
             <label class="stack">Layer name <input value={layer.name} onchange={e=>changeLayer('name',e.currentTarget.value)}></label>
             <label class="check"><input type="checkbox" checked={layer.collidable} onchange={e=>changeLayer('collidable',e.currentTarget.checked)}> Enable collision</label>
+            <label class="stack">Layer flag<select value={layer.flag??''} onchange={e=>changeLayer('flag',e.currentTarget.value)}>
+              <option value="">Always active</option>{#each Object.keys(project.flags??{}) as flag}<option>{flag}</option>{/each}
+            </select></label>
+            {#if layer.flag}<label class="check"><input type="checkbox" checked={layer.when??true} onchange={e=>changeLayer('when',e.currentTarget.checked)}> Flag must be on</label>{/if}
             <label class="stack">Layer order <input type="number" min="-10000" max="10000" value={layer.order??layerIndex} onchange={e=>{
               const value=e.currentTarget.valueAsNumber;
               if(Number.isInteger(value)&&Math.abs(value)<=10000)changeLayer('order',value);
@@ -642,7 +759,8 @@
               <button class="small-button" onclick={()=>openDefinition(actor.sprite)}>Open definition</button>
               <button class="small-button" onclick={()=>openDefinition(actor.sprite,'blocks')}>Open script</button>
             </div>
-            <label class="stack">Instance name <input maxlength="64" value={actor.name} onchange={e=>changeActor('name',e.currentTarget.value)}></label>
+            <Sections labels={['Placement','Overrides']} bind:value={instanceSection}/>
+            {#if instanceSection==='Placement'}<label class="stack">Instance name <input maxlength="64" value={actor.name} onchange={e=>changeActor('name',e.currentTarget.value)}></label>
             <div class="pair">
               <label class="stack">X position <input type="number" min="0" value={actor.x} onchange={e=>changeActor('x',e.currentTarget.valueAsNumber)}></label>
               <label class="stack">Y position <input type="number" min="0" value={actor.y} onchange={e=>changeActor('y',e.currentTarget.valueAsNumber)}></label>
@@ -650,8 +768,7 @@
             <label class="stack">Player slot <select aria-label="Instance player slot" value={actor.player==null ? '' : String(actor.player)} onchange={e=>changeActor('player',e.currentTarget.value)}>
               <option value="">None</option>{#each [0,1,2,3] as player}<option value={String(player)}>Player {player+1}</option>{/each}
             </select></label>
-            <details>
-              <summary>Instance overrides</summary>
+            {:else}
               <div class="pair">
                 <label class="stack">Draw layer <input type="number" min="-10000" max="10000" placeholder={String(definition?.layer??0)} value={actor.layer??''}
                   onchange={e=>changeActor('layer',e.currentTarget.value===''?'':e.currentTarget.valueAsNumber)}></label>
@@ -663,7 +780,11 @@
                 {#each new Set(['default',...(art[definition?.source]?.tags??[])]) as tag}<option value={tag}>{tag}</option>{/each}
               </select></label>
               <label class="check"><input type="checkbox" checked={actor.flipX??false} onchange={e=>changeActor('flipX',e.currentTarget.checked || '')}> Face left at start</label>
-            </details>
+              <label class="stack">Spawn flag<select value={actor.flag??''} onchange={e=>changeActor('flag',e.currentTarget.value)}>
+                <option value="">Always</option>{#each Object.keys(project.flags??{}) as flag}<option>{flag}</option>{/each}
+              </select></label>
+              {#if actor.flag}<label class="check"><input type="checkbox" checked={actor.when??true} onchange={e=>changeActor('when',e.currentTarget.checked)}> Flag must be on</label>{/if}
+            {/if}
             <button class="small-button remove" onclick={()=>{editRoom(next=>next.entities.splice(selectedEntity,1));selectedEntity=-1;}}>Remove instance</button>
           {/if}
         {/if}
@@ -727,12 +848,23 @@
   .audio-line{display:flex;gap:.5rem;align-items:baseline;margin-top:.32rem;font-size:.78rem;}
   .extra{margin-top:.55rem;}.start-room{margin-bottom:.15rem;}
   .asset-name{font-size:.85rem;color:var(--accent);margin-bottom:.6rem;}
+  .variable input{max-width:9rem;margin-left:auto;}
+  .variable{margin-top:.45rem;}
   .asset-bar{justify-content:space-between;margin-top:.65rem;}
   .instance-list{max-height:14rem;overflow:auto;}
   .instance-source{margin-top:.55rem;}
   .instance-source small{flex-basis:100%;font-size:.72rem;}
-  .inspector details,.asseteditor details{border-top:1px solid var(--line);margin-top:.65rem;padding-top:.52rem;}
-  .inspector summary,.asseteditor summary{cursor:pointer;color:var(--muted);font-size:.78rem;}
-  @media(max-width:880px){main{grid-template-columns:140px minmax(0,1fr);}.inspector{grid-column:2;max-height:none;}.status{display:none;}}
-  @media(max-width:570px){.appbar{align-items:start;padding:.55rem;}.actions{justify-content:end;font-size:.72rem;}main{display:flex;flex-direction:column;padding:.55rem;}.project,.work,.inspector{width:100%;}.project{display:grid;grid-template-columns:repeat(3,1fr);gap:.3rem;}.project>.heading{grid-column:1/4;}.category{margin-top:0;}}
+  .mobile-tabs{display:none;}
+  main.wide{grid-template-columns:minmax(155px,185px) minmax(0,1fr);}
+  .pair{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .project,.inspector{min-width:0;}.item span{overflow-wrap:anywhere;}
+  @media(min-width:881px){.project,.inspector{position:sticky;top:.5rem;overflow:auto;max-height:calc(100dvh - 1rem);}}
+  @media(max-width:880px){
+    main,main.wide{display:block;padding:.5rem;}
+    .mobile-tabs{display:block;margin:0 .5rem;}
+    main[data-pane="Editor"]>aside,main[data-pane="Project"]>:not(.project),main[data-pane="Settings"]>:not(.inspector){display:none;}
+    main.wide[data-pane="Settings"]>.work{display:block;}
+    .appbar{flex-wrap:wrap;padding:.6rem;gap:.4rem;}.actions{gap:.3rem;}
+    .inspector,.instance-list{max-height:none;overflow:visible;}
+  }
 </style>
