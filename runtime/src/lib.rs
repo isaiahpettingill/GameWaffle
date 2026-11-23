@@ -32,6 +32,7 @@ struct Bullet {
 }
 
 struct Actor {
+    dormant: bool,
     emitter: Option<particles::Emitter>,
     id: u32,
     name: Option<String>,
@@ -208,6 +209,7 @@ impl Runtime {
         self.tick = 0;
         self.transition = None;
         self.inventory.clear();
+        self.set_seed(self.seed.wrapping_mul(1664525).wrapping_add(1013904223));
         self.reset_variables();
         self.load(&self.game.start.clone())
     }
@@ -515,6 +517,7 @@ impl Runtime {
         self.actors.insert(
             id,
             Actor {
+                dormant: false,
                 emitter: definition.and_then(|s| s.emitter),
                 id,
                 name: None,
@@ -544,6 +547,48 @@ impl Runtime {
         id
     }
 
+    fn update_activity(&mut self) {
+        let room = &self.game.rooms[&self.room];
+        let [w, h] = self.view_size.map(|v| v as f32);
+        let center = |v: f32, size: f32, extent: f32| {
+            (v - size / 2.).clamp(0., (extent - size).max(0.)) + size / 2.
+        };
+        let views: Vec<_> = self
+            .actors
+            .values()
+            .filter(|a| a.player.is_some())
+            .map(|a| [a.p.x, a.p.y])
+            .chain(self.focus())
+            .map(|[x, y]| {
+                [
+                    center(x, w, room.cols as f32 * room.size),
+                    center(y, h, room.height),
+                ]
+            })
+            .collect();
+        for actor in self.actors.values_mut() {
+            let Some(sprite) = actor
+                .sprite
+                .as_ref()
+                .filter(|_| actor.player.is_none() && actor.bullet.is_none())
+            else {
+                continue;
+            };
+            let dormant = !self.game.sprites[sprite].always_active
+                && !views.is_empty()
+                && views.iter().all(|p| {
+                    (actor.p.x - p[0]).abs() > w / 2. + 64. + actor.width / 2.
+                        || (actor.p.y - p[1]).abs() > h / 2. + 64. + actor.height / 2.
+                });
+            if actor.dormant != dormant {
+                actor.dormant = dormant;
+                if let Some(body) = &actor.body {
+                    box2d_rs::b2_body::B2body::set_enabled(body.clone(), !dormant);
+                }
+            }
+        }
+    }
+
     pub fn step_inputs(&mut self, inputs: [Input; 4]) -> Result<(), String> {
         self.sounds.clear();
         self.events.clear();
@@ -560,10 +605,12 @@ impl Runtime {
         }
         self.tick += 1;
         self.script_fuel = 262144;
+        self.update_activity();
         let mut actions = Vec::new();
         let suspended: Vec<_> = self
             .actors
             .values()
+            .filter(|a| !a.dormant)
             .flat_map(|actor| {
                 actor
                     .scripts
@@ -584,29 +631,10 @@ impl Runtime {
         for id in std::mem::take(&mut self.pending_start) {
             self.run(id, event, &inputs, &mut actions);
         }
-        let focus = self.focus();
-        let players: Vec<_> = self
-            .actors
-            .values()
-            .filter(|a| a.player.is_some())
-            .map(|a| [a.p.x, a.p.y])
-            .collect();
-        let active = |a: &Actor| {
-            a.player.is_some()
-                || a.sprite
-                    .as_ref()
-                    .is_some_and(|id| self.game.sprites[id].always_active)
-                || !players.iter().chain(focus.iter()).all(|p| {
-                    (a.p.x - p[0]).abs() > self.view_size[0] as f32 / 2. + 64. + a.width / 2.
-                        || (a.p.y - p[1]).abs()
-                            > self.view_size[1] as f32 / 2. + 64. + a.height / 2.
-                })
-                || (players.is_empty() && focus.is_none())
-        };
         let scripted: Vec<_> = self
             .actors
             .values()
-            .filter(|actor| actor.sprite.is_some() && actor.bullet.is_none() && active(actor))
+            .filter(|actor| actor.sprite.is_some() && actor.bullet.is_none() && !actor.dormant)
             .map(|actor| (actor.id, actor.player))
             .collect();
         for (id, player) in scripted {
@@ -659,7 +687,7 @@ impl Runtime {
         }
         self.world.borrow_mut().step(STEP, 8, 3);
         let height = self.game.rooms[&self.room].height;
-        for actor in self.actors.values_mut() {
+        for actor in self.actors.values_mut().filter(|a| !a.dormant) {
             if let Some(body) = &actor.body {
                 let body = body.borrow();
                 actor.p = PPM * body.get_position();
@@ -945,7 +973,8 @@ impl Runtime {
     }
 
     fn hittable(&self, owner: &Actor, target: &Actor) -> bool {
-        owner.id != target.id
+        !target.dormant
+            && owner.id != target.id
             && !self.static_ids.contains(&target.id)
             && target.bullet.is_none()
             && (target.sprite.is_some() || target.physics.mode == Mode::Breakable)
@@ -1017,7 +1046,7 @@ impl Runtime {
         for actor in self
             .actors
             .values_mut()
-            .filter(|a| a.physics.mode == Mode::Dynamic)
+            .filter(|a| !a.dormant && a.physics.mode == Mode::Dynamic)
         {
             let mut gravity = actor.physics.gravity;
             let mut fluid_drag = 0.0_f32;

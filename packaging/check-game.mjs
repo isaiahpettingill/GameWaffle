@@ -72,3 +72,17 @@ const gatePresent=frame=>JSON.parse(frame).actors.some(a=>a.x===108 && a.y===204
 assert.equal(gatePresent(gated.snapshot()),false);
 assert.equal(gatePresent(gated.step_buttons(32)),true);
 gated.free();
+
+const source=JSON.parse(await readFile('demo/project.json','utf8'));
+source.rooms.yard.entities=source.rooms.yard.entities.filter(e=>e.player===0 || e.sprite==='drone');
+const bossScript=new Map([['drone',{events:{tick:[{op:'velocity',x:1,y:0}]}}]]);
+for(const alwaysActive of [false,true]){
+  source.sprites.drone.alwaysActive=alwaysActive;
+  const game=Runtime.from_cartridge(pack(await compileProject(resolve('demo'),{project:source,scripts:bossScript})));
+  game.set_view_size(128,128);
+  const drone=state=>JSON.parse(state).actors.find(a=>a.image.startsWith('sprite/drone/')).x;
+  const before=drone(game.snapshot());
+  for(let i=0;i<30;i++)game.step_buttons(0);
+  assert.equal(drone(game.snapshot())>before,alwaysActive);
+  game.free();
+}

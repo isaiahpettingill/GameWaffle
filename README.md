@@ -187,7 +187,7 @@ Select **World**. Select a room and an exit. Select a destination. Use **Once pe
 
 For a continuous crossing, connect opposite edges in both directions. Select **Fixed** and **Connect opposite edges** on both exits. Use equal edge lengths. The camera shows terrain from the next room before the player crosses. Sprites and physics start when the player enters the next room.
 
-Use a camera block to follow a sprite, show a position, or return to player 1. Normal enemy tick scripts stop outside the camera and player activity areas. Enable **Assets → Combat → Run scripts off camera** for a boss.
+Use a camera block to follow a sprite, show a position, or return to player 1. Normal enemy scripts and bodies pause outside the camera and player activity areas. Enable **Assets → Combat → Run scripts off camera** for a boss.
 
 ## Items, dialogue, and saves
 
