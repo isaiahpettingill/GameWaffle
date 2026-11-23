@@ -122,3 +122,19 @@ body.studio #app .debugger form label{max-width:none}
 body.studio #app .record-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,8rem),1fr));align-items:end;gap:.55rem;max-width:45rem;margin:.65rem 0}
 body.studio #app .record-form>label{display:grid;gap:.35rem;font-size:var(--control-font);color:var(--muted)}
 body.studio #app .record-form :is(button,input,select){width:100%;height:var(--control-height);margin:0}
+
+/* A field row aligns each action with the control below the field label. */
+body.studio #app .field-row {
+  display:flex; flex-wrap:wrap; align-items:flex-end; gap:var(--field-gap) .55rem;
+}
+body.studio #app .field-row>label {
+  display:grid; gap:var(--field-gap); flex:1 1 10rem; min-width:0;
+  color:var(--muted); font-size:var(--control-font); line-height:1.35;
+}
+body.studio #app .field-row>select { flex:1 1 10rem; width:auto; }
+body.studio #app .field-row>label :is(input,select) { width:100%; max-width:none; margin:0; }
+body.studio #app .field-row>button { flex:none; }
+body.studio #app :is(.field-row,.asset-source,.record-form,.address) >button { align-self:end; }
+body.studio #app .pathrow { align-items:end; }
+body.studio #app .pathrow output { padding-block:.25rem; }
+body.studio #app label:has(>input[type=checkbox]) { display:flex; align-items:center; gap:var(--field-gap); min-height:var(--control-height); }

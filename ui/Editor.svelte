@@ -20,7 +20,7 @@
   import ScriptPanel from './ScriptPanel.svelte';
   import Physics from './Physics.svelte';
   import { tileSizes, variableName } from '../src/script.mjs';
-  import { unpack } from '../src/cartridge.mjs';
+  import { unpack, decodeCbor } from '../src/cartridge.mjs';
   import RoomMap from './RoomMap.svelte';
   import { instanceNames, newInstanceName, spriteDragType } from '../src/instances.mjs';
 
@@ -28,8 +28,9 @@
     tileId=$state(''), layerIndex=$state(0), assetKind=$state('sprite'), scriptDirty=$state(false),
     dirty=$state(false), busy=$state(false), error=$state(''), status=$state('Opening project…'), newId=$state(''),
     newSource=$state('');
-  let importFile=$state(null), filePicker=$state(), tagTiles=$state(false), assetError=$state('');
-  const assetLabel=$derived(assetKind==='audio'?'sound':assetKind==='sprite'?'actor':'tile');
+  let importFile=$state(null), filePicker=$state(), assetError=$state('');
+  const assetLabel=$derived(assetKind==='audio'?'sound':assetKind==='sprite'?'actor':'tile set');
+  const tileSets=$derived(groupTiles(project?.tiles??{}));
   const sources=$derived(assetKind==='audio'?audioFiles:artFiles);
   let tileArt=$state.raw({}), spriteArt=$state.raw({}), previewModes=$state.raw({});
   let historyVersion=$state(0), selectedEntity=$state(-1), roomPanel=$state('layers'), addPreset=$state(false);
@@ -99,10 +100,19 @@
     if(!response.ok)throw Error(result.error ?? 'Request failed');
     return result;
   }
+  let previewVersion=0;
   async function updatePreviews() {
+    const version=++previewVersion;
     const response=await fetch('./api/preview',{cache:'no-store'});
     if(!response.ok)throw Error('Could not open project preview');
     const next=unpack(new Uint8Array(await response.arrayBuffer()));
+    let tiles=next.tilePreviews??Object.fromEntries(Object.entries(next.thumbnails??{}).map(([id,bytes])=>[id,{variants:[bytes]}]));
+    if(project && JSON.stringify(project.tiles??{})!==JSON.stringify(JSON.parse(savedProject).tiles??{})){
+      const r=await fetch('./api/tile-previews',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tiles:project.tiles??{},size:project.tileSize??24})});
+      if(!r.ok)throw Error((await r.json()).error);
+      tiles=decodeCbor(new Uint8Array(await r.arrayBuffer()));
+    }
+    if(version!==previewVersion)return;
     for(const url of previewUrls) URL.revokeObjectURL(url);
     previewUrls=[];
     function png(bytes){
@@ -110,7 +120,6 @@
       previewUrls.push(url);
       return url;
     }
-    const tiles=next.tilePreviews??Object.fromEntries(Object.entries(next.thumbnails??{}).map(([id,bytes])=>[id,{variants:[bytes]}]));
     tileArt=Object.fromEntries(Object.entries(tiles).map(([id,data])=>[id,data.variants.map(png)]));
     previewModes=Object.fromEntries(Object.entries(tiles).map(([id,data])=>[id,data.mode]));
     spriteArt=Object.fromEntries(Object.entries(next.spritePreviews??{}).map(([id,data])=>[id,png(data)]));
@@ -133,8 +142,12 @@
       placementSprite=spriteId;
       tileId=Object.keys(project.tiles ?? {})[0] ?? '';
       layerIndex=chooseInitialLayer(project.rooms[roomId]);
+      for(const path of Object.keys(groupTiles(project.tiles??{}))){
+        if(art[path]?.tags?.length)addTags(path,setName(path).toLowerCase().replace(/[^a-z0-9_-]+/g,'-'));
+      }
+      if(JSON.stringify(project)!==savedProject && !recovery)mark();
       await updatePreviews();
-      status='Ready';
+      status=dirty?'Unsaved project':'Ready';
     }catch(err){error=err.message;status='Project unavailable';}
   }
   onMount(()=>{
@@ -180,6 +193,7 @@
     updateDirty();
   }
   function applyProject(serialized,record){
+    const previousTiles=JSON.stringify(project.tiles);
     project=JSON.parse(serialized);
     if(!project.rooms[roomId])roomId=project.start??Object.keys(project.rooms)[0];
     if(!project.sprites?.[spriteId])spriteId=Object.keys(project.sprites??{})[0]??'';
@@ -187,6 +201,7 @@
     layerIndex=chooseInitialLayer(project.rooms[roomId]);
     placementSprite=spriteId;selectedEntity=-1;dimensions=null;
     updateDirty(record);
+    if(JSON.stringify(project.tiles)!==previousTiles)updatePreviews().catch(err=>error=err.message);
   }
   function editRoom(change){
     const next=JSON.parse(JSON.stringify(room));
@@ -346,7 +361,7 @@
     if(busy)return;
     if(scriptDirty){openTab('assets');return;}
     assetKind=kind;
-    newId='';newSource='';importFile=null;tagTiles=false;assetError='';
+    newId='';newSource='';importFile=null;assetError='';
     addForm=adding;
     openTab(kind==='sprite'?'actors':'assets');
   }
@@ -471,11 +486,17 @@
     selectRoom(id);
     updateDirty();
   }
+  function groupTiles(tiles){
+    const sets=Object.create(null);
+    for(const [id,tile] of Object.entries(tiles))(sets[tile.source]??=[]).push(id);
+    return sets;
+  }
+  function setName(path){return path.split('/').pop().replace(/\.[^.]+$/,'');}
   function assetCollection(){
     return assetKind==='tile'?project.tiles:assetKind==='sprite'?project.sprites:project.audio;
   }
   function selectSource(path,file=null){
-    importFile=file;newSource=path;tagTiles=false;assetError='';
+    importFile=file;newSource=path;assetError='';
     const stem=path.split('/').at(-1).replace(/\.[^.]+$/,'').toLowerCase().replace(/[^a-z0-9_-]+/g,'_').replace(/^_+|_+$/g,'')||assetLabel;
     newId=stem;
     let suffix=2;
@@ -499,35 +520,37 @@
         const current=await request('./api/project');assets=current.assets;art=current.art;
       }
       if(art[newSource]?.error)throw Error(art[newSource].error);
-      if(tagTiles){
-        if(!art[newSource]?.tags?.length)throw Error('This file has no tile tags. Clear the tag option to create one tile.');
-        addTags();
+      if(assetKind==='tile'){
+        const source=art[newSource],size=project.tileSize??24;
+        if(source?.width!==size||source?.height!==size)throw Error(`Tile art must be ${size}×${size} pixels.`);
+        tileId=addTags(newSource,id);
       }else if(assetKind==='audio'){
         (project.audio??={})[id]={source:newSource};
       }else{
-        const collection=assetKind==='tile'?(project.tiles??={}):(project.sprites??={});
-        collection[id]={source:newSource,physics:{}};
-        if(assetKind==='tile')tileId=id;else spriteId=id;
+        (project.sprites??={})[id]={source:newSource,physics:{}};
+        spriteId=id;
       }
-      addForm=false;mark();
+      mark();
+      if(assetKind==='tile')await updatePreviews();
+      addForm=false;
     }catch(err){assetError=String(err.message??err);}
     finally{busy=false;}
   }
-  function addTags(){
-    const source=art[newSource];
-    if(!source?.tags?.length)return;
+  function addTags(path,stem){
+    const tags=art[path]?.tags??[];
     const collection=project.tiles??={};
-    const basename=newSource.split('/').at(-1).split('.')[0];
-    for(const [index,tag] of source.tags.entries()){
-      const slug=tag.split(':')[0].toLowerCase().replace(/[^a-z0-9_-]/g,'-').replace(/^-+|-+$/g,'');
-      if(Object.values(collection).some(tile=>tile.source===newSource && (tile.tag??source.tags[0])===tag))continue;
-      const stem=(newId || basename).toLowerCase().replace(/[^a-z0-9_-]/g,'-') || 'tile';
-      const base=stem+'-'+(slug || String(index+1));
-      let id=base, n=2;
+    const existing=Object.entries(collection).filter(([,tile])=>tile.source===path);
+    let first=existing[0]?.[0];
+    for(const [index,tag] of (tags.length?tags:['']).entries()){
+      if(existing.some(([,tile])=>(tile.tag??tags[0]??'')===tag))continue;
+      const slug=tag.split(':')[0].toLowerCase().replace(/[^a-z0-9_-]+/g,'-');
+      const base=tag?stem+'-'+(slug||String(index+1)):stem;
+      let id=base,n=2;
       while(Object.hasOwn(collection,id))id=base+'-'+n++;
-      collection[id]={source:newSource,tag,physics:{}};
-      tileId=id;
+      collection[id]={source:path,...(tag?{tag}:{}),physics:{}};
+      first??=id;
     }
+    return first;
   }
   function toggleCompression(id,enabled){
     const item=project.audio[id];
@@ -581,7 +604,7 @@
     </div></details>
 </nav>
 {#if updatesOpen}
-  <section class="row card" aria-label="Release updates">
+  <section class="field-row card" aria-label="Release updates">
     <select aria-label="Update component" bind:value={component} onchange={()=>release=null}><option value="runtime">Desktop runtime</option><option value="studio">Studio</option></select>
     {#if component==='runtime'}<select aria-label="Runtime platform" bind:value={platform} onchange={()=>release=null}><option value="linux-x64">Linux x64</option><option value="windows-x64">Windows x64</option></select>{/if}
     <button disabled={busy} onclick={()=>checkRelease()}>Check release</button>
@@ -627,10 +650,11 @@
         {/snippet}</PagedList>
       </div>
       {#if tab!=='room'}<div class="category compact">
-        <div class="heading row"><h3>Tiles</h3><button class="small-button icon-button" title="Add tile" aria-label="Add tile" onclick={()=>openAssets('tile',true)}><Plus size={14}/></button></div>
-        <PagedList items={Object.keys(project.tiles??{})} label="tiles" query={filter}>{#snippet children(id)}
-          <button class="item" class:selected={tileId===id} onclick={()=>{tileId=id;assetKind='tile';if(tab!=='assets')openTab('room');}}>
-            {#if tileArt[id]?.[0]}<img src={tileArt[id][0]} alt="">{:else}<Layers3 size={14}/>{/if}<span>{id}</span>
+        <div class="heading row"><h3>Tile sets</h3><button class="small-button icon-button" title="Add tile set" aria-label="Add tile set" onclick={()=>openAssets('tile',true)}><Plus size={14}/></button></div>
+        <PagedList items={Object.keys(tileSets)} label="tile sets" query={filter}>{#snippet children(path)}
+          {@const first=tileSets[path][0]}
+          <button class="item" title={path} class:selected={tab==='assets' && assetKind==='tile' && tile?.source===path} onclick={()=>{openAssets('tile');tileId=first;}}>
+            {#if tileArt[first]?.[0]}<img src={tileArt[first][0]} alt="">{:else}<Layers3 size={14}/>{/if}<span>{setName(path)}</span>
           </button>
         {/snippet}</PagedList>
       </div>
@@ -716,7 +740,7 @@
             </div>{/if}
           </div>
           {#if assetKind==='source'}
-            <div class="row"><label>Find source files<input type="search" bind:value={sourceFilter}></label>
+            <div class="field-row"><label>Find source files<input type="search" bind:value={sourceFilter}></label>
               <button onclick={()=>sourcePicker.click()}>Import file…</button>
               <input hidden type="file" bind:this={sourcePicker} accept=".ase,.aseprite,.png,.wav,.qoa,.ogg,.opus" onchange={async e=>{
                 const input=e.currentTarget,file=input.files[0];if(!file)return;
@@ -749,52 +773,46 @@
                 <input hidden type="file" bind:this={filePicker} accept={assetKind==='audio'?'.wav,.qoa,.ogg,.opus':'.ase,.aseprite,.png'}
                   onchange={e=>{const file=e.currentTarget.files[0];if(file)selectSource(file.name,file);e.currentTarget.value='';}}>
               </div>
-              <label class="stack">{assetKind==='sprite'?'Actor name':assetKind==='tile'?'Tile name':'Sound name'}
+              <label class="stack">{assetKind==='sprite'?'Actor name':assetKind==='tile'?'Tile ID prefix':'Sound name'}
                 <input bind:value={newId} required disabled={busy} placeholder="Choose a source file first">
               </label>
-              {#if assetKind==='tile'&&/\.(ase|aseprite)$/i.test(newSource)}
-                <label class="check"><input type="checkbox" bind:checked={tagTiles}>Create a tile for each Aseprite tag</label>
-              {/if}
               {#if assetError}<p class="error" role="alert">{assetError}</p>{/if}
-              <div class="row"><button class="primary" disabled={busy||!newSource||!newId.trim()}>{tagTiles?'Create tiles':'Create '+assetLabel}</button>
+              <div class="row"><button class="primary" disabled={busy||!newSource||!newId.trim()}>{'Create '+assetLabel}</button>
                 <button type="button" disabled={busy} onclick={()=>addForm=false}>Cancel</button></div>
             </form>
           {:else if assetKind==='audio'}
             {#each Object.entries(project.audio??{}) as [id,file]}
               {@const source=typeof file==='string'?file:file.source}
-              <div class="audio-line"><code>{id}</code> <small>{source}</small>
+              <div class="audio-line row"><code>{id}</code> <small>{source}</small>
                 {#if /\.wav$/i.test(source)}<label class="check"><input type="checkbox" checked={typeof file==='string'||file.compress!==false}
                   onchange={e=>toggleCompression(id,e.currentTarget.checked)}> QOA</label>{/if}
               </div>
             {:else}<p class="muted">Add an audio file to use it in the game.</p>{/each}
           {:else}
-            <label class="stack">{assetKind==='sprite'?'Actor':'Tile'}
-              {#if assetKind==='sprite'}
-                <select bind:value={spriteId} aria-label="Actor">{#each Object.keys(project.sprites??{}) as id}<option value={id}>{id}</option>{/each}</select>
-              {:else}
-                <select bind:value={tileId} aria-label="Tile definition">{#each Object.keys(project.tiles??{}) as id}<option value={id}>{id}</option>{/each}</select>
-              {/if}
-            </label>
+            {#if assetKind==='sprite'}
+              <label class="stack">Actor<select bind:value={spriteId}>{#each Object.keys(project.sprites??{}) as id}<option value={id}>{id}</option>{/each}</select></label>
+            {:else}
+              <label class="stack">Tile set<select value={tile?.source??''} onchange={e=>tileId=tileSets[e.currentTarget.value][0]}>{#each Object.keys(tileSets) as path}<option value={path}>{setName(path)}</option>{/each}</select></label>
+              <label class="stack">Tile<select bind:value={tileId} aria-label="Tile definition">{#each tileSets[tile?.source]??[] as id}<option value={id}>{project.tiles[id].tag??id}</option>{/each}</select></label>
+            {/if}
             {#if inspector}
               <label class="stack">Active flag<select value={inspector.flag??''} onchange={e=>set(inspector,'flag',e.currentTarget.value)}>
                 <option value="">Always active</option>{#each Object.keys(project.flags??{}) as flag}<option>{flag}</option>{/each}
               </select></label>
               {#if inspector.flag}<label class="check"><input type="checkbox" checked={inspector.when??true} onchange={e=>set(inspector,'when',e.currentTarget.checked)}> Flag must be on</label>{/if}
-              <label class="stack">Source <select value={inspector.source} onchange={e=>{
+              {#if assetKind==='sprite'}<label class="stack">Source <select value={inspector.source} onchange={e=>{
                 const previous=inspector.source;
                 if(previous!==e.currentTarget.value){
-                  delete inspector[assetKind==='tile'?'tag':'animation'];
+                  delete inspector.animation;
                   set(inspector,'source',e.currentTarget.value);
                 }
               }}>
                 {#each artFiles as file}<option value={file}>{file}</option>{/each}
               </select></label>
+              {/if}
               {#if assetKind==='tile'}
                 <label class="check"><input type="checkbox" checked={tile.persistRemoval??false} onchange={e=>set(tile,'persistRemoval',e.currentTarget.checked)}> Remember destroyed tiles</label>
-                <label class="stack">Aseprite tag <select value={tile.tag??''} onchange={e=>set(tile,'tag',e.currentTarget.value)}>
-                  <option value="">Use the first tag</option>
-                  {#each art[tile.source]?.tags??[] as tag}<option value={tag}>{tag}</option>{/each}
-                </select></label>
+                <p class="muted">{tile.source}{tile.tag?' · '+tile.tag:''}</p>
               {:else}
                 <div class="record-form"><label>Player<select bind:value={placeAs}><option value="">Choose a player</option>{#each [0,1,2,3] as slot}<option disabled={room?.entities.some(e=>e.player===slot)} value={String(slot)}>Player {slot+1}</option>{/each}</select></label>
                 <button disabled={placeAs===''||!room||room.entities.some(e=>e.player===Number(placeAs))} onclick={()=>{placementSprite=spriteId;mapTool='spawn';openTab('room');}}>Place player in room</button></div>
@@ -1025,7 +1043,7 @@
   .asseteditor h3{margin-top:1rem;margin-bottom:.38rem;}
   .asseteditor p{font-size:.78rem;margin-top:.45rem;}
   .add input,.add select{width:min(35%,15rem);}
-  .audio-line{display:flex;gap:.5rem;align-items:baseline;margin-top:.32rem;font-size:.78rem;}
+  .audio-line{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.32rem;font-size:.78rem;}
   .extra{margin-top:.55rem;}.start-room{margin-bottom:.15rem;}
   .asset-name{font-size:.85rem;color:var(--accent);margin-bottom:.6rem;}
   .variable input{max-width:9rem;margin-left:auto;}

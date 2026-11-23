@@ -158,6 +158,33 @@ export async function describeArt(root,store) {
   return Object.fromEntries(descriptions);
 }
 
+function tileClips(id,tile,ase,size) {
+  if(ase.width!==size || ase.height!==size)throw Error(`${id}: tile art must be ${size}×${size}`);
+  const tag = tile.tag ? ase.tags.find(entry => entry.name === tile.tag) : ase.tags[0];
+  if (tile.tag && !tag) throw Error(`Missing tile tag "${tile.tag}" for ${id}`);
+  const flags = (tag?.name ?? '').split(':').slice(1, -1).filter(flag => ['animated','fluid','mirror-x','mirror-y','rot-90'].includes(flag));
+  const indices = tag ? tagFrames(tag) : ase.frames.map((_, i) => i);
+  const animated = flags.includes('animated') || flags.includes('fluid');
+  const variants = animated ? [indices] : indices.map(i => [i]);
+  return {flags,variants};
+}
+
+export async function previewTiles(tiles,size,read) {
+  const sources=new Map(), result=Object.create(null);
+  for(const [id,tile] of Object.entries(tiles)){
+    key(id,'tile');
+    if(!sources.has(tile.source))sources.set(tile.source,await readArt(tile.source,read));
+    const ase=sources.get(tile.source);
+    const {flags,variants}=tileClips(id,tile,ase,size);
+    result[id]={mode:tile.physics?.mode??(flags.includes('fluid')?'fluid':'static'),variants:variants.map(([index])=>{
+      const base={width:ase.width,height:ase.height,rgba:ase.frames[index].rgba};
+      const image=flags.length?transformed(base,flags):base;
+      return PNG.sync.write({width:image.width,height:image.height,data:image.rgba});
+    })};
+  }
+  return result;
+}
+
 export async function compileProject(root, { project: draft, scripts = new Map(), store } = {}) {
   if (!store && root.endsWith('.waffleproj')) store=await (await import('./project-store.mjs')).projectStore(root);
   const read = store?.read ?? ((name,encoding)=>readFile(projectPath(root,name),encoding));
@@ -239,20 +266,12 @@ export async function compileProject(root, { project: draft, scripts = new Map()
   for (const [id, tile] of Object.entries(project.tiles ?? {})) {
     key(id, 'tile');
     const ase = await source(tile.source);
-    const tag = tile.tag ? ase.tags.find(entry => entry.name === tile.tag) : ase.tags[0];
-    if (tile.tag && !tag) throw Error(`Missing tile tag "${tile.tag}" for ${id}`);
-    const flags = (tag?.name ?? '').split(':').slice(1, -1).filter(flag => ['animated','fluid','mirror-x','mirror-y','rot-90'].includes(flag));
-    const indices = tag ? tagFrames(tag) : ase.frames.map((_, i) => i);
-    const animated = flags.includes('animated') || flags.includes('fluid');
-    const variants = animated ? [indices] : indices.map(i => [i]);
+    const {flags,variants}=tileClips(id,tile,ase,size);
     tiles[id] = {
       variants: variants.map((indices, v) => indices.map((i, f) => register(`tile/${id}/${v}/${f}`, ase, i, flags))),
       physics: props(tile.physics, flags.includes('fluid') ? 'fluid' : 'static'),
     };
-    for (const variant of tiles[id].variants) for (const frame of variant) {
-      const image = frames.get(frame.image);
-      if (image.width !== size || image.height !== size) throw Error(`${id}: tile art must be ${size}×${size}`);
-    }
+
   }
 
   const audio = Object.create(null);

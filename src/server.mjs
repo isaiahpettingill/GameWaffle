@@ -13,7 +13,7 @@ import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
 import { dirname, extname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
-import { compileProject, discoverAssets, describeArt, projectPath } from './compiler.mjs';
+import { compileProject, previewTiles, discoverAssets, describeArt, projectPath } from './compiler.mjs';
 import { encodeCbor, decodeCbor } from './cartridge.mjs';
 import { buttons,Opcodes } from './schema.mjs';
 import { embedCartridge, playerTemplate } from './web-export.mjs';
@@ -158,6 +158,10 @@ const server = createServer(async (req, res) => {
           return history.save(path,data,async()=>{await store.save([[path,data]]);revision++;});
         });
         return send(res,200,{path,edit});
+      }
+      if(url.pathname==='/api/tile-previews' && req.method==='POST'){
+        const {tiles,size}=await jsonBody(req);
+        return send(res,200,encodeCbor(await previewTiles(tiles,size,store.read)),'application/octet-stream');
       }
       if (url.pathname === '/api/preview' && req.method === 'GET') return send(res,200,editorBytes,'application/octet-stream');
       if (url.pathname === '/api/status' && req.method === 'GET') return send(res, 200, {revision, sourceError});
