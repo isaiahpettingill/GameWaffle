@@ -100,7 +100,6 @@
 <style>
   section{overflow:hidden;}
   .top{justify-content:space-between;padding:.7rem .8rem;}
-  h2{font-size:1rem;font-weight:700;}
   .workspace{height:clamp(400px,65vh,780px);width:100%;}
   .error{padding:0 .8rem .6rem;}
 </style>

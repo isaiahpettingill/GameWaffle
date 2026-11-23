@@ -80,8 +80,8 @@
 <dialog bind:this={dialog} aria-labelledby="picker-heading">
   <h2 id="picker-heading">{mode==='open'?'Open project':'Choose project location'}</h2>
   <form class="address" onsubmit={e=>{e.preventDefault();browse(address);}}>
-    <button type="button" title="Home folder" aria-label="Home folder" onclick={()=>browse(home)}><House size={17}/></button>
-    <button type="button" title="Parent folder" aria-label="Parent folder" disabled={!listing||listing.parent===listing.folder} onclick={()=>browse(listing.parent)}><ArrowUp size={17}/></button>
+    <button class="icon-button" type="button" title="Home folder" aria-label="Home folder" onclick={()=>browse(home)}><House size={17}/></button>
+    <button class="icon-button" type="button" title="Parent folder" aria-label="Parent folder" disabled={!listing||listing.parent===listing.folder} onclick={()=>browse(listing.parent)}><ArrowUp size={17}/></button>
     <input aria-label="Folder path" bind:value={address} required><button>Go</button>
   </form>
   {#if listing?.drives.length}<div class="drives">{#each listing.drives as drive}<button onclick={()=>browse(drive)}><HardDrive size={14}/>{drive}</button>{/each}</div>{/if}
