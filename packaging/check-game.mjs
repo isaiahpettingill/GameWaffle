@@ -38,6 +38,7 @@ assert.equal(state.room,'vault');
 assert.ok(player(state).x<30);
 place('courtyard',84,220);
 for(let i=0;i<3;i++)state=frame();
+assert.equal(state.particles.reduce((total,batch)=>total+batch.points.length,0),24);
 assert.ok(state.dialog);
 assert.equal(state.counters.Keys,1);
 const saved=rt.save_game();

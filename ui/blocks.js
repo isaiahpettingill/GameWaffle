@@ -8,7 +8,7 @@ Blockly.setLocale(English);
 
 const labels = {restored:'Load saved game',start:'Room start',tick:'Every tick',a:'Press A',b:'Press B',x:'Press X',menu:'Press Start',
   begin_contact:'Contact begins',end_contact:'Contact ends',damage:'Receive damage',destroy:'Destroyed'};
-const colors = {remove_self:187,camera:218,follow:218,release_camera:218,give:45,take:45,counter:286,hide:286,say:286,walk:218,jump:218,velocity:218,damage:354,fire:354,chase:159,animate:280,sound:37,room:159,spawn:187};
+const colors = {burst:24,emit:24,stop_fx:24,remove_self:187,camera:218,follow:218,release_camera:218,give:45,take:45,counter:286,hide:286,say:286,walk:218,jump:218,velocity:218,damage:354,fire:354,chase:159,animate:280,sound:37,room:159,spawn:187};
 const eventBlock = 'waffle_event';
 const spriteOptions = new WeakMap();
 function blockDefinition(id) {
@@ -62,6 +62,7 @@ export function mountBlocks(node, onChange, sprites) {
       {kind:'category',name:'Logic',colour:276,contents:blocks(['set','if','while','wait','get','integer','bool','button','calc','not'])},
       {kind:'category',name:'Items',colour:45,contents:blocks(['give','take','item'])},
       {kind:'category',name:'Dialogue & HUD',colour:286,contents:blocks(['say','counter','hide'])},
+      {kind:'category',name:'Particles',colour:24,contents:blocks(['burst','emit','stop_fx'])},
       {kind:'category',name:'Motion',colour:218,contents:blocks(['walk','jump','velocity','chase'])},
       {kind:'category',name:'Combat',colour:354,contents:blocks(['damage','fire'])},
       {kind:'category',name:'Room & media',colour:159,contents:blocks(['spawn','remove_self','animate','sound','room','camera','follow','release_camera'])},

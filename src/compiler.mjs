@@ -1,7 +1,7 @@
 import {addSeams} from './seams.mjs';
 import {pack} from './pack.mjs';
 import {defaultFont} from './font.mjs';
-import { platformGravity, roomBorder } from './schema.mjs';
+import { effects, platformGravity, roomBorder } from './schema.mjs';
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -187,10 +187,11 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         if (error.code !== 'ENOENT') throw error;
       }
     }
+    if(sprite.emitter && (!effects.includes(sprite.emitter.effect) || !Number.isInteger(sprite.emitter.rate) || sprite.emitter.rate<1 || sprite.emitter.rate>240))throw Error('Invalid particle emitter for '+id);
     dependencies.set(id,script.dependencies);
     sprites[id] = { clips, program:script.events, physics: props(sprite.physics, 'none'), width: sprite.width ?? ase.width,
       height: sprite.height ?? ase.height, layer: sprite.layer ?? 0, animation: sprite.animation ?? 'default',
-      alwaysActive:sprite.alwaysActive??false, team: sprite.team ?? 0, projectile: sprite.projectile };
+      emitter:sprite.emitter??null, alwaysActive:sprite.alwaysActive??false, team: sprite.team ?? 0, projectile: sprite.projectile };
     number(sprites[id].width, 1, 8192, 'sprite width');
     number(sprites[id].height, 1, 8192, 'sprite height');
   }

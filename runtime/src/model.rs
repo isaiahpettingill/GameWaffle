@@ -129,6 +129,7 @@ impl Clip {
 
 #[derive(Deserialize)]
 pub struct Sprite {
+    pub emitter: Option<crate::particles::Emitter>,
     #[serde(default, rename = "alwaysActive")]
     pub always_active: bool,
     pub clips: BTreeMap<String, Clip>,
@@ -303,6 +304,7 @@ pub struct Snapshot<'a> {
     pub room: &'a str,
     pub tick: u64,
     pub actors: Vec<ActorView<'a>>,
+    pub particles: &'a [crate::particles::Batch],
     pub focus: Option<[f32; 2]>,
     pub dialog: Option<&'a str>,
     pub counters: &'a BTreeMap<String, i32>,

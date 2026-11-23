@@ -127,9 +127,9 @@ impl Program {
                 15 => "j",
                 16 => "r",
                 17 => "rf",
-                18 | 19 | 21 => "NW",
+                18 | 19 | 21 | 27 | 28 => "NW",
                 20 | 22 => "N",
-                23 | 25 | 26 => "",
+                23 | 25 | 26 | 29 => "",
                 24 => "WW",
                 _ => return Err(format!("Invalid opcode {opcode}")),
             };
@@ -192,6 +192,9 @@ impl Program {
                 24 => engine::<24>,
                 25 => engine::<25>,
                 26 => engine::<26>,
+                27 => engine::<27>,
+                28 => engine::<28>,
+                29 => engine::<29>,
 
                 _ => unreachable!(),
             };
@@ -431,7 +434,7 @@ fn engine<const OP: u8>(
     m: &mut Machine,
     cx: &mut Context<'_>,
 ) -> Result<(), &'static str> {
-    let named = matches!(OP, 3 | 5 | 7 | 8 | 9 | 18..=22);
+    let named = matches!(OP, 3 | 5 | 7 | 8 | 9 | 18..=22 | 27 | 28);
     let arg = |index: usize| {
         if index == 0 && named {
             return 0.0;

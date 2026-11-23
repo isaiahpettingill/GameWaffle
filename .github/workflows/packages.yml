@@ -15,8 +15,16 @@ jobs:
       - uses: actions/setup-node@v4
         with: {node-version: 24, cache: npm}
       - run: rustup target add wasm32-unknown-unknown
-      - run: cargo install wasm-bindgen-cli --version 0.2.105 --locked
+      - name: Install matching Wasm tools
+        run: |
+          curl -fsSL https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.105/wasm-bindgen-0.2.105-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
+          cp "$RUNNER_TEMP/wasm-bindgen-0.2.105-x86_64-unknown-linux-musl/wasm-bindgen" "$HOME/.cargo/bin/"
+
       - run: npm ci && npm run build && node packaging/check-game.mjs
+      - name: Check editor at four screen widths
+        run: |
+          npm install --prefix "$RUNNER_TEMP/browser-check" playwright-core@1.58.2
+          NODE_PATH="$RUNNER_TEMP/browser-check/node_modules" node packaging/check-editor.cjs
       - uses: actions/upload-artifact@v4
         with: {name: studio-assets, path: web-built, if-no-files-found: error}
       - run: |

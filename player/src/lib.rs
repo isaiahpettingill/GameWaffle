@@ -135,6 +135,7 @@ fn draw(
     snapshot: &gamewaffle_runtime::Snapshot<'_>,
     atlas: &Texture<'_>,
     view: [u32; 4],
+    rectangles: &mut Vec<FRect>,
 ) -> Result<(), Error> {
     let room = &game.media.rooms[snapshot.room];
     let source = &game.media.atlases[snapshot.room];
@@ -247,6 +248,23 @@ fn draw(
             }
         }
     }
+    for batch in snapshot.particles {
+        if batch.points.is_empty() {
+            continue;
+        }
+        let rgb = batch.color;
+        canvas.set_draw_color(Color::RGB((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8));
+        rectangles.clear();
+        rectangles.extend(batch.points.iter().map(|p| {
+            FRect::new(
+                (i32::from(p[0]) - x) as f32,
+                (i32::from(p[1]) - y) as f32,
+                batch.size as f32,
+                batch.size as f32,
+            )
+        }));
+        canvas.fill_rects(&rectangles)?;
+    }
     if let Some(font) = source.rect("ui/font") {
         let text =
             |canvas: &mut Canvas<Window>, line: &str, mut x: f32, y: f32| -> Result<(), Error> {
@@ -344,6 +362,7 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
     let mut lag = Duration::ZERO;
 
     let mut frames = 0;
+    let mut particle_rects = Vec::new();
     'running: loop {
         for event in pump.poll_iter() {
             if setup.is_none() {
@@ -685,7 +704,14 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
         canvas.with_texture_canvas(frame, |canvas| {
             rendered = (|| -> Result<(), Error> {
                 if let (Some(game), Some(snapshot)) = (&game, &snapshot) {
-                    draw(canvas, game, snapshot, texture.as_ref().unwrap(), view)?;
+                    draw(
+                        canvas,
+                        game,
+                        snapshot,
+                        texture.as_ref().unwrap(),
+                        view,
+                        &mut particle_rects,
+                    )?;
                 } else {
                     canvas.set_draw_color(Color::RGB(24, 24, 34));
                     canvas.clear();

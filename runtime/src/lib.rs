@@ -1,5 +1,6 @@
 mod camera;
 mod model;
+mod particles;
 mod path;
 mod physics;
 mod progress;
@@ -31,6 +32,7 @@ struct Bullet {
 }
 
 struct Actor {
+    emitter: Option<particles::Emitter>,
     id: u32,
     name: Option<String>,
     sprite: Option<String>,
@@ -102,6 +104,7 @@ enum Action {
 
 #[wasm_bindgen]
 pub struct Runtime {
+    particles: particles::Particles,
     game: Game,
     room: String,
     world: World,
@@ -255,6 +258,7 @@ impl Runtime {
             })
             .collect();
         Snapshot {
+            particles: self.particles.visible_batches(),
             room: &self.room,
             tick: self.tick,
             actors,
@@ -346,6 +350,7 @@ impl Runtime {
         let (world, contacts) = physics::world(0.0);
         let start = room.unwrap_or_else(|| game.start.clone());
         let mut rt = Runtime {
+            particles: Default::default(),
             game,
             room: String::new(),
             world,
@@ -383,6 +388,7 @@ impl Runtime {
     fn load(&mut self, id: &str) -> Result<(), String> {
         let room = self.game.rooms.get(id).ok_or("Unknown room")?.clone();
         self.actors.clear();
+        self.particles.clear();
         (self.world, self.contacts) = physics::world(room.gravity);
         self.room = id.into();
         self.camera_actor = None;
@@ -475,6 +481,7 @@ impl Runtime {
         self.actors.insert(
             id,
             Actor {
+                emitter: definition.and_then(|s| s.emitter),
                 id,
                 name: None,
                 sprite,
@@ -569,6 +576,17 @@ impl Runtime {
             .map(|actor| (actor.id, actor.player))
             .collect();
         for (id, player) in scripted {
+            let actor = self.actors.get_mut(&id).unwrap();
+            if let Some(emitter) = &mut actor.emitter {
+                emitter.phase += emitter.rate.min(240);
+                let count = emitter.phase / 60;
+                emitter.phase %= 60;
+                if count > 0 {
+                    self.particles
+                        .emit(emitter.effect, [actor.p.x, actor.p.y], usize::from(count));
+                }
+            }
+
             self.run(id, "tick", &inputs, &mut actions);
             if let Some(slot) = player {
                 let now = inputs[slot];
@@ -641,6 +659,7 @@ impl Runtime {
             }
             self.add_scene_actor(spawn, size)?;
         }
+        self.particles.update(self.focus(), self.view_size);
         self.cross_exit(&inputs)
     }
 
@@ -724,6 +743,26 @@ impl Runtime {
         let arg = |index: usize| args[index - 1];
         let top_down = self.game.rooms[&self.room].is_top_down();
         match opcode {
+            27 | 28 => {
+                if let Some(effect) = particles::Effect::named(name) {
+                    let actor = self.actors.get_mut(&id).unwrap();
+                    if opcode == 27 {
+                        self.particles.emit(
+                            effect,
+                            [actor.p.x, actor.p.y],
+                            args[1].max(0.) as usize,
+                        );
+                    } else {
+                        actor.emitter = Some(particles::Emitter {
+                            effect,
+                            rate: args[1].clamp(0., 240.) as u16,
+                            phase: 0,
+                        });
+                    }
+                }
+            }
+            29 => self.actors.get_mut(&id).unwrap().emitter = None,
+
             26 => actions.push(Action::Remove(id)),
             23 => {
                 self.camera_actor = Some(id);

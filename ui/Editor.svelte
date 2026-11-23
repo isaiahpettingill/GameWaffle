@@ -1,5 +1,5 @@
 <script>
-  import { platformGravity, roomBorder } from '../src/schema.mjs';
+  import { effects, platformGravity, roomBorder } from '../src/schema.mjs';
   import Sections from './Sections.svelte';
   import World from './World.svelte';
   import { onMount } from 'svelte';
@@ -601,7 +601,7 @@
                 </select></label>
               {:else}
                 <button class="extra" onclick={()=>openDefinition(spriteId,'blocks')}>Open script</button>
-                <Sections labels={['Appearance','Combat']} bind:value={spriteSection}/>
+                <Sections labels={['Appearance','Combat','Particles']} bind:value={spriteSection}/>
                 {#if spriteSection==='Appearance'}
                   <div class="pair">
                     <label class="stack">Visual layer <input type="number" value={sprite.layer??0} onchange={e=>set(sprite,'layer',e.currentTarget.valueAsNumber)}></label>
@@ -612,7 +612,7 @@
                     <label class="stack">Body width <input type="number" min="1" placeholder="From source" value={sprite.width??''} onchange={e=>set(sprite,'width',e.currentTarget.value===''?'':e.currentTarget.valueAsNumber)}></label>
                     <label class="stack">Body height <input type="number" min="1" placeholder="From source" value={sprite.height??''} onchange={e=>set(sprite,'height',e.currentTarget.value===''?'':e.currentTarget.valueAsNumber)}></label>
                   </div>
-                {:else}
+                {:else if spriteSection==='Combat'}
                   <div class="pair">
                     <label class="stack">Team <input type="number" value={sprite.team??0} onchange={e=>set(sprite,'team',e.currentTarget.valueAsNumber)}></label>
                     <label class="stack">Projectile <select value={sprite.projectile??''} onchange={e=>set(sprite,'projectile',e.currentTarget.value)}>
@@ -620,6 +620,13 @@
                     </select></label>
                   </div>
                   <label class="check"><input type="checkbox" checked={sprite.alwaysActive??false} onchange={e=>set(sprite,'alwaysActive',e.currentTarget.checked)}> Run scripts off camera</label>
+                {:else}
+                  <label class="stack">Emitter<select value={sprite.emitter?.effect??''} onchange={e=>set(sprite,'emitter',e.currentTarget.value?{effect:e.currentTarget.value,rate:sprite.emitter?.rate??16}:'')}>
+                    <option value="">None</option>{#each effects as effect}<option>{effect}</option>{/each}
+                  </select></label>
+                  {#if sprite.emitter}<label class="stack">Particles per second<input type="number" min="1" max="240" value={sprite.emitter.rate} onchange={e=>{
+                    const n=e.currentTarget.valueAsNumber;if(Number.isInteger(n)&&n>=1&&n<=240)set(sprite,'emitter',{...sprite.emitter,rate:n});
+                  }}></label>{/if}
                 {/if}
               {/if}
             {/if}

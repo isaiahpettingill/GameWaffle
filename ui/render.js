@@ -77,6 +77,11 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
       ctx.fillText(String(actor.player+1), Math.round(actor.x), Math.round(actor.y-actor.height/2-5));
     }
   }
+  for(const batch of snapshot.particles??[]){
+    if(!batch.points.length)continue;
+    ctx.fillStyle='#'+batch.color.toString(16).padStart(6,'0');
+    for(const [px,py] of batch.points)ctx.fillRect(px,py,batch.size,batch.size);
+  }
   const font=atlas.entries['ui/font'];
   if (!showGrid && font) {
     ctx.setTransform(1,0,0,1,0,0);

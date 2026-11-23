@@ -212,3 +212,9 @@ bash packaging/signing-key.sh "$HOME/GameWaffle-release.p12"
 Push a version tag such as `v0.1.0` to publish a GitHub Release. Tagged builds require the Android signing secret. GitHub issues build provenance for the release files.
 
 GameWaffle uses the [0BSD license](LICENSE).
+
+## Add particle effects
+
+Select a sprite in **Assets → Particles**. Select an effect and set the rate in particles per second. Each instance has its own emitter. The presets include sparks, dust, smoke, flame, bubbles, rain, and snow.
+
+Use **Particles** in Blockly for bursts, continuous effects, and stop commands. Emitted particles finish their movement after the source disappears. The runtime limits a room to 2,048 live particles and 256 new particles per tick. Particles use a separate random sequence from room connections.

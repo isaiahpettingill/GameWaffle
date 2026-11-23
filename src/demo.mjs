@@ -202,7 +202,7 @@ project.sprites.key={source:'assets/key.png',script:'scripts/key.cbor',physics:{
 project.rooms.courtyard.entities.push({sprite:'key',x:84,y:220,flag:'found_key',when:false});
 await writeFile('demo/scripts/key.cbor',encodeCbor({events:{begin_contact:[
   {op:'if',condition:{calc:'not',left:{scope:'flag',get:'found_key'}},body:[
-    {op:'give',item:'key',count:1},{op:'set',scope:'flag',name:'found_key',value:true},
+    {op:'burst',effect:'sparks',count:24},{op:'give',item:'key',count:1},{op:'set',scope:'flag',name:'found_key',value:true},
     {op:'counter',label:'Keys',value:{item:'key'}},{op:'say',text:'You found the courtyard key!'},{op:'remove_self'}
   ]}
 ]}}));
