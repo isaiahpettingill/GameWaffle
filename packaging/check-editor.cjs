@@ -21,7 +21,14 @@ for(const width of [1280,800,390,320]){
   for(const tab of ['Room','World','Game','Assets','Actors','Blocks']){
     await nav.getByText(tab,{exact:true}).click();
     if(tab==='World')await page.getByRole('button',{name:'right exit'}).click();
-    if(tab==='Game')await page.getByRole('button',{name:'Display',exact:true}).click();
+    if(tab==='Game'){
+      const form=page.locator('.record-form');
+      const fields=form.locator('select,input,button');
+      assert.deepEqual(await fields.evaluateAll(nodes=>nodes.map(n=>n.tagName)),['SELECT','INPUT','INPUT','BUTTON']);
+      const sizes=await fields.evaluateAll(nodes=>nodes.map(n=>n.getBoundingClientRect().height));
+      assert.equal(new Set(sizes).size,1,'Variable form control heights at '+width);
+      await page.getByRole('button',{name:'Display',exact:true}).click();
+    }
     if(tab==='Actors')await page.getByRole('button',{name:'Combat',exact:true}).click();
     if(tab==='Blocks'){
       await page.locator('.blocklySvg').first().waitFor();

@@ -33,7 +33,7 @@
   const sources=$derived(assetKind==='audio'?audioFiles:artFiles);
   let tileArt=$state.raw({}), spriteArt=$state.raw({}), previewModes=$state.raw({});
   let historyVersion=$state(0), selectedEntity=$state(-1), roomPanel=$state('layers'), addPreset=$state(false);
-  let savedProject='', currentProject='', previewUrls=[];
+  let savedProject=$state(''), currentProject='', previewUrls=[];
   const undo=[],redo=[];
   const draft=draftFile('project',message=>error=message);
   let recovery=$state.raw(null);
@@ -652,8 +652,8 @@
         {/key}
       {:else if tab==='blocks'}
         {#if spriteId}
-          {#key spriteId+':'+scriptVersion}<ScriptPanel onBeforeSave={async()=>!dirty||await saveProject()} onFileEdit={recordFile} sprite={spriteId} sprites={Object.keys(project.sprites??{})} items={Object.keys(project.items??{})} actions={[...buttons,...Object.keys(project.controls??{})]} bind:dirty={scriptDirty} onSave={saveScript} />{/key}
-        {:else}<p class="empty card">Add a actor in Actors to give it behavior.</p>{/if}
+          {#key spriteId+':'+scriptVersion}<ScriptPanel newActor={!Object.hasOwn(JSON.parse(savedProject).sprites??{},spriteId)} onBeforeSave={async()=>!dirty||await saveProject()} onFileEdit={recordFile} sprite={spriteId} sprites={Object.keys(project.sprites??{})} items={Object.keys(project.items??{})} actions={[...buttons,...Object.keys(project.controls??{})]} bind:dirty={scriptDirty} onSave={saveScript} />{/key}
+        {:else}<p class="empty card">Create an actor to edit its script.</p>{/if}
       {:else if tab==='game'}
         <section class="card asseteditor">
           <h2>Game settings</h2>
