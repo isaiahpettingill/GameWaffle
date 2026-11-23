@@ -11,5 +11,7 @@ export const Blocks = {
   room: ['Go to room %1', [['room','text','yard']]],
   spawn: ['Add instance of %1 at offset X %2 Y %3', [['sprite','text','drone'],['x','number',0],['y','number',0]]],
 };
-export const Opcodes = Object.fromEntries(Object.keys(Blocks).map((name, i) => [name, i]));
+export const Opcodes = Object.freeze({
+  walk:0, jump:1, damage:2, fire:3, chase:4, sound:5, velocity:6, animate:7, room:8, spawn:9,
+});
 export const buttons = ['up','down','left','right','a','b','x','menu'];

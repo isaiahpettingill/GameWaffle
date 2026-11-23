@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import ScriptPanel from './ScriptPanel.svelte';
   import Physics from './Physics.svelte';
+  import { tileSizes, variableName } from '../src/script.mjs';
   import { unpack } from '../src/cartridge.mjs';
   import RoomMap from './RoomMap.svelte';
   import { instanceNames, newInstanceName, spriteDragType } from '../src/instances.mjs';
@@ -22,7 +23,16 @@
   let inspector=$derived(assetKind==='tile' ? tile : sprite);
   let artFiles=$derived(assets.filter(file=>/\.(ase|aseprite)$/i.test(file)));
   let audioFiles=$derived(assets.filter(file=>/\.(wav|ogg|oga|opus|qoa)$/i.test(file)));
-  const tabs=[['room','Room'],['blocks','Blocks'],['assets','Assets']];
+  const tabs=[['room','Room'],['blocks','Blocks'],['assets','Assets'],['game','Game']];
+  let variableId=$state(''), variableKind=$state('variables');
+  function addVariable() {
+    const id=variableId.trim();
+    if(!variableName(id)){error='Use a name with letters, digits, and underscores.';return;}
+    const table=project[variableKind]??={};
+    if(Object.hasOwn(table,id)){error='This name is already in use.';return;}
+    table[id]=variableKind==='flags' ? false : 0;
+    variableId='';error='';mark();
+  }
   const historyStatus=$derived.by(()=>{
     const revision=historyVersion;
     const edits=history.get(roomId);
@@ -42,7 +52,7 @@
     return result;
   }
   async function updatePreviews() {
-    const response=await fetch('./demo.waffle',{cache:'no-store'});
+    const response=await fetch('./api/preview',{cache:'no-store'});
     if(!response.ok)throw Error('Could not open project preview');
     const next=unpack(new Uint8Array(await response.arrayBuffer()));
     for(const url of previewUrls) URL.revokeObjectURL(url);
@@ -411,6 +421,7 @@
       <summary>Export</summary>
       <div class="card">
         <a download={exportName+'.html'} href="./export.html" onclick={saveThenOpen}>Standalone web game</a>
+        <a download="gamewaffle-player.html" href="./gamewaffle-player.html">Web player</a>
         <a download={exportName+'.waffle'} href="./demo.waffle" onclick={saveThenOpen}>Cartridge</a>
       </div>
     </details>
@@ -471,6 +482,40 @@
         {#if spriteId}
           {#key spriteId}<ScriptPanel sprite={spriteId} sprites={Object.keys(project.sprites??{})} bind:dirty={scriptDirty} onSave={saveScript} />{/key}
         {:else}<p class="empty card">Add a sprite in Assets to give it behavior.</p>{/if}
+      {:else if tab==='game'}
+        <section class="card asseteditor">
+          <h2>Game settings</h2>
+          <details open>
+            <summary>Global variables and flags</summary>
+            {#each Object.entries(project.variables??{}) as [id,value]}
+              <label class="row variable">{id}<input type="number" step="1" {value} onchange={e=>{
+                const next=e.currentTarget.valueAsNumber;
+                if(Number.isSafeInteger(next))set(project.variables,id,next);
+                else e.currentTarget.value=value;
+              }}></label>
+            {/each}
+            {#each Object.entries(project.flags??{}) as [id,value]}
+              <label class="check"><input type="checkbox" checked={value} onchange={e=>set(project.flags,id,e.currentTarget.checked)}>{id}</label>
+            {/each}
+            <div class="row add extra">
+              <input aria-label="Variable name" placeholder="Name" bind:value={variableId}>
+              <select aria-label="Value type" bind:value={variableKind}><option value="variables">Variable</option><option value="flags">Flag</option></select>
+              <button onclick={addVariable}>Add</button>
+            </div>
+          </details>
+          <details>
+            <summary>Render resolution</summary>
+            <div class="pair">
+              {#each [['min_width','Minimum width',160,160],['min_height','Minimum height',144,144],['max_width','Maximum width',512,160],['max_height','Maximum height',512,144],['zoom','Pixel zoom',2,1]] as [key,label,fallback,min]}
+                <label class="stack">{label}<input type="number" {min} max={key==='zoom'?8:512} value={project.camera?.[key]??fallback} onchange={e=>{
+                  const value=e.currentTarget.valueAsNumber;
+                  if(Number.isInteger(value)&&value>=min&&value<=(key==='zoom'?8:512))set((project.camera??={}),key,value);
+                  else e.currentTarget.value=project.camera?.[key]??fallback;
+                }}></label>
+              {/each}
+            </div>
+          </details>
+        </section>
       {:else if tab==='assets'}
         <section class="card asseteditor">
           <div class="row heading">
@@ -485,6 +530,13 @@
             <h3>{assetKind==='audio' ? 'Audio files' : assetKind==='tile' ? 'Tile definitions' : 'Sprite definitions'}</h3>
             <button aria-expanded={addForm} onclick={()=>addForm=!addForm}>{addForm ? 'Cancel' : `Add ${assetKind}`}</button>
           </div>
+          {#if assetKind==='tile'}
+            <label class="stack">Tile size
+              <select aria-label="Tile size" value={project.tileSize??24} onchange={e=>set(project,'tileSize',Number(e.currentTarget.value))}>
+                {#each tileSizes as size}<option value={size}>{size} × {size}</option>{/each}
+              </select>
+            </label>
+          {/if}
           {#if addForm}
             <div class="row add">
               {#if assetKind==='audio'}
@@ -559,7 +611,7 @@
         </section>
       {/if}
     </div>
-    {#if tab!=='assets' || assetKind!=='audio'}<aside class="inspector card">
+    {#if tab!=='game' && (tab!=='assets' || assetKind!=='audio')}<aside class="inspector card">
       {#if tab==='room' && room}
         <div class="panel-tabs row">
           {#each [['layers','Layers'],['room','Room'],['instances','Instances']] as [id,label]}
@@ -727,6 +779,8 @@
   .audio-line{display:flex;gap:.5rem;align-items:baseline;margin-top:.32rem;font-size:.78rem;}
   .extra{margin-top:.55rem;}.start-room{margin-bottom:.15rem;}
   .asset-name{font-size:.85rem;color:var(--accent);margin-bottom:.6rem;}
+  .variable input{max-width:9rem;margin-left:auto;}
+  .variable{margin-top:.45rem;}
   .asset-bar{justify-content:space-between;margin-top:.65rem;}
   .instance-list{max-height:14rem;overflow:auto;}
   .instance-source{margin-top:.55rem;}

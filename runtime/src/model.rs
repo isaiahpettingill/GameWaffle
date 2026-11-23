@@ -2,6 +2,32 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+fn read_float<'de, D: serde::Deserializer<'de>>(decoder: D) -> Result<f32, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Number {
+        Integer(i64),
+        Float(f64),
+    }
+    let number = match Number::deserialize(decoder)? {
+        Number::Integer(value) => value as f64,
+        Number::Float(value) => value,
+    };
+    let result = number as f32;
+    if !result.is_finite() {
+        return Err(serde::de::Error::custom("Expected a finite number"));
+    }
+    Ok(result)
+}
+
+fn read_optional_float<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<Option<f32>, D::Error> {
+    #[derive(Deserialize)]
+    struct Number(#[serde(deserialize_with = "read_float")] f32);
+    Ok(Option::<Number>::deserialize(decoder)?.map(|number| number.0))
+}
+
 pub type Code = BTreeMap<String, Vec<Vec<Value>>>;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
@@ -23,18 +49,27 @@ pub enum Mode {
 #[serde(default)]
 pub struct Physics {
     pub mode: Mode,
+    #[serde(deserialize_with = "read_optional_float")]
     pub mass: Option<f32>,
+    #[serde(deserialize_with = "read_float")]
     pub density: f32,
+    #[serde(deserialize_with = "read_float")]
     pub friction: f32,
+    #[serde(deserialize_with = "read_float")]
     pub elasticity: f32,
     pub category: u16,
     pub mask: u16,
     pub group: i16,
+    #[serde(deserialize_with = "read_float")]
     pub gravity: f32,
     pub fixed: bool,
+    #[serde(deserialize_with = "read_float")]
     pub health: f32,
+    #[serde(deserialize_with = "read_float")]
     pub buoyancy: f32,
+    #[serde(deserialize_with = "read_float")]
     pub drag: f32,
+    #[serde(deserialize_with = "read_float")]
     pub damage: f32,
 }
 
@@ -95,12 +130,17 @@ impl Clip {
     }
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Deserialize)]
 pub struct Sprite {
     pub clips: BTreeMap<String, Clip>,
+    #[serde(default)]
     pub code: Code,
+    #[serde(default)]
+    pub program: BTreeMap<String, crate::vm::Encoded>,
     pub physics: Physics,
+    #[serde(deserialize_with = "read_float")]
     pub width: f32,
+    #[serde(deserialize_with = "read_float")]
     pub height: f32,
     pub layer: i32,
     pub animation: String,
@@ -110,7 +150,9 @@ pub struct Sprite {
 
 #[derive(Clone, Default, Deserialize)]
 pub struct Spawn {
+    #[serde(deserialize_with = "read_float")]
     pub x: f32,
+    #[serde(deserialize_with = "read_float")]
     pub y: f32,
     pub layer: Option<i32>,
     pub player: Option<usize>,
@@ -125,9 +167,13 @@ pub struct Spawn {
 
 #[derive(Clone, Deserialize)]
 pub struct Solid {
+    #[serde(deserialize_with = "read_float")]
     pub x: f32,
+    #[serde(deserialize_with = "read_float")]
     pub y: f32,
+    #[serde(deserialize_with = "read_float")]
     pub width: f32,
+    #[serde(deserialize_with = "read_float")]
     pub height: f32,
     pub physics: Physics,
 }
@@ -143,8 +189,11 @@ pub enum View {
 pub struct Room {
     pub cols: usize,
     pub rows: usize,
+    #[serde(deserialize_with = "read_float")]
     pub size: f32,
+    #[serde(deserialize_with = "read_float")]
     pub height: f32,
+    #[serde(deserialize_with = "read_float")]
     pub gravity: f32,
     pub view: Option<View>,
     pub entities: Vec<Spawn>,
@@ -161,6 +210,10 @@ impl Room {
 
 #[derive(Deserialize)]
 pub struct Game {
+    #[serde(default)]
+    pub globals: BTreeMap<String, i64>,
+    #[serde(default)]
+    pub flags: BTreeMap<String, bool>,
     pub start: String,
     pub rooms: BTreeMap<String, Room>,
     pub sprites: BTreeMap<String, Sprite>,
@@ -177,6 +230,22 @@ pub struct Input {
     pub b: bool,
     pub x: bool,
     pub menu: bool,
+}
+
+impl Input {
+    pub fn from_bits(bits: u8) -> Self {
+        let on = |index: u32| bits & (1u8 << index) != 0;
+        Self {
+            up: on(0),
+            down: on(1),
+            left: on(2),
+            right: on(3),
+            a: on(4),
+            b: on(5),
+            x: on(6),
+            menu: on(7),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -199,6 +268,11 @@ pub struct ActorView<'a> {
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RuntimeEvent {
+    ScriptError {
+        actor: u32,
+        event: String,
+        message: String,
+    },
     Contact {
         began: bool,
         a: u32,

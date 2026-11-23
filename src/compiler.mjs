@@ -5,7 +5,7 @@ import { PNG } from 'pngjs';
 import { encode as encodeQoa } from 'qoa-format';
 import { readAseprite, tagFrames } from './ase.mjs';
 import { decodeCbor, pack } from './cartridge.mjs';
-import { Blocks, Events, Opcodes } from './schema.mjs';
+import { compileScript, tileSizes, variableName } from './script.mjs';
 import { instanceNames } from './instances.mjs';
 
 export function projectPath(root, file) {
@@ -44,22 +44,6 @@ function props(value = {}, defaultMode) {
     drag: number(value.drag ?? 2, 0, 20, 'fluid drag'), damage: number(value.damage ?? 0, 0, 100_000, 'fluid damage per second') };
 }
 
-export function scriptCode(script) {
-  return Object.fromEntries(Object.entries(script.events ?? {}).map(([event, list]) => {
-    if (!Events.includes(event) || !Array.isArray(list) || list.length > 256) throw Error(`Invalid event: ${event}`);
-    return [event, list.map(block => {
-      if (!Object.hasOwn(Blocks, block.op)) throw Error(`Invalid block: ${block.op}`);
-      return [Opcodes[block.op], ...Blocks[block.op][1].map(([field, type, defaultValue]) => {
-        const value = block[field] ?? defaultValue;
-        if (type === 'number') return number(value, -10000, 10000, field);
-        if (type === 'text' && typeof value === 'string' && value.length <= 96) return value;
-        if (Array.isArray(type) && type.includes(value)) return value;
-        throw Error(`Invalid block value for ${field}`);
-      })];
-    })];
-  }));
-}
-
 function blit(src, dest, x, y) {
   for (let row = 0; row < src.height; row++) {
     const from = row * src.width * 4;
@@ -84,7 +68,9 @@ function transformed(source, flags) {
 
 function atlas(images) {
   const list = [...images].sort((a,b) => b[1].height - a[1].height || b[1].width - a[1].width);
-  const width = Math.max(512, ...list.map(([, image]) => image.width));
+  const pixels = list.reduce((total,[,image])=>total+(image.width+1)*(image.height+1),0);
+  const estimate = 2 ** Math.ceil(Math.log2(Math.sqrt(Math.max(1,pixels))));
+  const width = Math.max(512,Math.min(4096,estimate),...list.map(([,image])=>image.width));
   let x = 0, y = 0, height = 0;
   const entries = Object.create(null);
   for (const [id, image] of list) {
@@ -169,7 +155,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     return { image: id, ms: frame.duration };
   }
 
-  const sprites = Object.create(null);
+  const sprites = Object.create(null), dependencies = new Map();
   for (const [id, sprite] of Object.entries(project.sprites ?? {})) {
     key(id, 'sprite');
     const ase = await source(sprite.source);
@@ -177,30 +163,43 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     const clips = Object.create(null);
     clips.default = { frames: all, repeat: 0 };
     for (const tag of ase.tags) clips[tag.name] = { frames: tagFrames(tag).map(i => all[i]), repeat: tag.repeat };
-    let code = {};
+    let script = { events:{}, dependencies:new Set() };
     if (sprite.script) {
       try {
-        code = scriptCode(scripts.get(id) ?? decodeCbor(await readFile(projectPath(root, sprite.script))));
+        script = compileScript(scripts.get(id) ?? decodeCbor(await readFile(projectPath(root, sprite.script))));
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
       }
     }
-    sprites[id] = { clips, code, physics: props(sprite.physics, 'none'), width: sprite.width ?? ase.width,
+    dependencies.set(id,script.dependencies);
+    sprites[id] = { clips, program:script.events, physics: props(sprite.physics, 'none'), width: sprite.width ?? ase.width,
       height: sprite.height ?? ase.height, layer: sprite.layer ?? 0, animation: sprite.animation ?? 'default',
       team: sprite.team ?? 0, projectile: sprite.projectile };
     number(sprites[id].width, 1, 8192, 'sprite width');
     number(sprites[id].height, 1, 8192, 'sprite height');
   }
-  for (const [id, sprite] of Object.entries(sprites)) {
-    for (const instructions of Object.values(sprite.code)) {
-      for (const [opcode, target] of instructions) {
-        if (opcode === Opcodes.spawn && !Object.hasOwn(sprites, target)) {
-          throw Error(`Sprite "${id}" adds an instance of unknown sprite "${target}"`);
-        }
-      }
-    }
+  for (const [id, targets] of dependencies) for (const target of targets) {
+    if (!Object.hasOwn(sprites,target)) throw Error(`Sprite "${id}" adds an instance of unknown sprite "${target}"`);
   }
-  const size = integer(project.tileSize ?? 24, 4, 128, 'tile size');
+  const size = project.tileSize ?? 24;
+  if (!tileSizes.includes(size)) throw Error('Set the tile size to 8, 16, 24, or 32 pixels');
+  function variables(values, flags) {
+    return Object.fromEntries(Object.entries(values ?? {}).map(([name,value])=>{
+      if (!variableName(name) || !(flags ? typeof value === 'boolean' : Number.isSafeInteger(value))) {
+        throw Error(`Invalid initial value for ${name}`);
+      }
+      return [name,value];
+    }));
+  }
+  const globals = variables(project.variables,false), flags = variables(project.flags,true);
+  const camera = {
+    min_width:integer(project.camera?.min_width??160,160,512,'camera minimum width'),
+    min_height:integer(project.camera?.min_height??144,144,512,'camera minimum height'),
+    max_width:integer(project.camera?.max_width??512,160,512,'camera maximum width'),
+    max_height:integer(project.camera?.max_height??512,144,512,'camera maximum height'),
+    zoom:integer(project.camera?.zoom??2,1,8,'camera pixel zoom'),
+  };
+  if (camera.min_width>camera.max_width || camera.min_height>camera.max_height) throw Error('Camera minimum exceeds maximum');
   const tiles = Object.create(null);
   for (const [id, tile] of Object.entries(project.tiles ?? {})) {
     key(id, 'tile');
@@ -251,11 +250,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       usedSprites.add(sprite);
       for (const clip of Object.values(definition.clips)) for (const frame of clip.frames) images.set(frame.image, frames.get(frame.image));
       if (definition.projectile) includeSprite(definition.projectile);
-      for (const instructions of Object.values(definition.code)) {
-        for (const [opcode, target] of instructions) {
-          if (opcode === Opcodes.spawn) includeSprite(target);
-        }
-      }
+      for (const target of dependencies.get(sprite)) includeSprite(target);
     }
     const players = new Set();
     const names = instanceNames(room.entities ?? []);
@@ -288,7 +283,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     for (const [index, layer] of (room.layers ?? []).entries()) {
       const order = integer(layer.order ?? index, -10000, 10000, 'visual layer');
       const cells = new Map(), zone = new Map();
-      let sheet;
+      const chunks = new Map();
+      const chunkSize = Math.floor(256/size);
       for (const cell of layer.cells ?? []) {
         const [x,y,tileId,variant] = cell;
         integer(x, 0, cols-1, 'tile x');
@@ -302,8 +298,14 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         const physics = layer.collidable ? tile.physics : { ...tile.physics, mode: 'none' };
         const dynamic = !['static','none'].includes(physics.mode);
         if (!dynamic && clip.length === 1) {
-          sheet ??= { width, height, rgba: Buffer.alloc(width * height * 4) };
-          blit(frames.get(clip[0].image), sheet, x * size, y * size);
+          const col = Math.floor(x/chunkSize)*chunkSize, row = Math.floor(y/chunkSize)*chunkSize;
+          const image = `layer/${index}/${col}/${row}`;
+          if (!chunks.has(image)) {
+            const w = Math.min(chunkSize,cols-col)*size, h = Math.min(chunkSize,rows-row)*size;
+            chunks.set(image,{width:w,height:h,rgba:Buffer.alloc(w*h*4),x:col*size,y:row*size});
+          }
+          const chunk = chunks.get(image);
+          blit(frames.get(clip[0].image),chunk,x*size-chunk.x,y*size-chunk.y);
         } else {
           for (const frame of clip) images.set(frame.image, frames.get(frame.image));
           entities.push({ x: (x+.5)*size, y:(y+.5)*size, tile: tileId, clip,
@@ -314,10 +316,9 @@ export async function compileProject(root, { project: draft, scripts = new Map()
           blockers.add(y * cols + x);
         }
       }
-      if (sheet) {
-        const image = `layer/${index}`;
-        images.set(image, sheet);
-        baked.push({ image, layer: order });
+      for (const [image,chunk] of chunks) {
+        images.set(image,chunk);
+        baked.push({image,layer:order,x:chunk.x,y:chunk.y});
       }
       for (let y = 0; y < rows; y++) for (let x = 0; x < cols;) {
         const physics = zone.get(y * cols + x);
@@ -352,7 +353,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     [id, { mode: tile.physics.mode, variants: tile.variants.map(clip => thumbnail(clip[0])) }]));
   const spritePreviews = Object.fromEntries(Object.entries(sprites).map(([id, sprite]) =>
     [id, thumbnail((sprite.clips[sprite.animation] ?? sprite.clips.default).frames[0])]));
-  return { name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio,
+  return { name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
     tilePreviews, spritePreviews };
 }
 

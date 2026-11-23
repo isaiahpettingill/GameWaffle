@@ -64,10 +64,26 @@ Use a collidable layer for walls. The pathfinding block uses four-direction A* o
 Use [demo/project.json](demo/project.json) as an example. Put art and audio files in the project's `assets/` directory. Studio rebuilds the saved project when these files change. Select **Rebuild assets** to start a rebuild manually.
 
 - **Sprites.** Register the Aseprite file in **Assets**. Set the physics mode. Open **Collision filter** to set the category, mask, and group. Open **Appearance** to set the visual layer. Use **Blocks** to attach behavior to events. Studio saves each sprite script as CBOR. The compiler converts the blocks to operation codes and operands.
-- **Tiles.** Register the Aseprite file and select a tag. Each frame in the tag is a variant. Use `:animated:` or `:fluid:` to play the frames in sequence. Use `:mirror-x:`, `:mirror-y:`, or `:rot-90:` to transform the frames. Set tile properties in Studio.
+- **Tiles.** Set the project tile size to 8 × 8, 16 × 16, 24 × 24, or 32 × 32 pixels. Use the same size for all tile frames. Register the Aseprite file and select a tag. Each frame in the tag is a variant. Use `:animated:` or `:fluid:` to play the frames in sequence. Use `:mirror-x:`, `:mirror-y:`, or `:rot-90:` to transform the frames. Set tile properties in Studio.
 - **Art.** Studio reads `.ase` and `.aseprite` files. It uses indexed palettes, transparency, frame times, and tag playback direction. Flatten native Aseprite tilemap layers and layers with non-normal blend modes before import.
 - **Collision.** Enable collision on a room layer to use its tile physics. Available tile types include solid tiles, one-way platforms, ladders, breakable tiles, fluid zones, and rigid bodies. The compiler combines adjacent static collision tiles and makes a separate texture atlas for each room.
 - **Audio.** Register WAV, Opus, Ogg Vorbis, or QOA files. Studio converts WAV to QOA by default. Use mono or stereo PCM or float32 WAV for this conversion. Clear the QOA option to keep the WAV file. Set music and ambient sound in the **Room** panel. Use **Play sound** in a sprite script for event sounds.
+
+## Write game logic
+
+Open **Blocks** and select **Logic**. The **Set** and **Get** blocks use a scope and a name. Select the same scope and name each time you use a value.
+
+| Scope | Duration | Initial value |
+|---|---|---|
+| Local | One sprite instance | Zero |
+| Global | One game session | Value in **Game**, or zero |
+| Flag | One game session | Value in **Game**, or false |
+
+A room change keeps the global variables and flags. It creates new local variables for the instances in the next room. A game reset restores the initial global variables and flags.
+
+Connect number, variable, comparison, or button blocks to **If** and **While**. Use **Wait** to continue an event after a number of game ticks. The runtime also pauses long scripts after a fixed number of instructions. It continues those scripts on later ticks. A running event has one continuation for each instance. A second occurrence of the same event does not start another continuation.
+
+Use integers for variable arithmetic. Use decimal constants for engine parameters such as movement speed. The runtime reports an error if a script divides by zero or exceeds the integer limit.
 
 ## Export a game
 
@@ -83,9 +99,43 @@ npm run export:web -- path/to/project path/to/game.html
 npm run export:web -- path/to/game.waffle path/to/game.html
 ```
 
+## Run a separate player
+
+### Web
+
+In Studio, select **Export → Web player** to get a separate copy. Run `npm run build:player` to build only the web player. Open `web-built/standalone/gamewaffle-player.html` in a browser. Select **Open cartridge**. The player can run offline.
+
+### Desktop
+
+Install CMake and the SDL3 build dependencies for your operating system. Run this command.
+
+```sh
+npm run build:native
+```
+
+Open the player in `web-built/native/`. Press **F1** to open a cartridge. You can also drop a cartridge on the window or give its path to the executable. Press **F2** to reset the game. Press **F3** to show or hide touch controls.
+
+### Android
+
+The native Android player uses SDL3. It includes a demo cartridge. Tap **Open** to select a different cartridge. Use the touch controls or connect a gamepad.
+
+To build the APK, install Android NDK r27c, Android platform 35, Android build tools 35.0.0, JDK 21, CMake, and Ninja. Get the SDL 3.4.2 source files. Set `ANDROID_NDK_HOME`, `ANDROID_PLATFORM_JAR`, `ANDROID_BUILD_TOOLS`, `JAVA_HOME`, and `SDL_SOURCE` to the paths for these tools and files.
+
+```sh
+rustup target add aarch64-linux-android x86_64-linux-android
+npm run cart
+bash player/android/build.sh
+```
+
+Install `web-built/android/GameWaffle-Player.apk` on an Android device. The build uses a debug signature. To include a different game, supply its cartridge path as the first argument to the build script.
+
+### Render resolution
+
+Open **Game**, then open **Render resolution**. The player calculates the internal resolution from the available display area and the pixel zoom. It keeps the internal resolution between 160 × 144 and 512 × 512 pixels. The camera follows player 1 when the room is larger than the screen.
+
 ## Play with other players
 
-Connect standard-mapped gamepads or use the keyboard. The player supports four local slots. Set **Players** to the number of players. Compare the number of gamepads and player slots. If there are fewer gamepads, use the keyboard for the first slot. Gamepads use the other slots.
+Connect standard-mapped gamepads or use the keyboard. The players support four local slots. In the web player, set **Players** to the number of players. Compare the number of gamepads and player slots. If there are fewer gamepads, use the keyboard for the first slot. Gamepads use the other slots.
 
 | Control | Player 1 keyboard | Player 2 keyboard |
 |---|---|---|
@@ -95,7 +145,7 @@ Connect standard-mapped gamepads or use the keyboard. The player supports four l
 | X | C | Comma |
 | Start | Enter | Period |
 
-To play on a local network, start a host.
+To play on a local network with the web player, start a host.
 
 ```sh
 npm start -- --cart path/to/game.waffle --lan
@@ -105,9 +155,7 @@ On each device, open `http://HOST_IP:4871/player.html`. Select the number of pla
 
 ## Use the runtime
 
-Cartridge format version 1 starts with the hexadecimal bytes `47 57 41 46 00 01`. The CBOR data after these bytes contains room data, sprite operation codes, PNG atlases, and audio.
-
-Call `Runtime::from_cartridge` in Rust to load a cartridge. Call `step` at 60 Hz with four input objects. Each snapshot supplies sprite transforms, sound events, damage events, and contact events. The browser player displays the room, reads the controls, and plays sound.
+Use the [SDK reference](docs/sdk.md) for cartridge layout, block source, and host APIs. The revised cartridge writer uses format version 2. The runtime can also load version 1.
 
 LAN clients connect to `/lan` with WebSocket. Send a `join` message to request player slots. The host returns their slot numbers in `slots`. Send an `input` message with the button states for each client slot. The host sends `snapshot` messages at 30 Hz. Get the matching cartridge from `/lan.waffle`.
 

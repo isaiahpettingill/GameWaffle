@@ -4,7 +4,7 @@ import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
 import { dirname, extname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
-import { compileProject, discoverAssets, describeArt, projectPath, scriptCode } from './compiler.mjs';
+import { compileProject, discoverAssets, describeArt, projectPath } from './compiler.mjs';
 import { pack, encodeCbor, decodeCbor } from './cartridge.mjs';
 import { buttons } from './schema.mjs';
 import { embedCartridge, playerTemplate } from './web-export.mjs';
@@ -21,7 +21,9 @@ const site = resolve('web-built/site');
 const wasm = await readFile('web-built/runtime/runtime_bg.wasm');
 initSync({ module: wasm });
 
-let bytes = cartFile ? await readFile(resolve(cartFile)) : pack(await compileProject(root));
+const initial = cartFile ? null : await compileProject(root);
+let bytes = cartFile ? await readFile(resolve(cartFile)) : pack(initial);
+let editorBytes = initial ? pack(initial,{editor:true}) : null;
 let runtime = createRuntime(bytes);
 let clientsCart = bytes;
 let mutation = Promise.resolve();
@@ -65,11 +67,14 @@ function change(fn) {
   return result;
 }
 async function recompile(project, scripts, save) {
-  const updated = pack(await compileProject(root, { project, scripts }));
+  const cartridge = await compileProject(root, { project, scripts });
+  const updated = pack(cartridge);
+  const preview = pack(cartridge,{editor:true});
   const simulation = createRuntime(updated);
   try {
     await save();
     bytes = updated;
+    editorBytes = preview;
     revision++;
     sourceError = '';
   } finally { simulation.free(); }
@@ -87,6 +92,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/lan.waffle') return send(res, 200, connections.size ? clientsCart : bytes, 'application/octet-stream');
     if (url.pathname.startsWith('/api/')) {
       if (cartFile || !local(req) || !sameSite(req)) return send(res, 403, {error:'The editor is available on the host computer'});
+      if (url.pathname === '/api/preview' && req.method === 'GET') return send(res,200,editorBytes,'application/octet-stream');
       if (url.pathname === '/api/status' && req.method === 'GET') return send(res, 200, {revision, sourceError});
       if (url.pathname === '/api/rebuild' && req.method === 'POST') {
         await change(() => recompile(undefined, undefined, () => {}));
@@ -114,7 +120,6 @@ const server = createServer(async (req, res) => {
         }
         if (req.method === 'PUT') {
           const script = await jsonBody(req);
-          scriptCode(script);
           await change(async () => {
             const project = JSON.parse(await readFile(content,'utf8'));
             if (!Object.hasOwn(project.sprites,id)) throw Error('Unknown sprite');
@@ -134,6 +139,7 @@ const server = createServer(async (req, res) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, {error:'Method not allowed'});
     const defaultPage = cartFile || !local(req) ? 'player.html' : 'index.html';
     const file = url.pathname === '/' ? defaultPage : decodeURIComponent(url.pathname.slice(1));
+    if (file === 'gamewaffle-player.html') return send(res,200,await readFile('web-built/standalone/gamewaffle-player.html'),files['.html']);
     if (file === 'offline.html') return send(res, 200, await readFile('web-built/standalone/player.html'), files['.html']);
     if (!['index.html','player.html'].includes(file) && !/^(assets|blockly-media)\/[\w.-]+$/.test(file))
       return send(res, 404, {error:'Page not found'});

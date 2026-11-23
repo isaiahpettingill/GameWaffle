@@ -3,7 +3,7 @@
   import { unpack } from '../src/cartridge.mjs';
   import { buttons } from '../src/schema.mjs';
   import { createRuntime } from './runtime.js';
-  import { drawRoom, preload } from './render.js';
+  import { drawRoom, loadAtlas } from './render.js';
   import { createAudio } from './audio.js';
 
   let canvas, shell, fileInput;
@@ -15,21 +15,24 @@
   const keys = new Set(), fingers = new Map(), taps = new Set();
   const embedded = document.getElementById('gamewaffle-cartridge');
   const hosted = !embedded && /^https?:$/.test(location.protocol);
-  let startingRoom;
+  let startingRoom, currentBytes;
   const keyboard = { ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right', KeyZ:'a',Space:'a',KeyX:'b',KeyC:'x',Enter:'menu',KeyW:'up',KeyS:'down',KeyA:'left',KeyD:'right' };
   const second = { KeyI:'up',KeyK:'down',KeyJ:'left',KeyL:'right',KeyN:'a',KeyM:'b',Comma:'x',Period:'menu' };
   const gamepad = [12,13,14,15,0,1,2,9];
 
-  async function load(next, requestedRoom) {
+  async function load(bytes, requestedRoom) {
+    const next = unpack(bytes);
     const room = Object.hasOwn(next.rooms, requestedRoom) ? requestedRoom : next.start;
     const version = ++loadVersion;
-    const [loadedRuntime, images] = await Promise.all([createRuntime(next, room), preload(next)]);
+    const firstAtlas = await loadAtlas(next.atlases[room]);
+    const loadedRuntime = await createRuntime(bytes, room);
     if (version !== loadVersion) { loadedRuntime.free(); return; }
     runtime?.free();
     runtime = loadedRuntime;
     cart = next;
+    currentBytes = bytes;
     startingRoom = room;
-    atlasImages = images;
+    atlasImages = {[room]:firstAtlas};
     audio.setCart(next);
     show(JSON.parse(runtime.snapshot()));
     status = 'Local game';
@@ -37,7 +40,18 @@
   }
   function show(frame) {
     snapshot = frame;
-    if (canvas) drawRoom(canvas,cart,frame,atlasImages);
+    if (atlasImages[frame.room]) {
+      if (canvas) drawRoom(canvas,cart,frame,atlasImages);
+    } else if (cart.atlases[frame.room]) {
+      const expected=cart;
+      loadAtlas(cart.atlases[frame.room]).then(image=>{
+        if (cart!==expected) return;
+        atlasImages[frame.room]=image;
+        if (canvas && snapshot?.room===frame.room) drawRoom(canvas,cart,snapshot,atlasImages);
+      }).catch(err=>{error=String(err.message??err);});
+    }
+    const fault=frame.events?.find(event=>event.kind==='script_error');
+    if (fault) error=`Script ${fault.actor}/${fault.event}: ${fault.message}`;
     audio.setRoom(frame.room);
     for (const sound of frame.sounds) audio.play(sound,.65);
   }
@@ -54,7 +68,7 @@
       status = 'Connecting…';
       const response = await fetch('./lan.waffle');
       if (!response.ok) throw Error('Cannot load the LAN cartridge');
-      await load(unpack(new Uint8Array(await response.arrayBuffer())));
+      await load(new Uint8Array(await response.arrayBuffer()));
       status = 'Connecting…';
       const connection = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/lan`);
       socket = connection;
@@ -82,7 +96,7 @@
     const file = event.currentTarget.files[0];
     if (!file) return;
     disconnect();
-    try { await load(unpack(new Uint8Array(await file.arrayBuffer()))); }
+    try { await load(new Uint8Array(await file.arrayBuffer())); }
     catch(err) { error = String(err.message ?? err); }
     event.target.value = '';
   }
@@ -113,7 +127,11 @@
         taps.clear();
         if (socket?.readyState === WebSocket.OPEN) {
           if (socket.bufferedAmount < 64_000) socket.send(JSON.stringify({kind:'input',input:data}));
-        } else if (runtime && !socket) show(JSON.parse(runtime.step(JSON.stringify(data))));
+         } else if (runtime && !socket) {
+          const mask = data.reduce((bits,input,slot)=>buttons.reduce((value,button,index)=>
+            input[button] ? value | (1 << (slot*8+index)) : value,bits),0) >>> 0;
+          show(JSON.parse(runtime.step_buttons(mask)));
+        }
       }
     } catch (err) {
       error = String(err.message ?? err);
@@ -154,7 +172,7 @@
   }
   function localReset() {
     disconnect();
-    if (cart) load(cart, startingRoom).catch(err=>{ error=String(err.message ?? err); });
+    if (cart) load(currentBytes, startingRoom).catch(err=>{ error=String(err.message ?? err); });
   }
   function countChanged() {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({kind:'join',players}));
@@ -163,11 +181,13 @@
     touch = matchMedia('(pointer:coarse)').matches;
     (async () => {
       try {
-        const buffer = embedded
-          ? Uint8Array.from(atob(embedded.textContent.trim()), c=>c.charCodeAt(0))
+        const encoded=embedded?.textContent.trim();
+        if (embedded && !encoded) { status='Choose a cartridge'; return; }
+        const buffer=encoded
+          ? Uint8Array.from(atob(encoded),c=>c.charCodeAt(0))
           : new Uint8Array(await (await fetch('./demo.waffle')).arrayBuffer());
         const room = hosted ? new URLSearchParams(location.search).get('room') : undefined;
-        await load(unpack(buffer), room);
+        await load(buffer, room);
       } catch (err) { error=String(err.message ?? err); status='Choose a cartridge'; }
     })();
     loop = requestAnimationFrame(tick);
@@ -189,7 +209,7 @@
       <div><h1>GameWaffle</h1><small>Cartridge player</small></div>
     </div>
     <div class="row">
-      {#if hosted}<a class="button studio" href="./index.html">Studio</a>{/if}
+      {#if hosted && new URLSearchParams(location.search).has('room')}<a class="button studio" href="./index.html">Studio</a>{/if}
       <input hidden type="file" accept=".waffle" bind:this={fileInput} onchange={chooseFile} aria-label="Cartridge file">
       <button class="primary" onclick={()=>fileInput.click()}>Open cartridge</button>
     </div>
@@ -200,7 +220,7 @@
       <span class="session"><i></i>{status}{#if lanSlots.length} · P{lanSlots.map(slot=>slot+1).join(', P')}{/if}</span>
     </div>
     <div class="screen" bind:this={shell}>
-      <canvas aria-label="Game display" bind:this={canvas} width="672" height="360"></canvas>
+      <canvas aria-label="Game display" bind:this={canvas} width="160" height="144"></canvas>
       {#if touch}
         <div role="group" aria-label="Touch controls" class="touch" onpointerdown={touchDown} onpointermove={touchMove} onpointerup={touchUp} onpointercancel={touchUp} onlostpointercapture={touchUp}>
           <div class="dpad">
@@ -238,7 +258,7 @@
   h2{font-size:clamp(1rem,3vw,1.3rem);}
   .session{display:flex;gap:.4rem;align-items:center;font-size:.76rem;color:var(--muted);}
   .session i{width:7px;height:7px;background:var(--mint);border-radius:50%;}
-  .screen{position:relative;background:#11111a;display:grid;place-items:center;}
+  .screen{aspect-ratio:16/9;position:relative;background:#11111a;display:grid;place-items:center;}
   .screen:fullscreen{background:#11111a;}
   canvas{width:100%;max-height:72vh;object-fit:contain;}
   .screen:fullscreen canvas{width:100%;max-height:100vh;}

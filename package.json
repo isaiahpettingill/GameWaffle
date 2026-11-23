@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "description": "Sprite game studio and Rust cartridge runtime",
   "scripts": {
+    "build:native": "node src/build.mjs --native",
+    "build:player": "node src/build.mjs --player-only",
     "build": "node src/compiler.mjs && node src/build.mjs",
     "start": "node src/server.mjs",
     "demo": "node src/demo.mjs",
@@ -13,6 +15,7 @@
   "dependencies": {
     "blockly": "13.5.0",
     "cbor-x": "1.6.9",
+    "fflate": "0.8.3",
     "pngjs": "7.0.0",
     "qoa-format": "1.0.1",
     "svelte": "5.59.1",
