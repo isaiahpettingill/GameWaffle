@@ -2,6 +2,7 @@ mod camera;
 mod model;
 mod path;
 mod physics;
+mod progress;
 mod vm;
 
 pub use camera::{Camera, viewport};
@@ -10,7 +11,6 @@ pub use model::{ActorView, Input, RuntimeEvent, Snapshot};
 use box2d_rs::b2_math::B2vec2 as Vec2;
 use model::*;
 use physics::{Body, Contacts, PPM, World};
-use serde_json::Value;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashSet},
@@ -116,11 +116,19 @@ pub struct Runtime {
     events: Vec<RuntimeEvent>,
     transition: Option<String>,
     pending_start: Vec<u32>,
+    restored: bool,
     pending_instances: Vec<Spawn>,
     programs: BTreeMap<String, vm::Programs>,
-    legacy_programs: BTreeMap<String, BTreeMap<String, Rc<Vec<Vec<Value>>>>>,
     globals: vm::Variables,
     flags: vm::Variables,
+    seed: u32,
+    rng: u32,
+    camera_actor: Option<u32>,
+    camera_point: Option<[f32; 2]>,
+    view_size: [u32; 2],
+    inventory: BTreeMap<String, u32>,
+    dialog: std::collections::VecDeque<String>,
+    counters: BTreeMap<String, i32>,
     script_fuel: usize,
 }
 
@@ -134,22 +142,18 @@ impl Runtime {
 
     /// Load a GameWaffle cartridge, optionally starting at a different room.
     pub fn from_cartridge(bytes: &[u8], room: Option<String>) -> Result<Runtime, String> {
-        let game = if let Some(payload) = bytes.strip_prefix(b"GWAF\x00\x01") {
-            #[derive(serde::Deserialize)]
-            struct Legacy {
-                start: String,
-                rooms: Value,
-                sprites: Value,
-            }
-            let metadata: Legacy = ciborium::from_reader(payload).map_err(|e| e.to_string())?;
-            Game {
-                globals: Default::default(),
-                flags: Default::default(),
-                start: metadata.start,
-                rooms: serde_json::from_value(metadata.rooms).map_err(|e| e.to_string())?,
-                sprites: serde_json::from_value(metadata.sprites).map_err(|e| e.to_string())?,
-            }
-        } else if bytes.starts_with(b"GWAF\x00\x02") && bytes.len() >= 14 {
+        if bytes.len() < 111 || bytes.len() > 256 * 1024 * 1024 {
+            return Err("Invalid cartridge size".into());
+        }
+        let (bytes, signature) = bytes.split_at(bytes.len() - 96);
+        let key = ed25519_dalek::VerifyingKey::from_bytes(signature[..32].try_into().unwrap())
+            .map_err(|_| "Invalid cartridge signing key")?;
+        key.verify_strict(
+            bytes,
+            &ed25519_dalek::Signature::from_bytes(signature[32..].try_into().unwrap()),
+        )
+        .map_err(|_| "Invalid cartridge signature")?;
+        let game = if bytes.starts_with(b"GWAF\x00\x02") && bytes.len() >= 14 {
             let packed = u32::from_le_bytes(bytes[6..10].try_into().unwrap()) as usize;
             let size = u32::from_le_bytes(bytes[10..14].try_into().unwrap()) as usize;
             let end = 14usize
@@ -163,7 +167,6 @@ impl Runtime {
             if data.len() != size {
                 return Err("Invalid simulation data length".into());
             }
-            // Legacy authoring numbers can be CBOR integers or floats, both accepted by the JSON model.
             let game: Game = ciborium::from_reader(&data[..]).map_err(|error| error.to_string())?;
             game
         } else {
@@ -172,6 +175,12 @@ impl Runtime {
         Self::from_game(game, room)
     }
 
+    pub fn save_id(&self) -> String {
+        self.game.id.clone()
+    }
+    pub fn set_view_size(&mut self, w: u32, h: u32) {
+        self.view_size = [w.clamp(128, 512), h.clamp(128, 512)];
+    }
     pub fn step_buttons(&mut self, buttons: u32) -> Result<String, String> {
         self.step_inputs(std::array::from_fn(|index| {
             Input::from_bits((buttons >> (index * 8)) as u8)
@@ -193,12 +202,21 @@ impl Runtime {
         self.inputs = [Input::default(); 4];
         self.tick = 0;
         self.transition = None;
+        self.inventory.clear();
         self.reset_variables();
         self.load(&self.game.start.clone())
     }
 }
 
 impl Runtime {
+    fn focus(&self) -> Option<[f32; 2]> {
+        self.camera_point.or_else(|| {
+            self.camera_actor
+                .and_then(|id| self.actors.get(&id))
+                .or_else(|| self.actors.values().find(|a| a.player == Some(0)))
+                .map(|a| [a.p.x, a.p.y])
+        })
+    }
     pub fn view(&self) -> Snapshot<'_> {
         let actors = self
             .actors
@@ -240,6 +258,9 @@ impl Runtime {
             room: &self.room,
             tick: self.tick,
             actors,
+            focus: self.focus(),
+            dialog: self.dialog.front().map(String::as_str),
+            counters: &self.counters,
             sounds: &self.sounds,
             events: &self.events,
         }
@@ -311,7 +332,6 @@ impl Runtime {
             }
         }
         let mut programs = BTreeMap::new();
-        let mut legacy_programs = BTreeMap::new();
         for (id, sprite) in &mut game.sprites {
             let events = std::mem::take(&mut sprite.program)
                 .into_iter()
@@ -322,15 +342,6 @@ impl Runtime {
                 })
                 .collect::<Result<_, _>>()?;
             programs.insert(id.clone(), events);
-            if !sprite.code.is_empty() {
-                legacy_programs.insert(
-                    id.clone(),
-                    std::mem::take(&mut sprite.code)
-                        .into_iter()
-                        .map(|(event, body)| (event, Rc::new(body)))
-                        .collect(),
-                );
-            }
         }
         let (world, contacts) = physics::world(0.0);
         let start = room.unwrap_or_else(|| game.start.clone());
@@ -349,11 +360,19 @@ impl Runtime {
             events: Vec::new(),
             transition: None,
             pending_start: Vec::new(),
+            restored: false,
             pending_instances: Vec::new(),
             programs,
-            legacy_programs,
             globals: Default::default(),
             flags: Default::default(),
+            seed: 1,
+            rng: 1,
+            camera_actor: None,
+            camera_point: None,
+            view_size: [512, 512],
+            inventory: Default::default(),
+            dialog: Default::default(),
+            counters: Default::default(),
             script_fuel: 0,
         };
         rt.reset_variables();
@@ -366,8 +385,13 @@ impl Runtime {
         self.actors.clear();
         (self.world, self.contacts) = physics::world(room.gravity);
         self.room = id.into();
+        self.camera_actor = None;
+        self.camera_point = None;
         self.blocked = room.blockers.iter().copied().collect();
         self.static_ids.clear();
+        self.dialog.clear();
+        self.counters.clear();
+        self.restored = false;
         self.pending_start.clear();
         self.pending_instances.clear();
         self.sounds.clear();
@@ -391,6 +415,13 @@ impl Runtime {
     }
 
     fn add_scene_actor(&mut self, spawn: Spawn, size: f32) -> Result<(), String> {
+        if spawn
+            .flag
+            .as_ref()
+            .is_some_and(|flag| self.flag(flag) != spawn.when.unwrap_or(true))
+        {
+            return Ok(());
+        }
         let definition = match spawn.sprite.as_ref() {
             Some(key) => Some(self.game.sprites.get(key).ok_or("Unknown sprite in room")?),
             None => None,
@@ -475,6 +506,17 @@ impl Runtime {
     pub fn step_inputs(&mut self, inputs: [Input; 4]) -> Result<(), String> {
         self.sounds.clear();
         self.events.clear();
+        if !self.dialog.is_empty() {
+            if inputs
+                .iter()
+                .zip(self.inputs)
+                .any(|(now, old)| now.a && !old.a)
+            {
+                self.dialog.pop_front();
+            }
+            self.inputs = inputs;
+            return Ok(());
+        }
         self.tick += 1;
         self.script_fuel = 262144;
         let mut actions = Vec::new();
@@ -493,13 +535,37 @@ impl Runtime {
                 self.run_script(id, &event, &inputs, &mut actions, false);
             }
         }
+        let event = if std::mem::take(&mut self.restored) {
+            "restored"
+        } else {
+            "start"
+        };
         for id in std::mem::take(&mut self.pending_start) {
-            self.run(id, "start", &inputs, &mut actions);
+            self.run(id, event, &inputs, &mut actions);
         }
+        let focus = self.focus();
+        let players: Vec<_> = self
+            .actors
+            .values()
+            .filter(|a| a.player.is_some())
+            .map(|a| [a.p.x, a.p.y])
+            .collect();
+        let active = |a: &Actor| {
+            a.player.is_some()
+                || a.sprite
+                    .as_ref()
+                    .is_some_and(|id| self.game.sprites[id].always_active)
+                || !players.iter().chain(focus.iter()).all(|p| {
+                    (a.p.x - p[0]).abs() > self.view_size[0] as f32 / 2. + 64. + a.width / 2.
+                        || (a.p.y - p[1]).abs()
+                            > self.view_size[1] as f32 / 2. + 64. + a.height / 2.
+                })
+                || (players.is_empty() && focus.is_none())
+        };
         let scripted: Vec<_> = self
             .actors
             .values()
-            .filter(|actor| actor.sprite.is_some() && actor.bullet.is_none())
+            .filter(|actor| actor.sprite.is_some() && actor.bullet.is_none() && active(actor))
             .map(|actor| (actor.id, actor.player))
             .collect();
         for (id, player) in scripted {
@@ -575,34 +641,11 @@ impl Runtime {
             }
             self.add_scene_actor(spawn, size)?;
         }
-        Ok(())
+        self.cross_exit(&inputs)
     }
 
     fn run(&mut self, id: u32, event: &str, inputs: &[Input; 4], actions: &mut Vec<Action>) {
-        if self.run_script(id, event, inputs, actions, true) {
-            return;
-        }
-        let Some(actor) = self.actors.get(&id) else {
-            return;
-        };
-        let Some(code) = actor
-            .sprite
-            .as_ref()
-            .and_then(|s| self.legacy_programs.get(s))
-            .and_then(|events| events.get(event))
-            .cloned()
-        else {
-            return;
-        };
-        let input = actor.player.map_or(Input::default(), |slot| inputs[slot]);
-        for op in code.iter() {
-            let Some(opcode) = op.first().and_then(Value::as_u64) else {
-                continue;
-            };
-            let arg = |index: usize| op.get(index).and_then(Value::as_f64).unwrap_or(0.0) as f32;
-            let name = op.get(1).and_then(Value::as_str).unwrap_or("");
-            self.engine(id, input, opcode, [arg(1), arg(2), arg(3)], name, actions);
-        }
+        self.run_script(id, event, inputs, actions, true);
     }
 
     fn run_script(
@@ -681,6 +724,42 @@ impl Runtime {
         let arg = |index: usize| args[index - 1];
         let top_down = self.game.rooms[&self.room].is_top_down();
         match opcode {
+            26 => actions.push(Action::Remove(id)),
+            23 => {
+                self.camera_actor = Some(id);
+                self.camera_point = None;
+            }
+            24 => {
+                self.camera_actor = None;
+                self.camera_point = Some([args[0], args[1]]);
+            }
+            25 => {
+                self.camera_actor = None;
+                self.camera_point = None;
+            }
+
+            18 | 19 => {
+                let current = self.inventory.get(name).copied().unwrap_or(0);
+                let change = args[1].max(0.) as u32;
+                let count = if opcode == 18 {
+                    current.saturating_add(change)
+                } else {
+                    current.saturating_sub(change)
+                };
+                if count == 0 {
+                    self.inventory.remove(name);
+                } else if current > 0 || self.inventory.len() < 1024 {
+                    self.inventory.insert(name.into(), count);
+                }
+            }
+            20 if self.dialog.len() < 32 && !name.is_empty() => self.dialog.push_back(name.into()),
+            21 if self.counters.contains_key(name) || self.counters.len() < 4 => {
+                self.counters.insert(name.into(), args[1] as i32);
+            }
+            22 => {
+                self.counters.remove(name);
+            }
+
             0 => {
                 let actor = self.actors.get_mut(&id).unwrap();
                 let dx = f32::from(input.right) - f32::from(input.left);
@@ -867,6 +946,10 @@ impl Runtime {
         {
             let mut gravity = actor.physics.gravity;
             let mut fluid_drag = 0.0_f32;
+            let mut submerged = 0.0;
+            let body_density = actor.physics.mass.map_or(actor.physics.density, |mass| {
+                mass * PPM * PPM / (actor.width * actor.height)
+            });
             let mut ladder = false;
             for (id, p, w, h, zone) in &zones {
                 if !physics::allows(&actor.physics, zone)
@@ -877,21 +960,31 @@ impl Runtime {
                 if zone.mode == Mode::Ladder {
                     ladder = true;
                 } else {
-                    gravity = gravity.min(
-                        actor.physics.gravity
-                            * (1.0 - zone.buoyancy * zone.density / actor.physics.density),
-                    );
-                    fluid_drag = fluid_drag.max(zone.drag);
-                    if zone.damage > 0.0 && actor.sprite.is_some() {
+                    let submerged_axis = |center: f32, extent: f32, water: f32, span: f32| {
+                        ((center + extent / 2.).min(water + span / 2.)
+                            - (center - extent / 2.).max(water - span / 2.))
+                            / extent
+                    };
+                    let fraction = submerged_axis(actor.p.x, actor.width, p.x, *w)
+                        * submerged_axis(actor.p.y, actor.height, p.y, *h);
+                    let portion = fraction.min(1.0 - submerged);
+                    submerged += portion;
+                    gravity -= actor.physics.gravity * portion * zone.buoyancy * zone.density
+                        / body_density;
+                    fluid_drag += portion * zone.drag;
+                    if portion > 0.0 && zone.damage > 0.0 && actor.sprite.is_some() {
                         actions.push(Action::Damage {
                             source: *id,
                             target: actor.id,
-                            amount: zone.damage * STEP,
+                            amount: portion * zone.damage * STEP,
                         });
                     }
                 }
             }
-            if ladder && !self.game.rooms[&self.room].is_top_down() && actor.player.is_some() {
+            if ladder
+                && !self.game.rooms[&self.room].is_top_down()
+                && actor.player.is_some_and(|p| inputs[p].up || inputs[p].down)
+            {
                 let input = inputs[actor.player.unwrap()];
                 gravity = 0.0;
                 let dy = (f32::from(input.down) - f32::from(input.up)) * 3.5;
@@ -1086,4 +1179,32 @@ fn segment(p: Vec2, delta: Vec2, q: Vec2, w: f32, h: f32) -> Option<f32> {
         }
     }
     Some(near)
+}
+
+/// Split dialogue at word boundaries for the active pixel viewport.
+#[wasm_bindgen]
+pub fn dialogue_lines(text: &str, columns: usize) -> String {
+    let columns = columns.max(1);
+    let mut lines = String::new();
+    let mut col = 0;
+    for word in text.split_whitespace() {
+        if col > 0 {
+            if col + 1 + word.chars().count() > columns {
+                lines.push('\n');
+                col = 0;
+            } else {
+                lines.push(' ');
+                col += 1;
+            }
+        }
+        for ch in word.chars() {
+            if col == columns {
+                lines.push('\n');
+                col = 0;
+            }
+            lines.push(ch);
+            col += 1;
+        }
+    }
+    lines
 }

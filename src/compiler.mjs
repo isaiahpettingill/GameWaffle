@@ -1,10 +1,14 @@
+import {addSeams} from './seams.mjs';
+import {pack} from './pack.mjs';
+import {defaultFont} from './font.mjs';
+import { platformGravity, roomBorder } from './schema.mjs';
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { PNG } from 'pngjs';
 import { encode as encodeQoa } from 'qoa-format';
 import { readAseprite, tagFrames } from './ase.mjs';
-import { decodeCbor, pack } from './cartridge.mjs';
+import { decodeCbor } from './cartridge.mjs';
 import { compileScript, tileSizes, variableName } from './script.mjs';
 import { instanceNames } from './instances.mjs';
 
@@ -115,24 +119,34 @@ function wavToQoa(b) {
   return encodeQoa({ channelData, sampleRate });
 }
 
-export async function discoverAssets(root) {
+const artFile = /\.(ase|aseprite|png)$/i;
+const assetFile = /\.(ase|aseprite|png|wav|opus|ogg|oga|qoa)$/i;
+async function readArt(file,read) {
+  const data=await read(file);
+  if(!file.toLowerCase().endsWith('.png'))return readAseprite(data);
+  if(data.length<24||data.readUInt32BE(16)>4096||data.readUInt32BE(20)>4096)throw Error('PNG exceeds 4096 pixels per side');
+  const {width,height,data:rgba}=PNG.sync.read(data);
+  return {width,height,tags:[],frames:[{duration:100,rgba}]};
+}
+export async function discoverAssets(root,store) {
+  if(store)return (await store.list('assets')).filter(file=>assetFile.test(file)).sort();
   const result = [];
   async function walk(path) {
     for (const entry of await readdir(resolve(root, path), { withFileTypes: true })) {
       const file = path + '/' + entry.name;
       if (entry.isDirectory()) await walk(file);
-      else if (entry.isFile() && /\.(ase|aseprite|wav|opus|ogg|oga|qoa)$/i.test(entry.name)) result.push(file);
+      else if (entry.isFile() && assetFile.test(entry.name)) result.push(file);
     }
   }
   await walk('assets').catch(error => { if (error.code !== 'ENOENT') throw error; });
   return result.sort();
 }
 
-export async function describeArt(root) {
-  const files = (await discoverAssets(root)).filter(file => /\.(ase|aseprite)$/i.test(file));
+export async function describeArt(root,store) {
+  const files = (await discoverAssets(root,store)).filter(file => artFile.test(file));
   const descriptions = await Promise.all(files.map(async file => {
     try {
-      const ase = readAseprite(await readFile(projectPath(root, file)));
+      const ase = await readArt(file,store?.read ?? (name=>readFile(projectPath(root,name))));
       return [file, { tags: ase.tags.map(tag => tag.name), width: ase.width, height: ase.height }];
     } catch (error) {
       return [file, { error: error.message, tags: [] }];
@@ -141,11 +155,13 @@ export async function describeArt(root) {
   return Object.fromEntries(descriptions);
 }
 
-export async function compileProject(root, { project: draft, scripts = new Map() } = {}) {
-  const project = draft ?? JSON.parse(await readFile(resolve(root, 'project.json'), 'utf8'));
+export async function compileProject(root, { project: draft, scripts = new Map(), store } = {}) {
+  if (!store && root.endsWith('.waffleproj')) store=await (await import('./project-store.mjs')).projectStore(root);
+  const read = store?.read ?? ((name,encoding)=>readFile(projectPath(root,name),encoding));
+  const project = draft ?? JSON.parse(await read('project.json','utf8'));
   const frames = new Map(), sources = new Map();
   async function source(file) {
-    if (!sources.has(file)) sources.set(file, readAseprite(await readFile(projectPath(root, file))));
+    if (!sources.has(file)) sources.set(file, await readArt(file,read));
     return sources.get(file);
   }
   function register(id, ase, index, flags = []) {
@@ -166,7 +182,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     let script = { events:{}, dependencies:new Set() };
     if (sprite.script) {
       try {
-        script = compileScript(scripts.get(id) ?? decodeCbor(await readFile(projectPath(root, sprite.script))));
+        script = compileScript(scripts.get(id) ?? decodeCbor(await read(sprite.script)));
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
       }
@@ -174,7 +190,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     dependencies.set(id,script.dependencies);
     sprites[id] = { clips, program:script.events, physics: props(sprite.physics, 'none'), width: sprite.width ?? ase.width,
       height: sprite.height ?? ase.height, layer: sprite.layer ?? 0, animation: sprite.animation ?? 'default',
-      team: sprite.team ?? 0, projectile: sprite.projectile };
+      alwaysActive:sprite.alwaysActive??false, team: sprite.team ?? 0, projectile: sprite.projectile };
     number(sprites[id].width, 1, 8192, 'sprite width');
     number(sprites[id].height, 1, 8192, 'sprite height');
   }
@@ -193,10 +209,10 @@ export async function compileProject(root, { project: draft, scripts = new Map()
   }
   const globals = variables(project.variables,false), flags = variables(project.flags,true);
   const camera = {
-    min_width:integer(project.camera?.min_width??160,160,512,'camera minimum width'),
-    min_height:integer(project.camera?.min_height??144,144,512,'camera minimum height'),
-    max_width:integer(project.camera?.max_width??512,160,512,'camera maximum width'),
-    max_height:integer(project.camera?.max_height??512,144,512,'camera maximum height'),
+    min_width:integer(project.camera?.min_width??128,128,512,'camera minimum width'),
+    min_height:integer(project.camera?.min_height??128,128,512,'camera minimum height'),
+    max_width:integer(project.camera?.max_width??512,128,512,'camera maximum width'),
+    max_height:integer(project.camera?.max_height??512,128,512,'camera maximum height'),
     zoom:integer(project.camera?.zoom??2,1,8,'camera pixel zoom'),
   };
   if (camera.min_width>camera.max_width || camera.min_height>camera.max_height) throw Error('Camera minimum exceeds maximum');
@@ -226,20 +242,26 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     const asset = typeof config === 'string' ? { source: config } : config;
     const extension = extname(asset.source).slice(1).toLowerCase();
     if (!['wav','ogg','oga','opus','qoa'].includes(extension)) throw Error(`Unsupported audio format: ${extension}`);
-    const data = await readFile(projectPath(root, asset.source));
+    const data = await read(asset.source);
     audio[id] = extension === 'wav' && asset.compress !== false
       ? { format: 'qoa', data: wavToQoa(data) } : { format: extension, data };
   }
 
+  let font=defaultFont();
+  if(project.font){
+    const image=await source(project.font);
+    if(image.width!==96 || image.height!==48)throw Error('Use a 96 × 48 pixel bitmap font sheet');
+    font={width:96,height:48,rgba:image.frames[0].rgba};
+  }
   const rooms = Object.create(null), atlases = Object.create(null);
   for (const [id, room] of Object.entries(project.rooms ?? {})) {
     key(id, 'room');
     const cols = integer(room.cols, 1, Math.floor(4096 / size), 'room columns');
     const rows = integer(room.rows, 1, Math.floor(4096 / size), 'room rows');
     const width = cols * size, height = rows * size;
-    const view = room.view ?? (Math.abs(room.gravity ?? 24) < .01 ? 'top_down' : 'platformer');
+    const view = room.view ?? (Math.abs(room.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer');
     if (!['platformer','top_down'].includes(view)) throw Error(`Unknown room view: ${view}`);
-    const gravity = view === 'top_down' ? 0 : number(room.gravity ?? 24, -100, 100, 'room gravity');
+    const gravity = view === 'top_down' ? 0 : number(room.gravity ?? platformGravity, -100, 100, 'room gravity');
     const ySort = room.ySort ?? view === 'top_down';
     const images = new Map(), baked = [], entities = [], solids = [], blockers = new Set();
     const usedSprites = new Set();
@@ -329,20 +351,37 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         x = end;
       }
     }
-    if (room.closedEdges ?? view === 'top_down') {
+    const border = roomBorder(room, view === 'top_down');
+    if (!['closed','sides','open'].includes(border)) throw Error('Invalid room border');
+    if (border !== 'open') {
       const physics = props(undefined, 'static');
-      solids.push(
-        { x: -size/2, y: height/2, width: size, height: height+size*2, physics },
-        { x: width+size/2, y: height/2, width: size, height: height+size*2, physics },
-        { x: width/2, y: -size/2, width, height:size, physics },
-        { x: width/2, y: height+size/2, width, height:size, physics },
-      );
+      const walls={
+        left:{x:-size/2,y:height/2,width:size,height:height+size*16},
+        right:{x:width+size/2,y:height/2,width:size,height:height+size*16},
+        up:{x:width/2,y:-size/2,width,height:size},
+        down:{x:width/2,y:height+size/2,width,height:size},
+      };
+      for(const edge of border==='closed'?Object.keys(walls):['left','right']){
+        const exit=room.exits?.[edge],opposite={left:'right',right:'left',up:'down',down:'up'}[edge];
+        const back=project.rooms[exit?.targets?.[0]]?.exits?.[opposite];
+        if(exit?.adjacent && exit.mode==='fixed' && !exit.flag && back?.adjacent && back.mode==='fixed' && !back.flag && back.targets[0]===id)continue;
+        solids.push({...walls[edge],physics});
+      }
+    }
+    images.set('ui/font',font);
+    const exits={};
+    for(const [edge,exit] of Object.entries(room.exits??{})){
+      if(!['left','right','up','down'].includes(edge)||!['fixed','save','crossing'].includes(exit.mode)
+        || !exit.targets?.length || exit.targets.some(t=>!Object.hasOwn(project.rooms,t)))throw Error('Invalid exit in '+id);
+      if(exit.flag && !Object.hasOwn(flags,exit.flag))throw Error('Unknown exit flag in '+id);
+      exits[edge]={mode:exit.mode,targets:exit.targets,flag:exit.flag||null,when:exit.when??true,adjacent:exit.adjacent??false};
     }
     atlases[id] = atlas(images);
-    rooms[id] = { title: room.title ?? id, cols, rows, width, height, size, baked, solids, entities,
+    rooms[id] = { title: room.title ?? id, exits, cols, rows, width, height, size, baked, solids, entities,
       blockers: [...blockers], background: room.background ?? '#101a23', music: room.music,
       ambience: room.ambience, gravity, view, ySort };
   }
+  addSeams(rooms,atlases,sprites,atlas);
   const start = project.start ?? Object.keys(rooms)[0];
   if (!Object.hasOwn(rooms, start)) throw Error('Choose a valid starting room');
   function thumbnail(frame) {
@@ -353,7 +392,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     [id, { mode: tile.physics.mode, variants: tile.variants.map(clip => thumbnail(clip[0])) }]));
   const spritePreviews = Object.fromEntries(Object.entries(sprites).map(([id, sprite]) =>
     [id, thumbnail((sprite.clips[sprite.animation] ?? sprite.clips.default).frames[0])]));
-  return { name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
+  return { saveId:project.saveId??project.name, name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
     tilePreviews, spritePreviews };
 }
 

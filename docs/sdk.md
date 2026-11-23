@@ -84,3 +84,5 @@ Call `reset()` to restore the starting room and initial values. A script error i
 Compiled instructions use 8-bit opcodes, 8-bit registers where applicable, and little-endian 16-bit indexes. Repeated names and constants use a pool for each program. The runtime resolves each instruction handler and jump target when it loads the cartridge. The dispatch loop calls each pre-resolved handler. It has no opcode lookup in the dispatch loop.
 
 Media remains compressed in its source format. The player loads the active room atlas when necessary. The compiler puts occupied static tile chunks into the room atlas. A playable cartridge contains no editor thumbnail data.
+
+The final 96 bytes contain a 32-byte Ed25519 public key and a 64-byte signature. The signature covers the header, simulation, and media. Set `GAMEWAFFLE_SIGNING_KEY` to the path of an Ed25519 private PEM key to sign repeat builds with the same key. By default, the compiler makes a key for the current process.

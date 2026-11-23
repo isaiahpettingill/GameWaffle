@@ -23,6 +23,8 @@ pub struct Media {
 
 #[derive(Deserialize)]
 pub struct Room {
+    #[serde(default)]
+    pub seams: BTreeMap<String, bool>,
     pub width: u32,
     pub height: u32,
     pub background: String,
@@ -63,7 +65,6 @@ impl Media {
             return Err("Cartridge exceeds 256 MiB".into());
         }
         let offset = match bytes.get(..6) {
-            Some(b"GWAF\x00\x01") => 6,
             Some(b"GWAF\x00\x02") if bytes.len() >= 14 => {
                 14usize.saturating_add(u32::from_le_bytes(bytes[6..10].try_into()?) as usize)
             }

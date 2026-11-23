@@ -185,4 +185,25 @@ const project={
       [18,13,'water'],[19,13,'water'],[20,13,'water'],[23,13,'ladder'],[23,12,'ladder'],[24,11,'ledge']],587),
   },
 };
+const fixed=(target)=>({mode:'fixed',targets:[target],adjacent:true});
+project.rooms.yard.exits={right:fixed('vault')};
+project.rooms.vault.exits={left:fixed('yard')};
+project.rooms.courtyard.exits={right:{mode:'save',targets:['yard','vault']}};
+project.rooms.vault.exits.right={mode:'fixed',targets:['courtyard']};
+project.flags={found_key:false};
+const {PNG}=await import('pngjs');
+const keyArt=new PNG({width:24,height:24});
+for(let y=6;y<18;y++)for(let x=5;x<20;x++){
+  if(!(x<12 && (x<=6||x>=10||y<8||y>15) || y===10 || y===11 || x>=16 && x%2===0 && y>11 && y<15))continue;
+  keyArt.data.set([251,206,107,255],4*(24*y+x));
+}
+await writeFile('demo/assets/key.png',PNG.sync.write(keyArt));
+project.sprites.key={source:'assets/key.png',script:'scripts/key.cbor',physics:{mode:'sensor'}};
+project.rooms.courtyard.entities.push({sprite:'key',x:84,y:220,flag:'found_key',when:false});
+await writeFile('demo/scripts/key.cbor',encodeCbor({events:{begin_contact:[
+  {op:'if',condition:{calc:'not',left:{scope:'flag',get:'found_key'}},body:[
+    {op:'give',item:'key',count:1},{op:'set',scope:'flag',name:'found_key',value:true},
+    {op:'counter',label:'Keys',value:{item:'key'}},{op:'say',text:'You found the courtyard key!'},{op:'remove_self'}
+  ]}
+]}}));
 await writeFile('demo/project.json',JSON.stringify(project,null,2)+'\n');

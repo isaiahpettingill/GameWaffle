@@ -1,3 +1,6 @@
+import {pack} from './pack.mjs';
+import {projectStore} from './project-store.mjs';
+import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { watch } from 'node:fs';
 import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
@@ -5,7 +8,7 @@ import { dirname, extname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import { compileProject, discoverAssets, describeArt, projectPath } from './compiler.mjs';
-import { pack, encodeCbor, decodeCbor } from './cartridge.mjs';
+import { encodeCbor, decodeCbor } from './cartridge.mjs';
 import { buttons } from './schema.mjs';
 import { embedCartridge, playerTemplate } from './web-export.mjs';
 import { Runtime, initSync } from '../web-built/runtime/runtime.js';
@@ -16,12 +19,12 @@ const root = resolve(option('--project','demo'));
 const cartFile = option('--cart');
 const lan = args.includes('--lan');
 const port = Number(option('--port','4871'));
-const content = root + '/project.json';
+const store = cartFile ? null : await projectStore(root);
 const site = resolve('web-built/site');
 const wasm = await readFile('web-built/runtime/runtime_bg.wasm');
 initSync({ module: wasm });
 
-const initial = cartFile ? null : await compileProject(root);
+const initial = cartFile ? null : await compileProject(root,{store});
 let bytes = cartFile ? await readFile(resolve(cartFile)) : pack(initial);
 let editorBytes = initial ? pack(initial,{editor:true}) : null;
 let runtime = createRuntime(bytes);
@@ -32,7 +35,9 @@ const slots = Array(4).fill(null);
 const connections = new Set();
 
 function createRuntime(data) {
-  return Runtime.from_cartridge(data);
+  const runtime=Runtime.from_cartridge(data);
+  runtime.set_seed(crypto.getRandomValues(new Uint32Array(1))[0]);
+  return runtime;
 }
 
 const local = req => ['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
@@ -55,19 +60,13 @@ async function jsonBody(req) {
   }
   return JSON.parse(Buffer.concat(data).toString());
 }
-async function atomicWrite(path, data) {
-  await mkdir(dirname(path), { recursive: true });
-  const temp = path + '.' + randomUUID() + '.tmp';
-  try { await writeFile(temp, data, { flag:'wx' }); await rename(temp, path); }
-  finally { await unlink(temp).catch(() => {}); }
-}
 function change(fn) {
   const result = mutation.then(fn);
   mutation = result.catch(() => {});
   return result;
 }
 async function recompile(project, scripts, save) {
-  const cartridge = await compileProject(root, { project, scripts });
+  const cartridge = await compileProject(root, { project, scripts, store });
   const updated = pack(cartridge);
   const preview = pack(cartridge,{editor:true});
   const simulation = createRuntime(updated);
@@ -92,6 +91,21 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/lan.waffle') return send(res, 200, connections.size ? clientsCart : bytes, 'application/octet-stream');
     if (url.pathname.startsWith('/api/')) {
       if (cartFile || !local(req) || !sameSite(req)) return send(res, 403, {error:'The editor is available on the host computer'});
+      if (url.pathname === '/api/archive' && req.method === 'GET') {
+        await mutation;return send(res,200,await store.exportArchive(),'application/octet-stream');
+      }
+      if (url.pathname === '/api/import' && req.method === 'POST') {
+        const name=url.searchParams.get('name');
+        if (!/^[\w .-]+\.(png|ase|aseprite|wav|ogg|opus|qoa)$/i.test(name??''))throw Error('Select an image or sound file');
+        const chunks=[];let size=0;
+        for await(const chunk of req){if((size+=chunk.length)>32*1024*1024)throw Error('File exceeds 32 MiB');chunks.push(chunk);}
+        await change(async()=>{
+          const path='assets/'+name;
+          if((await store.list('assets')).includes(path))throw Error('An asset with this name exists');
+          await store.save([[path,Buffer.concat(chunks)]]);revision++;
+        });
+        return send(res,200,{ok:true});
+      }
       if (url.pathname === '/api/preview' && req.method === 'GET') return send(res,200,editorBytes,'application/octet-stream');
       if (url.pathname === '/api/status' && req.method === 'GET') return send(res, 200, {revision, sourceError});
       if (url.pathname === '/api/rebuild' && req.method === 'POST') {
@@ -100,11 +114,11 @@ const server = createServer(async (req, res) => {
       }
       if (url.pathname === '/api/project' && req.method === 'GET') {
         await mutation;
-        return send(res, 200, {project:JSON.parse(await readFile(content,'utf8')), assets:await discoverAssets(root), art:await describeArt(root), revision});
+        return send(res, 200, {project:JSON.parse(await store.read('project.json','utf8')), assets:await discoverAssets(root,store), art:await describeArt(root,store), revision});
       }
       if (url.pathname === '/api/project' && req.method === 'PUT') {
         const project = await jsonBody(req);
-        await change(() => recompile(project, undefined, () => atomicWrite(content, JSON.stringify(project,null,2)+'\n')));
+        await change(() => recompile(project, undefined, () => store.save([['project.json',JSON.stringify(project,null,2)+'\n']])));
         return send(res, 200, {ok:true});
       }
       const match = url.pathname.match(/^\/api\/script\/([a-zA-Z0-9_-]+)$/);
@@ -112,23 +126,22 @@ const server = createServer(async (req, res) => {
         const id = match[1];
         if (req.method === 'GET') {
           await mutation;
-          const project = JSON.parse(await readFile(content,'utf8'));
+          const project = JSON.parse(await store.read('project.json','utf8'));
           if (!Object.hasOwn(project.sprites,id)) return send(res, 404, {error:'Unknown sprite'});
-          const file = projectPath(root, project.sprites[id].script ?? `scripts/${id}.cbor`);
-          const data = await readFile(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
+          const file = project.sprites[id].script ?? `scripts/${id}.cbor`;
+          const data = await store.read(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
           return send(res, 200, data ? decodeCbor(data) : {events:{}});
         }
         if (req.method === 'PUT') {
           const script = await jsonBody(req);
           await change(async () => {
-            const project = JSON.parse(await readFile(content,'utf8'));
+            const project = JSON.parse(await store.read('project.json','utf8'));
             if (!Object.hasOwn(project.sprites,id)) throw Error('Unknown sprite');
             const established = project.sprites[id].script;
-            const file = projectPath(root, established ?? `scripts/${id}.cbor`);
+            const file = established ?? `scripts/${id}.cbor`;
             project.sprites[id].script = established ?? `scripts/${id}.cbor`;
             await recompile(project, new Map([[id,script]]), async () => {
-              await atomicWrite(file, encodeCbor(script));
-              if (!established) await atomicWrite(content, JSON.stringify(project,null,2)+'\n');
+              await store.save([[file,encodeCbor(script)],...(!established ? [['project.json',JSON.stringify(project,null,2)+'\n']] : [])]);
             });
           });
           return send(res, 200, {ok:true});
@@ -150,7 +163,7 @@ const server = createServer(async (req, res) => {
   }
 });
 
-if (!cartFile) {
+if (!cartFile && !store.archive) {
   let rebuildTimer;
   const watcher = watch(root, { recursive:true, persistent:false }, (_, file) => {
     if (!file || !/^assets[\\/]/.test(file)) return;
@@ -248,5 +261,10 @@ if (lan) {
 }
 server.listen(port, lan ? '0.0.0.0' : '127.0.0.1', ()=>{
   console.log(`GameWaffle listening on http://localhost:${server.address().port}`);
+  if (args.includes('--open')) {
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const browser = process.platform === 'win32' ? ['rundll32.exe','url.dll,FileProtocolHandler'] : [process.env.TERMUX_VERSION || process.platform==='android' ? 'termux-open-url' : 'xdg-open'];
+    spawn(browser[0],[...browser.slice(1),url],{stdio:'ignore'}).on('error',()=>console.log(url));
+  }
   if (lan) console.log('Open /player.html at this computer’s LAN address on other devices and select Join LAN.');
 });

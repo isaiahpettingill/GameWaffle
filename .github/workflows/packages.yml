@@ -1,0 +1,111 @@
+name: Build GameWaffle
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  studio:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 24, cache: npm}
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo install wasm-bindgen-cli --version 0.2.105 --locked
+      - run: npm ci && npm run build && node packaging/check-game.mjs
+      - uses: actions/upload-artifact@v4
+        with: {name: studio-assets, path: web-built, if-no-files-found: error}
+      - run: |
+          node packaging/stage.mjs GameWaffle-Studio --android-editor
+          tar czf GameWaffle-Android-Studio.tar.gz GameWaffle-Studio
+      - uses: actions/upload-artifact@v4
+        with: {name: package-Android-Studio, path: GameWaffle-Android-Studio.tar.gz}
+  desktop:
+    needs: studio
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 24, cache: npm}
+      - uses: actions/download-artifact@v4
+        with: {name: studio-assets, path: web-built}
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev libdecor-0-dev libdrm-dev libgbm-dev libegl-dev libgl-dev libudev-dev libdbus-1-dev squashfs-tools
+      - run: npm ci
+      - run: cargo build --manifest-path player/Cargo.toml --features bundled --release --locked
+      - run: node packaging/stage.mjs stage
+      - if: runner.os == 'Linux'
+        run: |
+          cp packaging/{AppRun,gamewaffle.desktop,gamewaffle.svg} stage/
+          curl -fsSL https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage -o tool
+          chmod +x tool
+          ARCH=x86_64 ./tool --appimage-extract-and-run stage GameWaffle-x86_64.AppImage
+          SDL_VIDEO_DRIVER=dummy SDL_AUDIO_DRIVER=dummy ./GameWaffle-x86_64.AppImage --appimage-extract-and-run --player --verify web-built/demo.waffle
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" packaging\windows.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ runner.os }}
+          if-no-files-found: error
+          path: |
+            GameWaffle-Setup.exe
+            GameWaffle-x86_64.AppImage
+  android:
+    needs: studio
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: 21}
+      - uses: actions/download-artifact@v4
+        with: {name: studio-assets, path: web-built}
+      - run: |
+          sdkmanager "ndk;27.2.12479018" "platforms;android-35" "build-tools;35.0.0"
+          rustup target add aarch64-linux-android x86_64-linux-android
+          git clone --depth 1 --branch release-3.4.2 https://github.com/libsdl-org/SDL.git "$RUNNER_TEMP/SDL"
+      - name: Build and verify APK
+        env:
+          SIGNING: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.ANDROID_SIGNING || '' }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            : "${SIGNING:?Configure the ANDROID_SIGNING repository secret}"
+            export ANDROID_KEYSTORE="$RUNNER_TEMP/release.p12"
+            umask 077
+            jq -er .key <<<"$SIGNING" | base64 -d > "$ANDROID_KEYSTORE"
+            GW_KEY_PASSWORD=$(jq -er .password <<<"$SIGNING")
+            export GW_KEY_PASSWORD
+            unset SIGNING
+            trap 'rm -f "$ANDROID_KEYSTORE"' EXIT
+          fi
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          export ANDROID_PLATFORM_JAR="$ANDROID_HOME/platforms/android-35/android.jar"
+          export ANDROID_BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          export SDL_SOURCE="$RUNNER_TEMP/SDL"
+          bash player/android/build.sh web-built/demo.waffle GameWaffle-Player.apk
+      - uses: actions/upload-artifact@v4
+        with: {name: package-Android, path: GameWaffle-Player.apk}
+  release:
+    needs: [desktop, android]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions: {contents: write, id-token: write, attestations: write}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: 'package-*', merge-multiple: true, path: dist}
+      - uses: actions/attest-build-provenance@v3
+        with: {subject-path: 'dist/*'}
+      - env: {GH_TOKEN: '${{ github.token }}'}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes

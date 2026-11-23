@@ -57,14 +57,21 @@ with ZipFile(stage / 'unsigned.apk', 'a', compression=ZIP_STORED) as apk:
         apk.write(file, file.relative_to(stage).as_posix())
 PY
 "$tools/zipalign" -P 16 -f 4 "$stage/unsigned.apk" "$stage/aligned.apk"
-# Keep the debug key outside the release output.
-key="$stage/debug.keystore"
-if [[ ! -f "$key" ]]; then
-    "$JAVA_HOME/bin/keytool" -genkeypair -keystore "$key" -storepass android -keypass android \
-        -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=GameWaffle Debug'
+if [[ -n ${ANDROID_KEYSTORE:-} ]]; then
+    key=$ANDROID_KEYSTORE
+    alias=gamewaffle
+    : "${GW_KEY_PASSWORD:?Set the keystore password}"
+else
+    key="$stage/debug.keystore"
+    alias=androiddebugkey
+    export GW_KEY_PASSWORD=android
+    if [[ ! -f "$key" ]]; then
+        "$JAVA_HOME/bin/keytool" -genkeypair -keystore "$key" -storepass:env GW_KEY_PASSWORD \
+            -alias "$alias" -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=GameWaffle Debug'
+    fi
 fi
-JAVA_HOME="$JAVA_HOME" "$tools/apksigner" sign --ks "$key" --ks-key-alias androiddebugkey \
-    --ks-pass pass:android --key-pass pass:android --out "$output" "$stage/aligned.apk"
+JAVA_HOME="$JAVA_HOME" "$tools/apksigner" sign --ks "$key" --ks-key-alias "$alias" \
+    --ks-pass env:GW_KEY_PASSWORD --out "$output" "$stage/aligned.apk"
 JAVA_HOME="$JAVA_HOME" "$tools/apksigner" verify "$output"
 "$tools/zipalign" -c -P 16 4 "$output"
 printf 'Built %s\n' "$output"

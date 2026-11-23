@@ -1,5 +1,6 @@
 {
   "name": "gamewaffle",
+  "license": "0BSD",
   "version": "0.1.0",
   "description": "Sprite game studio and Rust cartridge runtime",
   "scripts": {

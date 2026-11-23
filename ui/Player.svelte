@@ -11,12 +11,13 @@
   let touch = $state(false), muted = $state(true), players = $state(1);
   let status = $state('Loading cartridge…'), error = $state(''), lanSlots = $state([]);
   let runtime, atlasImages = {}, socket, loop, last = 0, elapsed = 0, loadVersion = 0;
+  let slot=$state(1);
   const audio = createAudio();
   const keys = new Set(), fingers = new Map(), taps = new Set();
   const embedded = document.getElementById('gamewaffle-cartridge');
   const hosted = !embedded && /^https?:$/.test(location.protocol);
   let startingRoom, currentBytes;
-  const keyboard = { ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right', KeyZ:'a',Space:'a',KeyX:'b',KeyC:'x',Enter:'menu',KeyW:'up',KeyS:'down',KeyA:'left',KeyD:'right' };
+  const keyboard = { ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right', KeyZ:'a',Semicolon:'a',Quote:'b',Space:'x',MouseLeft:'a',MouseRight:'b',KeyX:'b',KeyC:'x',Enter:'menu',KeyW:'up',KeyS:'down',KeyA:'left',KeyD:'right' };
   const second = { KeyI:'up',KeyK:'down',KeyJ:'left',KeyL:'right',KeyN:'a',KeyM:'b',Comma:'x',Period:'menu' };
   const gamepad = [12,13,14,15,0,1,2,9];
 
@@ -29,6 +30,7 @@
     if (version !== loadVersion) { loadedRuntime.free(); return; }
     runtime?.free();
     runtime = loadedRuntime;
+    runtime.set_seed(crypto.getRandomValues(new Uint32Array(1))[0]);
     cart = next;
     currentBytes = bytes;
     startingRoom = room;
@@ -128,6 +130,7 @@
         if (socket?.readyState === WebSocket.OPEN) {
           if (socket.bufferedAmount < 64_000) socket.send(JSON.stringify({kind:'input',input:data}));
          } else if (runtime && !socket) {
+          runtime.set_view_size(canvas.width,canvas.height);
           const mask = data.reduce((bits,input,slot)=>buttons.reduce((value,button,index)=>
             input[button] ? value | (1 << (slot*8+index)) : value,bits),0) >>> 0;
           show(JSON.parse(runtime.step_buttons(mask)));
@@ -154,6 +157,13 @@
     if (button && fingers.get(event.pointerId) !== button) taps.add(button);
     fingers.set(event.pointerId,button);
   }
+  function mouseChange(event) {
+    if (event.type === 'mousedown' && event.target !== canvas) return;
+    const key = ['MouseLeft',null,'MouseRight'][event.button];
+    if (!key) return;
+    if (event.type === 'mousedown') { keys.add(key); taps.add(keyboard[key]); canvas.focus(); }
+    else keys.delete(key);
+  }
   function touchUp(event) { fingers.delete(event.pointerId); }
   function press(event) {
     if (event.target.matches?.('input,select,textarea') || event.ctrlKey || event.altKey || event.metaKey) return;
@@ -169,6 +179,14 @@
   async function sound() {
     try { muted = await audio.toggle(); }
     catch { error = 'Audio is unavailable in this browser.'; }
+  }
+  function progress(write){
+    try {
+      const key=JSON.stringify(['GameWaffle',runtime.save_id(),slot]);
+      if(write)localStorage.setItem(key,runtime.save_game());
+      else {const saved=localStorage.getItem(key);if(!saved)throw Error('This slot is empty');runtime.load_game(saved);clear();show(JSON.parse(runtime.snapshot()));}
+      status=(write?'Saved':'Loaded')+' slot '+slot;error='';
+    }catch(err){error=String(err.message??err);}
   }
   function localReset() {
     disconnect();
@@ -201,7 +219,7 @@
   });
 </script>
 
-<svelte:window onkeydown={press} onkeyup={release} onblur={clear} />
+<svelte:window onkeydown={press} onkeyup={release} onblur={clear} onmousedown={mouseChange} onmouseup={mouseChange} oncontextmenu={event=>{if(event.target===canvas)event.preventDefault();}} />
 <main>
   <header>
     <div class="brand">
@@ -220,7 +238,7 @@
       <span class="session"><i></i>{status}{#if lanSlots.length} · P{lanSlots.map(slot=>slot+1).join(', P')}{/if}</span>
     </div>
     <div class="screen" bind:this={shell}>
-      <canvas aria-label="Game display" bind:this={canvas} width="160" height="144"></canvas>
+      <canvas tabindex="-1" aria-label="Game display" bind:this={canvas} width="128" height="128"></canvas>
       {#if touch}
         <div role="group" aria-label="Touch controls" class="touch" onpointerdown={touchDown} onpointermove={touchMove} onpointerup={touchUp} onpointercancel={touchUp} onlostpointercapture={touchUp}>
           <div class="dpad">
@@ -235,6 +253,8 @@
       {/if}
     </div>
     <div class="toolbar row">
+      <label>Slot <select bind:value={slot}>{#each [1,2,3] as n}<option value={n}>{n}</option>{/each}</select></label>
+      <button disabled={!cart||status==='LAN game'} onclick={()=>progress(true)}>Save</button><button disabled={!cart||status==='LAN game'} onclick={()=>progress(false)}>Load</button>
       <button onclick={localReset} disabled={!cart}>Reset</button>
       <button onclick={sound} aria-pressed={!muted}>{muted ? 'Enable audio' : 'Mute audio'}</button>
       <button onclick={()=>{touch=!touch;clear();}} aria-pressed={touch}>Touch controls</button>
@@ -246,7 +266,7 @@
     </div>
   </section>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
-  <p class="help">Keyboard <kbd>↑ ↓ ← →</kbd> or <kbd>W A S D</kbd> · <kbd>Z</kbd> A · <kbd>X</kbd> B · <kbd>C</kbd> X · <kbd>Enter</kbd> Start</p>
+  <p class="help">Move: WASD or arrows · A: semicolon, Z or left click · B: quote, X or right click · X: Space or C · Start: Enter</p>
   {#if players > 1}<p class="help">Player 2 keyboard <kbd>I J K L</kbd> · <kbd>N M , .</kbd>. Gamepads fill the available player slots.</p>{/if}
 </main>
 

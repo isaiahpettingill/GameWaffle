@@ -1,3 +1,4 @@
+mod mapping;
 mod media;
 mod sound;
 
@@ -32,8 +33,13 @@ impl Game {
         sdl3::iostream::IOStream::from_file(path, "rb")?
             .take(256 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)?;
-        let media = Media::read(&bytes)?;
-        let runtime = Runtime::from_cartridge(&bytes, None)?;
+        let mut runtime = Runtime::from_cartridge(&bytes, None)?;
+        runtime.set_seed(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .subsec_nanos(),
+        );
+        let media = Media::read(&bytes[..bytes.len() - 96])?;
         for name in media.rooms.keys() {
             if !media.atlases.contains_key(name) {
                 return Err(format!("Missing atlas for {name}").into());
@@ -68,7 +74,7 @@ fn buttons(keys: [bool; 8]) -> Input {
     }
 }
 
-fn overlay(width: u32, height: u32) -> [FRect; 9] {
+fn overlay(width: u32, height: u32) -> [FRect; 12] {
     let (w, h) = (width as f32, height as f32);
     let size = (h * 0.145).clamp(18., 48.);
     let y = h - size * 3. - 4.;
@@ -84,6 +90,9 @@ fn overlay(width: u32, height: u32) -> [FRect; 9] {
         rect(right + size, y),
         rect(w / 2. - size / 2., h - size - 4.),
         rect(w - size - 4., 4.),
+        rect(4., 4.),
+        rect(6. + size, 4.),
+        rect(w - size * 2. - 6., 4.),
     ]
 }
 
@@ -129,7 +138,40 @@ fn draw(
 ) -> Result<(), Error> {
     let room = &game.media.rooms[snapshot.room];
     let source = &game.media.atlases[snapshot.room];
-    let [x, y, w, h] = view;
+    let [vx, vy, w, h] = view;
+    let axis = |base: u32, size: u32, extent: u32, focus: Option<f32>, lo: &str, hi: &str| {
+        let center = focus.map_or(base as i32, |f| f.round() as i32 - size as i32 / 2);
+        center.clamp(
+            if room.seams.contains_key(lo) {
+                -(size as i32 / 2)
+            } else {
+                0
+            },
+            (extent as i32
+                - if room.seams.contains_key(hi) {
+                    size.div_ceil(2)
+                } else {
+                    size
+                } as i32)
+                .max(0),
+        )
+    };
+    let x = axis(
+        vx,
+        w,
+        room.width,
+        snapshot.focus.map(|p| p[0]),
+        "left",
+        "right",
+    );
+    let y = axis(
+        vy,
+        h,
+        room.height,
+        snapshot.focus.map(|p| p[1]),
+        "up",
+        "down",
+    );
     let color = room
         .background
         .strip_prefix('#')
@@ -205,6 +247,59 @@ fn draw(
             }
         }
     }
+    if let Some(font) = source.rect("ui/font") {
+        let text =
+            |canvas: &mut Canvas<Window>, line: &str, mut x: f32, y: f32| -> Result<(), Error> {
+                for ch in line.chars() {
+                    let i = if (' '..='~').contains(&ch) {
+                        ch as i32
+                    } else {
+                        63
+                    } - 32;
+                    let glyph =
+                        sdl3::rect::Rect::new(font.x() + i % 16 * 6, font.y() + i / 16 * 8, 6, 8);
+                    canvas.copy(atlas, glyph, FRect::new(x, y, 6., 8.))?;
+                    x += 6.;
+                }
+                Ok(())
+            };
+        canvas.set_draw_color(Color::RGB(38, 35, 52));
+        let mut y = 2.;
+        for (label, value) in snapshot.counters {
+            let line = format!("{label} {value}");
+            canvas.fill_rect(FRect::new(2., y, line.chars().count() as f32 * 6. + 4., 9.))?;
+            text(canvas, &line, 4., y)?;
+            y += 10.;
+        }
+        if let Some(dialog) = snapshot.dialog {
+            let wrapped = gamewaffle_runtime::dialogue_lines(dialog, (w as usize - 8) / 6);
+            y = h as f32 - (wrapped.lines().count() + 1) as f32 * 8. - 4.;
+            canvas.fill_rect(FRect::new(1., y, w as f32 - 2., h as f32 - y - 1.))?;
+            for line in wrapped.lines().chain(std::iter::once("[A]")) {
+                text(canvas, line, 4., y + 1.)?;
+                y += 8.;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn save_slot(runtime: &mut Runtime, slot: u8, write: bool) -> Result<(), Error> {
+    let id = runtime
+        .save_id()
+        .bytes()
+        .fold(14695981039346656037u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(1099511628211)
+        });
+    let path = sdl3::filesystem::get_pref_path("GameWaffle", "Player")?
+        .join(format!("{id:016x}-{slot}.sav"));
+    if write {
+        let temp = path.with_extension(format!("{}.tmp", std::process::id()));
+        std::fs::write(&temp, runtime.save_game()?)?;
+        std::fs::rename(temp, path)?;
+    } else {
+        runtime.load_game(&std::fs::read_to_string(path)?)?;
+    }
     Ok(())
 }
 
@@ -219,6 +314,15 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
     let mut canvas = window.into_canvas();
     let creator = canvas.texture_creator();
     let pads = sdl.gamepad()?;
+    let mut status = mapping::load(&pads)
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    let sticks = sdl.joystick()?;
+    let mut raw = Vec::new();
+    let mut setup: Option<mapping::Setup> = None;
+    let mut slot = 1;
+    let mut mouse = [false; 2];
     let mut controllers: Vec<Gamepad> = pads
         .gamepads()?
         .into_iter()
@@ -238,10 +342,109 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
     let mut view = [0, 0, 320, 224];
     let mut previous = Instant::now();
     let mut lag = Duration::ZERO;
-    let mut status = String::new();
+
     let mut frames = 0;
     'running: loop {
         for event in pump.poll_iter() {
+            if setup.is_none() {
+                let command = match event {
+                    Event::KeyDown {
+                        scancode: Some(Key::F5),
+                        repeat: false,
+                        ..
+                    } => Some(true),
+                    Event::KeyDown {
+                        scancode: Some(Key::F9),
+                        repeat: false,
+                        ..
+                    } => Some(false),
+                    Event::KeyDown {
+                        scancode: Some(Key::F6),
+                        repeat: false,
+                        ..
+                    } => {
+                        slot = slot % 3 + 1;
+                        status = format!("Save slot {slot}");
+                        continue;
+                    }
+                    Event::FingerDown { x, y, .. } => match touch_button(&canvas, view, x, y) {
+                        Some(10) => Some(true),
+                        Some(11) => Some(false),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(write) = command {
+                    if let Some(game) = &mut game {
+                        status = match save_slot(&mut game.runtime, slot, write) {
+                            Ok(()) => {
+                                if !write {
+                                    mixer.reset();
+                                }
+                                format!("{} slot {slot}", if write { "Saved" } else { "Loaded" })
+                            }
+                            Err(e) => e.to_string(),
+                        };
+                    }
+                    continue;
+                }
+            }
+            let toggle_setup = matches!(
+                event,
+                Event::KeyDown {
+                    scancode: Some(Key::F4),
+                    repeat: false,
+                    ..
+                }
+            ) || matches!(event,Event::FingerDown {x,y,..} if touch_button(&canvas,view,x,y)==Some(9));
+            if toggle_setup {
+                if setup.take().is_none() {
+                    setup = Some(mapping::Setup::default());
+                    raw = sticks
+                        .joysticks()?
+                        .into_iter()
+                        .filter_map(|id| sticks.open(id).ok())
+                        .collect();
+                } else {
+                    raw.clear();
+                }
+                taps.fill(false);
+                fingers.clear();
+                mouse.fill(false);
+                continue;
+            }
+            if let Some(screen) = &mut setup {
+                match screen.capture(&event, &pads) {
+                    Ok(false) => {}
+                    result => {
+                        status = result
+                            .err()
+                            .map_or_else(|| "Controller saved".into(), |e| e.to_string());
+                        setup = None;
+                        raw.clear();
+                        continue;
+                    }
+                }
+                match event {
+                    Event::KeyDown {
+                        scancode: Some(Key::Escape),
+                        ..
+                    } => {
+                        setup = None;
+                        raw.clear();
+                        continue;
+                    }
+                    Event::JoyDeviceAdded { which, .. } => {
+                        if let Ok(stick) = sticks.open(which) {
+                            raw.push(stick);
+                        }
+                    }
+                    Event::Quit { .. }
+                    | Event::GamepadAdded { .. }
+                    | Event::GamepadRemoved { .. } => {}
+                    _ => continue,
+                }
+            }
             match event {
                 Event::Quit { .. }
                 | Event::KeyDown {
@@ -275,6 +478,20 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
                     touch = !touch;
                     fingers.clear();
                 }
+                Event::MouseButtonDown {
+                    which, mouse_btn, ..
+                }
+                | Event::MouseButtonUp {
+                    which, mouse_btn, ..
+                } if which != u32::MAX => {
+                    let index = match mouse_btn {
+                        sdl3::mouse::MouseButton::Left => 0,
+                        sdl3::mouse::MouseButton::Right => 1,
+                        _ => continue,
+                    };
+                    mouse[index] = matches!(event, Event::MouseButtonDown { .. });
+                    taps[4 + index] |= mouse[index];
+                }
                 Event::DropFile { filename, .. } => {
                     let _ = sender.send(filename.into());
                 }
@@ -291,6 +508,7 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
                     ..
                 } => {
                     fingers.clear();
+                    mouse.fill(false);
                     taps = [false; 8];
                 }
                 Event::FingerDown {
@@ -343,6 +561,9 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
         lag = (lag + now.duration_since(previous)).min(TICK * 5);
         previous = now;
         if let Some(game) = &mut game {
+            if setup.is_some() {
+                lag = Duration::ZERO;
+            }
             while lag >= TICK {
                 lag -= TICK;
                 let keys = pump.keyboard_state();
@@ -351,9 +572,9 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
                     [Key::Down, Key::S],
                     [Key::Left, Key::A],
                     [Key::Right, Key::D],
-                    [Key::Z, Key::Space],
-                    [Key::X, Key::X],
-                    [Key::C, Key::C],
+                    [Key::Z, Key::Semicolon],
+                    [Key::X, Key::Apostrophe],
+                    [Key::C, Key::Space],
                     [Key::Return, Key::Return],
                 ];
                 let mut states = [[false; 8]; 4];
@@ -363,10 +584,11 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
                         || fingers.values().any(|value| *value == index);
                 }
                 taps = [false; 8];
-                let start = usize::from(controllers.len() < 4);
-                for (slot, pad) in states.iter_mut().skip(start).zip(&controllers) {
+                states[0][4] |= mouse[0];
+                states[0][5] |= mouse[1];
+                for (slot, pad) in states.iter_mut().zip(&controllers) {
                     for (index, button) in BUTTONS.iter().enumerate() {
-                        slot[index] = pad.button(*button);
+                        slot[index] |= pad.button(*button);
                     }
                     let x = pad.axis(Axis::LeftX);
                     let y = pad.axis(Axis::LeftY);
@@ -375,6 +597,7 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
                     slot[2] |= x < -16000;
                     slot[3] |= x > 16000;
                 }
+                game.runtime.set_view_size(view[2], view[3]);
                 game.runtime.step_inputs(states.map(buttons))?;
                 let room_id = game.runtime.room();
                 let room = game
@@ -437,7 +660,7 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
                 game.media.camera,
                 [output.0, output.1],
                 [room.width, room.height],
-                focus,
+                snapshot.focus.unwrap_or(focus),
             );
         } else {
             lag = Duration::ZERO;
@@ -474,6 +697,7 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
                         "F1 Open or drop a .waffle file"
                     };
                     canvas.draw_debug_text(help, (12., 34.))?;
+                    canvas.draw_debug_text("F4 Map controller", (12., 52.))?;
                 }
                 Ok(())
             })();
@@ -497,7 +721,9 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
                 canvas.set_draw_color(Color::RGBA(61, 51, 79, 215));
                 canvas.fill_rect(rect)?;
                 canvas.set_draw_color(Color::RGB(255, 226, 177));
-                let name = ["^", "v", "<", ">", "A", "B", "X", "Start", "Open"][index];
+                let name = [
+                    "^", "v", "<", ">", "A", "B", "X", "Start", "Open", "Pad", "Save", "Load",
+                ][index];
                 canvas.draw_debug_text(
                     name,
                     (
@@ -515,6 +741,21 @@ pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
                 .take(view[2].saturating_sub(16) as usize / 8)
                 .collect();
             canvas.draw_debug_text(&text.replace('\0', ""), (8., 8.))?;
+        }
+        if let Some(screen) = &setup {
+            canvas.set_draw_color(Color::RGB(34, 31, 45));
+            canvas.fill_rect(FRect::new(0., 32., view[2] as f32, 76.))?;
+            canvas.set_draw_color(Color::RGB(255, 226, 177));
+            canvas.draw_debug_text("Map controller", (8., 42.))?;
+            canvas.draw_debug_text(&screen.prompt(), (8., 64.))?;
+            canvas.draw_debug_text(
+                if touch {
+                    "Tap Pad to cancel"
+                } else {
+                    "Esc to cancel"
+                },
+                (8., 86.),
+            )?;
         }
         canvas.present();
         mixer.update();

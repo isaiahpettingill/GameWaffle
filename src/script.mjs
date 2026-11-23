@@ -42,6 +42,8 @@ export function compileScript(script) {
         emit(commands.constant,target,...word(intern(constants,Number(value))));
       } else if (value?.get != null) {
         emit(commands.load,target,scope(value.scope),...word(named(value.get)));
+       } else if (value?.item != null) {
+        emit(commands.load,target,4,...word(named(value.item)));
       } else if (value?.button != null) {
         const index = buttons.indexOf(value.button);
         if (index < 0) throw Error(`Unknown button: ${value.button}`);
@@ -83,6 +85,7 @@ export function compileScript(script) {
           emit(commands.wait,0);
         } else {
           if (!Object.hasOwn(Blocks,block.op)) throw Error(`Unknown block: ${block.op}`);
+          if (['give','take'].includes(block.op) && !variableName(block.item??'coin'))throw Error('Use an item ID with letters, numbers, or underscores');
           const operands = Blocks[block.op][1].map(([key,type,fallback],index)=>{
             const value = block[key] ?? fallback;
             if (type === 'number') {

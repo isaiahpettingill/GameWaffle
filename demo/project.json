@@ -93,6 +93,13 @@
       "physics": {
         "mode": "none"
       }
+    },
+    "key": {
+      "source": "assets/key.png",
+      "script": "scripts/key.cbor",
+      "physics": {
+        "mode": "sensor"
+      }
     }
   },
   "tiles": {
@@ -404,7 +411,16 @@
             ]
           ]
         }
-      ]
+      ],
+      "exits": {
+        "right": {
+          "mode": "fixed",
+          "targets": [
+            "vault"
+          ],
+          "adjacent": true
+        }
+      }
     },
     "courtyard": {
       "title": "Top-down Courtyard",
@@ -442,6 +458,13 @@
           "sprite": "drone",
           "x": 420,
           "y": 100
+        },
+        {
+          "sprite": "key",
+          "x": 84,
+          "y": 220,
+          "flag": "found_key",
+          "when": false
         }
       ],
       "layers": [
@@ -544,7 +567,16 @@
             ]
           ]
         }
-      ]
+      ],
+      "exits": {
+        "right": {
+          "mode": "save",
+          "targets": [
+            "yard",
+            "vault"
+          ]
+        }
+      }
     },
     "vault": {
       "title": "Cooling Vault",
@@ -808,7 +840,25 @@
             ]
           ]
         }
-      ]
+      ],
+      "exits": {
+        "left": {
+          "mode": "fixed",
+          "targets": [
+            "yard"
+          ],
+          "adjacent": true
+        },
+        "right": {
+          "mode": "fixed",
+          "targets": [
+            "courtyard"
+          ]
+        }
+      }
     }
+  },
+  "flags": {
+    "found_key": false
   }
 }
