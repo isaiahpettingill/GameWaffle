@@ -129,6 +129,10 @@ impl Clip {
 
 #[derive(Deserialize)]
 pub struct Sprite {
+    #[serde(default, rename = "scriptJump")]
+    pub script_jump: bool,
+    #[serde(default, rename = "scriptGravity")]
+    pub script_gravity: bool,
     pub emitter: Option<crate::particles::Emitter>,
     #[serde(default, rename = "alwaysActive")]
     pub always_active: bool,

@@ -277,7 +277,7 @@ To test the packages without publishing a release, run **Build GameWaffle** on a
 
 ## Recover an edit
 
-Studio writes a recovery file when you change the project, a block workspace, or a text script. Open the same project path after a restart. Select **Recover edits** or **Discard draft** for a project draft. Open the same sprite or module to recover its script. Select **Save script** to keep it. A draft can contain incomplete text or disconnected blocks.
+Studio writes a recovery file when you change the project, a block workspace, or a text script. Open the same project path after a restart. Select **Recover edits** or **Discard draft** for a project draft. Open the same sprite or module to recover its script. Studio saves valid project and script edits automatically. A draft can contain incomplete text or disconnected blocks.
 
 Use **Edit → Undo project edit** or **Redo project edit** for room edits, game settings, asset definitions, file imports, and saved script or module changes. Studio keeps the last 50 project edits in the current session. Blockly and the text editor have their own edit histories.
 

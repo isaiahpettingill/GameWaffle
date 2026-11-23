@@ -42,6 +42,7 @@ function compileEvents(script, modules, trace, registry) {
   }
   try {
   const dependencies = new Set();
+  let scriptGravity=false,scriptJump=false;
   const events = {};
   let nodes = 0;
   for (const [event, body] of Object.entries(script.events ?? {})) {
@@ -87,9 +88,10 @@ function compileEvents(script, modules, trace, registry) {
         try{expression(binding.value,target,depth+1);}finally{unit=oldUnit;parameters=oldParams;active=oldActive;}
       } else if (value?.get != null) {
         emit(commands.load,target,scope(value.scope),...word(named(value.get)));
-      } else if(value?.action!=null){
-        if(registry&&!Object.hasOwn(registry.controls,value.action))throw Error('Map action in Game → Controls: '+value.action);
-        emit(commands.load,target,6,...word(named(value.action)));
+      } else if(value?.action!=null || value?.pressed!=null || value?.released!=null){
+        const action=value.action??value.pressed??value.released;
+        if(registry&&!Object.hasOwn(registry.controls,action))throw Error('Map action in Game → Controls: '+action);
+        emit(commands.load,target,value.pressed!=null?7:value.released!=null?8:6,...word(named(action)));
       } else if (value?.item != null) {
         if(registry&&!Object.hasOwn(registry.items,value.item))throw Error('Register item in Game → Items: '+value.item);
         emit(commands.load,target,4,...word(named(value.item)));
@@ -104,8 +106,8 @@ function compileEvents(script, modules, trace, registry) {
       } else if (value?.calc) {
         const op = operations.indexOf(value.calc);
         if (op < 0) throw Error(`Unknown operation: ${value.calc}`);
-        expression(value.left ?? 0,target,depth+1);
-        if (value.calc !== 'not') expression(value.right ?? 0,target+1,depth+1);
+        expression(value.left===undefined?0:value.left,target,depth+1);
+        if (value.calc !== 'not') expression(value.right===undefined?0:value.right,target+1,depth+1);
         emit(commands.calc,target,op,target,value.calc === 'not' ? target : target+1);
       } else throw Error('Invalid expression');
     }
@@ -117,11 +119,11 @@ function compileEvents(script, modules, trace, registry) {
         current=block;
         if (block.op==='call')call(block.name,block.args,false,r=>sequence(r.body,depth+1));
         else if (block.op === 'set') {
-          expression(block.value ?? 0,0,depth+1);
+          expression(block.value===undefined?0:block.value,0,depth+1);
           emit(commands.store,scope(block.scope),...word(named(block.name)),0);
         } else if (block.op === 'if' || block.op === 'while') {
           const start = bytes.length;
-          expression(block.condition ?? 0,0,depth+1);
+          expression(block.condition===undefined?0:block.condition,0,depth+1);
           emit(commands.branch,0,0,0);
           const falseTarget = bytes.length-2;
           sequence(block.body ?? [],depth+1);
@@ -136,14 +138,17 @@ function compileEvents(script, modules, trace, registry) {
             patch(endTarget,bytes.length);
           } else patch(falseTarget,bytes.length);
         } else if (block.op === 'wait') {
-          expression(block.ticks ?? 1,0,depth+1);
+          expression(block.ticks===undefined?1:block.ticks,0,depth+1);
           emit(commands.wait,0);
         } else {
           if (!Object.hasOwn(Blocks,block.op)) throw Error(`Unknown block: ${block.op}`);
           if(registry&&Blocks[block.op][1].some(([key])=>key==='item')&&!Object.hasOwn(registry.items,block.item??Blocks[block.op][1][0][2]))throw Error('Register item in Game → Items: '+(block.item??Blocks[block.op][1][0][2]));
           if (['give','take'].includes(block.op) && !variableName(block.item??'coin'))throw Error('Use an item ID with letters, numbers, or underscores');
           if(block.op==='follow_player'&&typeof block.player==='number'&&(!Number.isInteger(block.player)||block.player<1||block.player>4))throw Error('Select player 1 to 4.');
-          const operands = Blocks[block.op][1].map(([key,type,fallback],index)=>{
+          if(block.op==='jump'||block.op==='jump_force')scriptJump=true;
+          if(block.op==='apply_gravity')scriptGravity=true;
+          const operands = Blocks[block.op][1].map(([key,type,fallback,optional],index)=>{
+            if(block[key]===null && !optional)throw Error('None requires an optional input: '+key);
             const value = block[key] ?? fallback;
             if (type === 'number') {
               if (typeof value === 'number' && !Number.isInteger(value)) {
@@ -165,6 +170,6 @@ function compileEvents(script, modules, trace, registry) {
     if (bytes.length >= 65535) throw Error('Script bytecode exceeds 64 KiB');
     if (bytes.length) events[event] = { b:typeof Buffer === "undefined" ? Uint8Array.from(bytes) : Buffer.from(bytes), n:names, k:constants, ...(reals.length ? {f:reals} : {}) };
   }
-  return { events, dependencies };
+  return { events, dependencies, scriptGravity, scriptJump };
   } catch(error){error.node=current;throw error;}
 }

@@ -2,7 +2,7 @@ import {bakeRoomShader} from './room-shaders.mjs';
 import {addSeams} from './seams.mjs';
 import {pack} from './pack.mjs';
 import {defaultFont} from './font.mjs';
-import { buttons, effects, platformGravity, roomBorder } from './schema.mjs';
+import { initialScript, buttons, effects, platformGravity, roomBorder } from './schema.mjs';
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -217,7 +217,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     const clips = Object.create(null);
     clips.default = { frames: all, repeat: 0 };
     for (const tag of ase.tags) clips[tag.name] = { frames: tagFrames(tag).map(i => all[i]), repeat: tag.repeat };
-    let script = { events:{}, dependencies:new Set() };
+    let script = compileScript(initialScript(sprite));
     if (sprite.script) {
       try {
         const unit=scripts.get(id) ?? (sprite.script.endsWith('.ws') ? parseScript(await read(sprite.script,'utf8')) : decodeCbor(await read(sprite.script)));
@@ -228,7 +228,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     }
     if(sprite.emitter && (!effects.includes(sprite.emitter.effect) || !Number.isInteger(sprite.emitter.rate) || sprite.emitter.rate<1 || sprite.emitter.rate>240))throw Error('Invalid particle emitter for '+id);
     dependencies.set(id,script.dependencies);
-    sprites[id] = { clips, program:script.events, physics: props(sprite.physics, 'none'), width: sprite.width ?? ase.width,
+    sprites[id] = { clips, scriptJump:script.scriptJump, scriptGravity:Boolean(sprite.scriptGravity||script.scriptGravity), program:script.events, physics: props(sprite.physics, 'none'), width: sprite.width ?? ase.width,
       height: sprite.height ?? ase.height, layer: sprite.layer ?? 0, animation: sprite.animation ?? 'default',
       emitter:sprite.emitter??null, alwaysActive:sprite.alwaysActive??false, team: sprite.team ?? 0, projectile: sprite.projectile };
     number(sprites[id].width, 1, 8192, 'sprite width');

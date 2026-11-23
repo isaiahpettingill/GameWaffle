@@ -14,7 +14,7 @@
   import Debugger from './Debugger.svelte';
   let debugging=$state(false);
   async function debugRoom(){
-    if(scriptDirty){error='Save the current script first.';return;}
+    if(!await finishScript())return;
     if(!dirty||await saveProject())debugging=true;
   }
   import ScriptPanel from './ScriptPanel.svelte';
@@ -34,6 +34,7 @@
   const sources=$derived(assetKind==='audio'?audioFiles:artFiles);
   let tileArt=$state.raw({}), spriteArt=$state.raw({}), previewModes=$state.raw({});
   let historyVersion=$state(0), selectedEntity=$state(-1), roomPanel=$state('layers'), addPreset=$state(false);
+  let scriptPanel=$state(),projectTimer,projectWrite;
   let savedProject=$state(''), currentProject='', previewUrls=[];
   const undo=[],redo=[];
   const draft=draftFile('project',message=>error=message);
@@ -95,7 +96,7 @@
     event.preventDefault();
     const href=event.currentTarget.href;
     if(busy)return;
-    if(scriptDirty){error='Save the script first';return;}
+    if(!await finishScript())return;
     if(dirty && !await saveProject())return;
     try{
       const res=await fetch(href);
@@ -160,7 +161,7 @@
   onMount(()=>{
     load();
     const monitor=setInterval(checkAssets,1600);
-    return ()=>{clearInterval(monitor);for(const url of previewUrls)URL.revokeObjectURL(url);};
+    return ()=>{clearTimeout(projectTimer);clearInterval(monitor);for(const url of previewUrls)URL.revokeObjectURL(url);};
   });
   async function checkAssets(){
     if(!project||busy||checking)return;
@@ -194,6 +195,8 @@
     dirty=next!==savedProject;
     status=dirty?'Unsaved project':'Ready';
     draft.write(dirty?next:null);
+    clearTimeout(projectTimer);
+    if(dirty)projectTimer=setTimeout(saveProject,800);
   }
   function replaceRoom(next){
     if(busy)return;
@@ -337,18 +340,19 @@
   }
   function openTab(id){
     mobilePane='Editor';
-    if(scriptDirty && id!=='blocks'){error='Save or discard the current script first.';return;}
+
     if(id==='actors')assetKind='sprite';
     if(id==='assets'&&assetKind==='sprite')assetKind='source';
     error='';tab=id;
+    if(id==='blocks'||id==='room')requestAnimationFrame(()=>document.querySelector(id==='blocks'?'.code-pane':'.map-pane')?.focus({preventScroll:true}));
   }
-  function selectSprite(id){
-    if(scriptDirty && spriteId!==id){error='Save or discard the current script first.';return;}
+  async function selectSprite(id){
+    if(scriptDirty && spriteId!==id)await scriptPanel?.flush();
     spriteId=id;assetKind='sprite';error='';
   }
   function chooseDefinition(id){
     if(tab==='room'){
-      mobilePane='Editor';placementSprite=id;
+      selectSprite(id);mobilePane='Editor';placementSprite=id;
       mapTool='spawn';
       return;
     }
@@ -358,17 +362,13 @@
     event.dataTransfer.setData(spriteDragType,id);
     event.dataTransfer.effectAllowed='copy';
   }
-  function openDefinition(id,view='actors'){
-    if(scriptDirty && (view!=='blocks' || id!==spriteId)){
-      error='Save or discard the current script first.';
-      return;
-    }
-    selectSprite(id);
+  async function openDefinition(id,view='actors'){
+    await selectSprite(id);
     openTab(view);
   }
   function openAssets(kind,adding=false){
     if(busy)return;
-    if(scriptDirty){openTab('assets');return;}
+
     assetKind=kind;
     newId='';newSource='';importFile=null;assetError='';
     addForm=adding;
@@ -380,23 +380,30 @@
       || (b.item.order??b.index)-(a.item.order??a.index)).at(0)?.index??0;
   }
   function selectRoom(id){
-    if(scriptDirty){openTab('room');return;}
+
     roomPanel='layers';selectedEntity=-1;dimensions=null;mapTool='paint';
     roomId=id;layerIndex=chooseInitialLayer(project.rooms[id]);
     openTab('room');
   }
+  async function finishScript(){
+    if(!scriptDirty || await scriptPanel?.flush())return true;
+    error='Fix the script error before you run or export the game.';return false;
+  }
   async function saveProject(){
-    if(busy)return false;
-    busy=true;error='';
+    clearTimeout(projectTimer);
+    if(projectWrite)await projectWrite;
+    if(!dirty)return true;
+    if(projectWrite)return projectWrite;
     const saved=JSON.stringify(project);
-    try{
-      await request('./api/project','PUT',JSON.parse(saved));
-      await updatePreviews();
-      savedProject=saved;
-      updateDirty();
-      if(!dirty)status='Project saved';
-      return !dirty;
-    }catch(err){error=err.message;return false;}finally{busy=false;}
+    projectWrite=(async()=>{
+      try{
+        await request('./api/project','PUT',JSON.parse(saved));
+        savedProject=saved;updateDirty(false);
+        if(!dirty)status='Project saved';
+        return !dirty;
+      }catch(err){error=err.message;return false;}
+    })().finally(()=>projectWrite=null);
+    return projectWrite;
   }
   async function saveScript(id){
     if(!project.sprites[id].script){
@@ -440,34 +447,32 @@
   async function playtest(event){
     event.preventDefault();
     if(busy)return;
-    if(scriptDirty){error='Save or discard the current script first.';return;}
     const url=new URL(event.currentTarget.href);
     url.searchParams.set('playtest','1');
     if(window.__GAMEWAFFLE_STUDIO__){
-      if(dirty&&!await saveProject())return;
+      if(!await finishScript() || dirty&&!await saveProject())return;
       url.pathname='/__playtest';
       location.assign(url);
       return;
     }
     const pending=new URL(url);
-    if(dirty)pending.searchParams.set('waiting','1');
+    if(dirty||scriptDirty)pending.searchParams.set('waiting','1');
     const player=window.open(pending,'GameWafflePlaytest','popup,width=960,height=640');
     if(!player){error='Allow Studio to open a playtest window.';return;}
-    if(dirty){
-      if(!await saveProject()){player.close();return;}
+    if(pending.searchParams.has('waiting')){
+      if(!await finishScript() || !await saveProject()){player.close();return;}
       if(!player.closed)player.location.replace(url);
     }
     player.focus();
   }
   async function saveThenOpen(event){
     if(busy){event.preventDefault();return;}
-    if(scriptDirty){event.preventDefault();error='Save or discard the current script first.';return;}
-    if(!dirty)return;
+    if(!dirty && !scriptDirty)return;
     event.preventDefault();
     const link=event.currentTarget;
     const href=link.href;
     const download=link.getAttribute('download');
-    if(!await saveProject())return;
+    if(!await finishScript() || !await saveProject())return;
     if(download==null){location.assign(href);return;}
     const action=document.createElement('a');
     action.href=href;
@@ -480,7 +485,7 @@
     layerIndex=room.layers.length-1;
   }
   function addRoom(view){
-    if(scriptDirty){openTab('room');return;}
+
     let index=1;
     while(project.rooms[`room${index}`])index++;
     const id=`room${index}`;
@@ -538,8 +543,8 @@
       }else if(assetKind==='audio'){
         (project.audio??={})[id]={source:newSource};
       }else{
-        (project.sprites??={})[id]={source:newSource,physics:{}};
-        spriteId=id;
+        (project.sprites??={})[id]={source:newSource,physics:{},scriptGravity:true};
+        await selectSprite(id);
       }
       mark();
       if(assetKind==='tile')await updatePreviews();
@@ -617,9 +622,9 @@
 </header>
 <nav class="studio-menus" aria-label="Application menu">
     <details name="studio-menu" class="export-menu"><summary>File</summary><div class="card">
-        <a href="./projects?action=manager" onclick={e=>{if((dirty||scriptDirty)&&!confirm('Leave with unsaved changes?'))e.preventDefault();}}>Project Manager</a>
-        <a href="./projects?action=new" onclick={e=>{if((dirty||scriptDirty)&&!confirm('Leave with unsaved changes?'))e.preventDefault();}}>New project…</a>
-        <a href="./projects?action=open" onclick={e=>{if((dirty||scriptDirty)&&!confirm('Leave with unsaved changes?'))e.preventDefault();}}>Open project…</a>
+        <a href="./projects?action=manager" onclick={saveThenOpen}>Project Manager</a>
+        <a href="./projects?action=new" onclick={saveThenOpen}>New project…</a>
+        <a href="./projects?action=open" onclick={saveThenOpen}>Open project…</a>
         <button onclick={saveProject} disabled={!dirty||busy}>Save project</button>
         <a download={exportName+'.waffleproj'} href="./api/archive" onclick={saveThenOpen}>Editable project</a>
         <a download={exportName+'.html'} href="./export.html" onclick={saveThenOpen}>Standalone web game</a>
@@ -703,21 +708,28 @@
       <nav class="row" aria-label="Editor views">
         {#each tabs as [id,title]}{@const Icon=viewIcons[id]}<button class:active={tab===id} onclick={()=>{if(id==='blocks' && tab==='room')openDefinition((mapTool==='spawn'?placementSprite:actor?.sprite)||spriteId,id);else openTab(id);}}><Icon size={15}/>{title}</button>{/each}
       </nav>
-      {#if tab==='world' && room}
-        <World rooms={project.rooms} flags={Object.keys(project.flags??{})} {roomId} onSelect={id=>{roomId=id;layerIndex=chooseInitialLayer(project.rooms[id]);selectedEntity=-1;}} onEdit={replaceRoom}/>
-      {:else if tab==='room' && room}
+      <div class="author-panes">
+        <section tabindex="-1" class="code-pane" aria-label="Actor code">
+        {#if spriteId}
+          {#key spriteId+':'+scriptVersion}<ScriptPanel bind:this={scriptPanel} actorDefinition={sprite} newActor={!Object.hasOwn(JSON.parse(savedProject).sprites??{},spriteId)} onBeforeSave={async()=>!dirty||await saveProject()} onFileEdit={recordFile} sprite={spriteId} sprites={Object.keys(project.sprites??{})} animations={[...new Set(['default',...(art[sprite?.source]?.tags??[])])]} items={Object.keys(project.items??{})} actions={[...buttons,...Object.keys(project.controls??{})]} bind:dirty={scriptDirty} onSave={saveScript} />{/key}
+        {:else}<p class="empty card">Create an actor to edit its script.</p>{/if}
+        </section>
+        <section tabindex="-1" class="map-pane" aria-label="Room editor">
+        {#if room}
         {#key roomId}
           <RoomMap {room} {roomId} size={project.tileSize??24} tiles={project.tiles??{}} sprites={project.sprites??{}}
             {tileArt} {spriteArt} {previewModes} {layerIndex} bind:selectedEntity bind:tileId bind:spriteId={placementSprite} bind:tool={mapTool} bind:placeAs {busy}
             canUndo={historyStatus.canUndo} canRedo={historyStatus.canRedo}
             onUndo={()=>restoreRoom(true)} onRedo={()=>restoreRoom(false)} onEdit={replaceRoom}
-            onPlayer={value=>changeActor('player',value)} onLayer={chooseLayer} onSprites={()=>roomPanel='instances'} onAssets={()=>openAssets('tile')}
+            onPlayer={value=>changeActor('player',value)} onLayer={chooseLayer} onSprites={()=>{roomPanel='instances';if(actor)selectSprite(actor.sprite);}} onAssets={()=>openAssets('tile')}
             onPlay={playtest} />
         {/key}
-      {:else if tab==='blocks'}
-        {#if spriteId}
-          {#key spriteId+':'+scriptVersion}<ScriptPanel newActor={!Object.hasOwn(JSON.parse(savedProject).sprites??{},spriteId)} onBeforeSave={async()=>!dirty||await saveProject()} onFileEdit={recordFile} sprite={spriteId} sprites={Object.keys(project.sprites??{})} items={Object.keys(project.items??{})} actions={[...buttons,...Object.keys(project.controls??{})]} bind:dirty={scriptDirty} onSave={saveScript} />{/key}
-        {:else}<p class="empty card">Create an actor to edit its script.</p>{/if}
+        {/if}
+        </section>
+      </div>
+      {#if !['room','blocks'].includes(tab)}<section class="aux-pane" aria-label="Project tools">
+      {#if tab==='world' && room}
+        <World rooms={project.rooms} flags={Object.keys(project.flags??{})} {roomId} onSelect={id=>{roomId=id;layerIndex=chooseInitialLayer(project.rooms[id]);selectedEntity=-1;}} onEdit={replaceRoom}/>
       {:else if tab==='game'}
         <section class="card asseteditor">
           <h2>Game settings</h2>
@@ -830,7 +842,7 @@
             {:else}<p class="muted">Add an audio file to use it in the game.</p>{/each}
           {:else}
             {#if assetKind==='sprite'}
-              <div class="field-row"><label>Actor<select bind:value={spriteId}>{#each Object.keys(project.sprites??{}) as id}<option value={id}>{id}</option>{/each}</select></label>
+              <div class="field-row"><label>Actor<select value={spriteId} onchange={e=>selectSprite(e.currentTarget.value)}>{#each Object.keys(project.sprites??{}) as id}<option value={id}>{id}</option>{/each}</select></label>
                 {#if spriteId}<button onclick={()=>openDefinition(spriteId,'blocks')}><Blocks size={15}/>Open script</button>{/if}</div>
             {:else}
               <label class="stack">Tile set<select value={tile?.source??''} onchange={e=>tileId=tileSets[e.currentTarget.value][0]}>{#each Object.keys(tileSets) as path}<option value={path}>{setName(path)}</option>{/each}</select></label>
@@ -890,6 +902,7 @@
           {/if}
         </section>
       {/if}
+      </section>{/if}
     </div>
     {#if tab!=='game' && tab!=='world' && (tab!=='assets' || !['audio','source'].includes(assetKind))}<aside class="inspector card">
       {#if tab==='room' && room}
@@ -1114,5 +1127,25 @@
     main.wide[data-pane="Settings"]>.work{display:block;}
     .appbar{padding:.4rem;gap:.3rem;}.actions{justify-content:flex-end}.status{display:none;}
     .inspector,.instance-list{max-height:none;overflow:visible;}
+  }
+
+  .work{display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;min-height:0}
+  .work:has(.aux-pane){grid-template-rows:auto minmax(0,1fr) minmax(0,38%)}
+  .author-panes{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,1fr);gap:.35rem;min-height:0}
+  .code-pane,.map-pane,.aux-pane{min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain}
+  .code-pane :global(.workspace){height:clamp(15rem,54vh,52rem)}
+  .map-pane :global(.viewport){height:clamp(10rem,33vh,34rem)}
+  .aux-pane{border-top:1px solid var(--line);margin-top:.35rem}
+  @media(max-width:880px){
+    main[data-pane]{display:flex;flex-direction:column;overflow:hidden}
+    main[data-pane]>.work{display:grid;order:0}
+    main[data-pane="Project"]>.project,main[data-pane="Settings"]>.inspector{order:1;max-height:34%;overflow:auto;flex:0 1 auto}
+    main.wide[data-pane="Settings"]>.work{display:grid}
+    .work{flex:1;min-height:0}
+  }
+  @media(max-width:620px){
+    .author-panes{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,1fr)}
+    .code-pane :global(.workspace){height:34vh;min-height:12rem}
+    .map-pane :global(.viewport){height:22vh}
   }
 </style>

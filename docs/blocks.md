@@ -3,6 +3,7 @@
 | Command | Block | Opcode |
 | --- | --- | --- |
 | `animate(tag)` | Play animation tag | 7 |
+| `apply_gravity(modifier)` | Apply gravity with modifier modifier | 43 |
 | `ask(text)` | Ask yes or no text | 33 |
 | `bar(label, value, maximum)` | Show bar label value value maximum maximum | 37 |
 | `burst(effect, count)` | Burst effect with count particles | 27 |
@@ -16,12 +17,15 @@
 | `fire(aim, speed, amount)` | Fire aim at speed speed with amount damage | 3 |
 | `follow()` | Follow this instance | 23 |
 | `follow_player(player)` | Follow player player | 40 |
+| `force(x, y)` | Apply force X x Y y N | 44 |
 | `give(item, count)` | Give item × count | 18 |
 | `give_player(item, player, count)` | Give item to player player count count | 34 |
 | `group_camera()` | Follow all players | 30 |
 | `hide(label)` | Hide counter label | 22 |
+| `impulse(x, y)` | Apply impulse X x Y y N·s | 45 |
 | `item_icon(item, x, y)` | Draw item item at X x Y y | 39 |
-| `jump(speed)` | Jump at speed | 1 |
+| `jump(speed)` | Jump at speed speed | 1 |
+| `jump_force(force)` | Jump with force force N | 42 |
 | `release_camera()` | Follow player 1 | 25 |
 | `remove_self()` | Remove this instance | 26 |
 | `retry_checkpoint()` | Return to checkpoint | 32 |
