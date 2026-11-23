@@ -1,3 +1,7 @@
+import {checkUpdate,update,exportDesktop,nativeTarget} from './desktop.mjs';
+import {parseScript,formatScript} from './wafflescript.mjs';
+import {compileScript} from './script.mjs';
+import {loadModules} from './modules.mjs';
 import {pack} from './pack.mjs';
 import {projectStore} from './project-store.mjs';
 import { spawn } from 'node:child_process';
@@ -65,8 +69,8 @@ function change(fn) {
   mutation = result.catch(() => {});
   return result;
 }
-async function recompile(project, scripts, save) {
-  const cartridge = await compileProject(root, { project, scripts, store });
+async function recompile(project, scripts, save, sourceStore=store) {
+  const cartridge = await compileProject(root, { project, scripts, store:sourceStore });
   const updated = pack(cartridge);
   const preview = pack(cartridge,{editor:true});
   const simulation = createRuntime(updated);
@@ -91,6 +95,26 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/lan.waffle') return send(res, 200, connections.size ? clientsCart : bytes, 'application/octet-stream');
     if (url.pathname.startsWith('/api/')) {
       if (cartFile || !local(req) || !sameSite(req)) return send(res, 403, {error:'The editor is available on the host computer'});
+      if(url.pathname==='/api/desktop' && req.method==='GET'){
+        await mutation;return send(res,200,await exportDesktop(bytes,url.searchParams.get('target')??nativeTarget),'application/zip');
+      }
+      if(url.pathname==='/api/update' && req.method==='POST'){
+        const {component,target,install}=await jsonBody(req);
+        if(!install)return send(res,200,await checkUpdate(component,target));
+        const info=await update(component,target);
+        if(component==='studio'){
+          if(process.platform==='linux' && process.env.APPIMAGE){
+            const {copyFile,chmod}=await import('node:fs/promises');
+            const dst=process.env.APPIMAGE,tmp=dst+'.'+randomUUID()+'.new';
+            try{await copyFile(info.path,tmp);await chmod(tmp,0o755);await rename(tmp,dst);}finally{await unlink(tmp).catch(()=>{});}
+          }else{
+            const child=spawn(info.path,[],{detached:true,stdio:'ignore'});
+            await new Promise((ok,fail)=>{child.once('spawn',ok);child.once('error',fail);});child.unref();
+          }
+        }
+        if(component==='studio' && process.platform==='win32')res.once('finish',()=>process.exit(0));
+        return send(res,200,info);
+      }
       if (url.pathname === '/api/archive' && req.method === 'GET') {
         await mutation;return send(res,200,await store.exportArchive(),'application/octet-stream');
       }
@@ -99,12 +123,13 @@ const server = createServer(async (req, res) => {
         if (!/^[\w .-]+\.(png|ase|aseprite|wav|ogg|opus|qoa)$/i.test(name??''))throw Error('Select an image or sound file');
         const chunks=[];let size=0;
         for await(const chunk of req){if((size+=chunk.length)>32*1024*1024)throw Error('File exceeds 32 MiB');chunks.push(chunk);}
+        const group=/\.(wav|ogg|opus|qoa)$/i.test(name)?'audio':url.searchParams.get('kind')==='tile'?'tiles':'sprites';
+        const path='assets/'+group+'/'+name;
         await change(async()=>{
-          const path='assets/'+name;
           if((await store.list('assets')).includes(path))throw Error('An asset with this name exists');
           await store.save([[path,Buffer.concat(chunks)]]);revision++;
         });
-        return send(res,200,{ok:true});
+        return send(res,200,{path});
       }
       if (url.pathname === '/api/preview' && req.method === 'GET') return send(res,200,editorBytes,'application/octet-stream');
       if (url.pathname === '/api/status' && req.method === 'GET') return send(res, 200, {revision, sourceError});
@@ -121,6 +146,32 @@ const server = createServer(async (req, res) => {
         await change(() => recompile(project, undefined, () => store.save([['project.json',JSON.stringify(project,null,2)+'\n']])));
         return send(res, 200, {ok:true});
       }
+      if(url.pathname==='/api/modules' && req.method==='GET'){
+        return send(res,200,(await store.list('scripts').catch(err=>{if(err.code==='ENOENT')return [];throw err;}))
+          .map(path=>path.match(/^scripts\/modules\/([A-Za-z_]\w*)\.ws$/)?.[1]).filter(Boolean).sort());
+      }
+      const mod=url.pathname.match(/^\/api\/module\/([A-Za-z_]\w{0,63})$/);
+      if(mod){
+        const path='scripts/modules/'+mod[1]+'.ws';
+        if(req.method==='GET'){
+          const source=await store.read(path,'utf8');return send(res,200,{...parseScript(source),source});
+        }
+        if(req.method==='PUT'){
+          const draft=await jsonBody(req);
+          const source=draft.source??formatScript(draft),unit=parseScript(source);
+          if(Object.keys(unit.events).length)throw Error('Modules can contain procedures and functions only');
+          await change(async()=>{
+            const override={...store,read:(file,encoding)=>file===path?Promise.resolve(encoding?source:Buffer.from(source)):store.read(file,encoding)};
+            const modules=await loadModules({imports:[mod[1]]},override.read);
+            compileScript(unit,modules);
+            await recompile(undefined,undefined,()=>store.save([[path,source]]),override);
+          });
+          return send(res,200,{ok:true});
+        }
+      }
+      if(url.pathname==='/api/modules' && req.method==='POST'){
+        const {imports}=await jsonBody(req);return send(res,200,await loadModules({imports},store.read));
+      }
       const match = url.pathname.match(/^\/api\/script\/([a-zA-Z0-9_-]+)$/);
       if (match) {
         const id = match[1];
@@ -128,20 +179,21 @@ const server = createServer(async (req, res) => {
           await mutation;
           const project = JSON.parse(await store.read('project.json','utf8'));
           if (!Object.hasOwn(project.sprites,id)) return send(res, 404, {error:'Unknown sprite'});
-          const file = project.sprites[id].script ?? `scripts/${id}.cbor`;
+          const file = project.sprites[id].script ?? `scripts/sprites/${id}.cbor`;
           const data = await store.read(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
-          return send(res, 200, data ? decodeCbor(data) : {events:{}});
+          return send(res, 200, data ? (file.endsWith('.ws') ? {...parseScript(data.toString()),source:data.toString()} : decodeCbor(data)) : {events:{}});
         }
         if (req.method === 'PUT') {
           const script = await jsonBody(req);
+          if(script.source!=null && formatScript(parseScript(script.source))!==formatScript(script))throw Error('Text and blocks differ');
           await change(async () => {
             const project = JSON.parse(await store.read('project.json','utf8'));
             if (!Object.hasOwn(project.sprites,id)) throw Error('Unknown sprite');
             const established = project.sprites[id].script;
-            const file = established ?? `scripts/${id}.cbor`;
-            project.sprites[id].script = established ?? `scripts/${id}.cbor`;
+            const file = established ?? `scripts/sprites/${id}.cbor`;
+            project.sprites[id].script = established ?? `scripts/sprites/${id}.cbor`;
             await recompile(project, new Map([[id,script]]), async () => {
-              await store.save([[file,encodeCbor(script)],...(!established ? [['project.json',JSON.stringify(project,null,2)+'\n']] : [])]);
+              await store.save([[file,file.endsWith('.ws')?(script.source??formatScript(script)):encodeCbor(script)],...(!established ? [['project.json',JSON.stringify(project,null,2)+'\n']] : [])]);
             });
           });
           return send(res, 200, {ok:true});
@@ -166,7 +218,7 @@ const server = createServer(async (req, res) => {
 if (!cartFile && !store.archive) {
   let rebuildTimer;
   const watcher = watch(root, { recursive:true, persistent:false }, (_, file) => {
-    if (!file || !/^assets[\\/]/.test(file)) return;
+    if (!file || !/^(assets|scripts)[\\/]/.test(file)) return;
     clearTimeout(rebuildTimer);
     rebuildTimer = setTimeout(() => {
       change(() => recompile(undefined, undefined, () => {}))

@@ -220,3 +220,5 @@ Select a sprite in **Assets → Particles**. Select an effect and set the rate i
 Use **Particles** in Blockly for bursts, continuous effects, and stop commands. Emitted particles finish their movement after the source disappears. The runtime limits a room to 2,048 live particles and 256 new particles per tick. Particles use a separate random sequence from room connections.
 
 Use an active flag on a sprite, tile, instance, or map layer to control when it exists. A flag change also updates collision and pathfinding for conditional solid tiles. Combine conditions on a definition and its placement to require both.
+
+See [Edit a script](docs/wafflescript.md) for text mode, modules, and desktop export.

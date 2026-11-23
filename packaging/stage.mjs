@@ -1,4 +1,4 @@
-import {cp,mkdir,copyFile,chmod} from 'node:fs/promises';
+import {cp,mkdir,copyFile,chmod,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 const target=process.argv[2], windows=process.platform==='win32';
 await mkdir(target,{recursive:true});
@@ -17,6 +17,7 @@ async function dependency(name){
 }
 for(const name of packages)await dependency(name);
 if(process.argv.includes('--android-editor'))process.exit(0);
+if(/^v\d+\.\d+\.\d+$/.test(process.env.GITHUB_REF_NAME??''))await writeFile(join(target,'release-version'),process.env.GITHUB_REF_NAME);
 const ext=windows?'.exe':'';
 await copyFile(process.execPath,join(target,'node'+ext));
 await copyFile('player/target/release/gamewaffle-player'+ext,join(target,'gamewaffle-player'+ext));

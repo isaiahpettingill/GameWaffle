@@ -120,23 +120,23 @@ function wave(seconds, sample) {
   for(let i=0;i<count;i++) out.writeInt16LE(Math.round(sample(i/rate)*30000),44+i*2);
   return out;
 }
-await mkdir('demo/assets',{recursive:true});
-await mkdir('demo/scripts',{recursive:true});
-for (const [name,bytes] of Object.entries(assets)) await writeFile(`demo/assets/${name}.aseprite`,bytes);
+for(const dir of ['sprites','tiles','audio'])await mkdir('demo/assets/'+dir,{recursive:true});
+await mkdir('demo/scripts/sprites',{recursive:true});
+for (const [name,bytes] of Object.entries(assets)) await writeFile(`demo/assets/${['stone','crate','ledge','ladder','water'].includes(name)?'tiles':'sprites'}/${name}.aseprite`,bytes);
 const tone = (t,f) => Math.sin(t*f*2*Math.PI);
-await writeFile('demo/assets/hit.wav',wave(.17,t=>.32*tone(t,160+500*t)*Math.exp(-28*t)));
-await writeFile('demo/assets/music.wav',wave(8,t=>{
+await writeFile('demo/assets/audio/hit.wav',wave(.17,t=>.32*tone(t,160+500*t)*Math.exp(-28*t)));
+await writeFile('demo/assets/audio/music.wav',wave(8,t=>{
   const f=[110,130.81,146.83,164.81,130.81,110,98,110][Math.floor(t)%8];
   const env = Math.sin(Math.PI*(t%1))**2;
   return env*(.095*tone(t,f)+.045*tone(t,f*2)+.025*tone(t,f*3));
 }));
 const sprites = Object.fromEntries(names.map(name=>[name,{
-  source:`assets/${name}.aseprite`,script:`scripts/${name}.cbor`,animation:'idle',team:1,layer:4,
+  source:`assets/sprites/${name}.aseprite`,script:`scripts/sprites/${name}.cbor`,animation:'idle',team:1,layer:4,
   width:20,height:23,projectile:'spark',physics:{mode:'dynamic',density:1,friction:.15,group:-1,health:7},
 }]));
-sprites.drone={source:'assets/drone.aseprite',script:'scripts/drone.cbor',animation:'idle',team:2,layer:4,
+sprites.drone={source:'assets/sprites/drone.aseprite',script:'scripts/sprites/drone.cbor',animation:'idle',team:2,layer:4,
   width:20,height:20,physics:{mode:'dynamic',gravity:0,health:5,elasticity:.4}};
-sprites.spark={source:'assets/spark.aseprite',width:8,height:8,physics:{mode:'none'}};
+sprites.spark={source:'assets/sprites/spark.aseprite',width:8,height:8,physics:{mode:'none'}};
 const playerCode = {events:{
   tick:[{op:'walk',speed:5.25}],
   a:[{op:'jump',speed:9}],
@@ -144,8 +144,8 @@ const playerCode = {events:{
   x:[{op:'fire',aim:'heat_seek',speed:13,amount:2}],
   menu:[{op:'room',room:'vault'}],
 }};
-for (const name of names) await writeFile(`demo/scripts/${name}.cbor`,encodeCbor(playerCode));
-await writeFile('demo/scripts/drone.cbor',encodeCbor({events:{
+for (const name of names) await writeFile(`demo/scripts/sprites/${name}.cbor`,encodeCbor(playerCode));
+await writeFile('demo/scripts/sprites/drone.cbor',encodeCbor({events:{
   tick:[{op:'chase',speed:1.8}],damage:[{op:'sound',sound:'hit'}],
 }}));
 const floor = Array.from({length:28},(_,x)=>[x,14,'stone']);
@@ -175,8 +175,8 @@ const courtyard = {
 const project={
   name:'Basalt Works',start:'yard',tileSize:24,sprites,
   tiles:Object.fromEntries(Object.entries({stone:'static',crate:'breakable',ladder:'ladder',ledge:'one_way',water:'fluid'})
-    .map(([name,mode])=>[name,{source:`assets/${name}.aseprite`,physics:{mode}}])),
-  audio:{hit:'assets/hit.wav',music:'assets/music.wav'},
+    .map(([name,mode])=>[name,{source:`assets/tiles/${name}.aseprite`,physics:{mode}}])),
+  audio:{hit:'assets/audio/hit.wav',music:'assets/audio/music.wav'},
   rooms:{
     yard:room('Foundry Yard','#171829',[[13,13,'crate'],[14,13,'crate'],[14,12,'crate'],[17,13,'ladder'],[17,12,'ladder'],
       [17,11,'ladder'],[17,10,'ladder'],[18,10,'ledge'],[19,10,'ledge'],[20,10,'ledge'],[23,13,'water'],[24,13,'water'],[25,13,'water']],532),
@@ -197,10 +197,10 @@ for(let y=6;y<18;y++)for(let x=5;x<20;x++){
   if(!(x<12 && (x<=6||x>=10||y<8||y>15) || y===10 || y===11 || x>=16 && x%2===0 && y>11 && y<15))continue;
   keyArt.data.set([251,206,107,255],4*(24*y+x));
 }
-await writeFile('demo/assets/key.png',PNG.sync.write(keyArt));
-project.sprites.key={source:'assets/key.png',script:'scripts/key.cbor',physics:{mode:'sensor'}};
+await writeFile('demo/assets/sprites/key.png',PNG.sync.write(keyArt));
+project.sprites.key={source:'assets/sprites/key.png',script:'scripts/sprites/key.cbor',physics:{mode:'sensor'}};
 project.rooms.courtyard.entities.push({sprite:'key',x:84,y:220,flag:'found_key',when:false});
-await writeFile('demo/scripts/key.cbor',encodeCbor({events:{begin_contact:[
+await writeFile('demo/scripts/sprites/key.cbor',encodeCbor({events:{begin_contact:[
   {op:'if',condition:{calc:'not',left:{scope:'flag',get:'found_key'}},body:[
     {op:'burst',effect:'sparks',count:24},{op:'give',item:'key',count:1},{op:'set',scope:'flag',name:'found_key',value:true},
     {op:'counter',label:'Keys',value:{item:'key'}},{op:'say',text:'You found the courtyard key!'},{op:'remove_self'}

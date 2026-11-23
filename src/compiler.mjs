@@ -9,6 +9,8 @@ import { PNG } from 'pngjs';
 import { encode as encodeQoa } from 'qoa-format';
 import { readAseprite, tagFrames } from './ase.mjs';
 import { decodeCbor } from './cartridge.mjs';
+import {loadModules} from './modules.mjs';
+import {parseScript} from './wafflescript.mjs';
 import { compileScript, tileSizes, variableName } from './script.mjs';
 import { instanceNames } from './instances.mjs';
 
@@ -182,7 +184,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     let script = { events:{}, dependencies:new Set() };
     if (sprite.script) {
       try {
-        script = compileScript(scripts.get(id) ?? decodeCbor(await read(sprite.script)));
+        const unit=scripts.get(id) ?? (sprite.script.endsWith('.ws') ? parseScript(await read(sprite.script,'utf8')) : decodeCbor(await read(sprite.script)));
+        script=compileScript(unit,await loadModules(unit,read));
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
       }

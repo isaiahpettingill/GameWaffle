@@ -4,8 +4,8 @@
   "tileSize": 24,
   "sprites": {
     "maker": {
-      "source": "assets/maker.aseprite",
-      "script": "scripts/maker.cbor",
+      "source": "assets/sprites/maker.aseprite",
+      "script": "scripts/sprites/maker.cbor",
       "animation": "idle",
       "team": 1,
       "layer": 4,
@@ -21,8 +21,8 @@
       }
     },
     "runner": {
-      "source": "assets/runner.aseprite",
-      "script": "scripts/runner.cbor",
+      "source": "assets/sprites/runner.aseprite",
+      "script": "scripts/sprites/runner.cbor",
       "animation": "idle",
       "team": 1,
       "layer": 4,
@@ -38,8 +38,8 @@
       }
     },
     "scout": {
-      "source": "assets/scout.aseprite",
-      "script": "scripts/scout.cbor",
+      "source": "assets/sprites/scout.aseprite",
+      "script": "scripts/sprites/scout.cbor",
       "animation": "idle",
       "team": 1,
       "layer": 4,
@@ -55,8 +55,8 @@
       }
     },
     "pilot": {
-      "source": "assets/pilot.aseprite",
-      "script": "scripts/pilot.cbor",
+      "source": "assets/sprites/pilot.aseprite",
+      "script": "scripts/sprites/pilot.cbor",
       "animation": "idle",
       "team": 1,
       "layer": 4,
@@ -72,8 +72,8 @@
       }
     },
     "drone": {
-      "source": "assets/drone.aseprite",
-      "script": "scripts/drone.cbor",
+      "source": "assets/sprites/drone.aseprite",
+      "script": "scripts/sprites/drone.cbor",
       "animation": "idle",
       "team": 2,
       "layer": 4,
@@ -87,7 +87,7 @@
       }
     },
     "spark": {
-      "source": "assets/spark.aseprite",
+      "source": "assets/sprites/spark.aseprite",
       "width": 8,
       "height": 8,
       "physics": {
@@ -95,8 +95,8 @@
       }
     },
     "key": {
-      "source": "assets/key.png",
-      "script": "scripts/key.cbor",
+      "source": "assets/sprites/key.png",
+      "script": "scripts/sprites/key.cbor",
       "physics": {
         "mode": "sensor"
       }
@@ -104,39 +104,39 @@
   },
   "tiles": {
     "stone": {
-      "source": "assets/stone.aseprite",
+      "source": "assets/tiles/stone.aseprite",
       "physics": {
         "mode": "static"
       }
     },
     "crate": {
-      "source": "assets/crate.aseprite",
+      "source": "assets/tiles/crate.aseprite",
       "physics": {
         "mode": "breakable"
       }
     },
     "ladder": {
-      "source": "assets/ladder.aseprite",
+      "source": "assets/tiles/ladder.aseprite",
       "physics": {
         "mode": "ladder"
       }
     },
     "ledge": {
-      "source": "assets/ledge.aseprite",
+      "source": "assets/tiles/ledge.aseprite",
       "physics": {
         "mode": "one_way"
       }
     },
     "water": {
-      "source": "assets/water.aseprite",
+      "source": "assets/tiles/water.aseprite",
       "physics": {
         "mode": "fluid"
       }
     }
   },
   "audio": {
-    "hit": "assets/hit.wav",
-    "music": "assets/music.wav"
+    "hit": "assets/audio/hit.wav",
+    "music": "assets/audio/music.wav"
   },
   "rooms": {
     "yard": {

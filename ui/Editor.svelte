@@ -49,6 +49,28 @@
   const actor=$derived(room?.entities[selectedEntity]);
   const exportName=$derived((project?.name??'game').toLowerCase().replace(/[^a-z0-9]+/g,'-') || 'game');
 
+  let updatesOpen=$state(false),component=$state('runtime'),platform=$state('linux-x64'),release=$state(null);
+  async function checkRelease(install=false){
+    error='';busy=true;
+    try{
+      const result=await request('./api/update','POST',{component,target:component==='runtime'?platform:undefined,install});
+      release=install?null:result;
+      status=install?(component==='studio'?'Restart Studio to finish the update':'Runtime installed'):result.available?'Update available':'Current version installed';
+    }catch(err){release=null;error=err.message;}finally{busy=false;}
+  }
+  async function downloadDesktop(event){
+    event.preventDefault();
+    const href=event.currentTarget.href;
+    if(busy)return;
+    if(scriptDirty){error='Save the script first';return;}
+    if(dirty && !await saveProject())return;
+    try{
+      const res=await fetch(href);
+      if(!res.ok)throw Error((await res.json()).error);
+      const url=URL.createObjectURL(await res.blob()),a=document.createElement('a');
+      a.href=url;a.download=exportName+'.zip';a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);
+    }catch(err){error=err.message;}
+  }
   async function request(path, method='GET', data) {
     const response=await fetch(path,{method,headers:data ? {'Content-Type':'application/json'} : {},body:data ? JSON.stringify(data) : undefined});
     const result=await response.json();
@@ -309,7 +331,7 @@
     }catch(err){error=err.message;return false;}finally{busy=false;}
   }
   async function saveScript(id){
-    if(!project.sprites[id].script) project.sprites[id].script=`scripts/${id}.cbor`;
+    if(!project.sprites[id].script) project.sprites[id].script=`scripts/sprites/${id}.cbor`;
     await updatePreviews();
     revision=(await request('./api/status')).revision;
     status='Script saved';
@@ -428,6 +450,9 @@
       <div class="card">
         <a download={exportName+'.waffleproj'} href="./api/archive" onclick={saveThenOpen}>Editable project</a>
         <a download={exportName+'.html'} href="./export.html" onclick={saveThenOpen}>Standalone web game</a>
+        <a href="./api/desktop?target=linux-x64" onclick={downloadDesktop}>Linux game</a>
+        <a href="./api/desktop?target=windows-x64" onclick={downloadDesktop}>Windows game</a>
+        <button onclick={()=>{updatesOpen=!updatesOpen;release=null;}}>Updates</button>
         <a download="gamewaffle-player.html" href="./gamewaffle-player.html">Web player</a>
         <a download={exportName+'.waffle'} href="./demo.waffle" onclick={saveThenOpen}>Cartridge</a>
       </div>
@@ -435,6 +460,15 @@
     <a class="button primary" href="./player.html" onclick={saveThenOpen}>Play game ↗</a>
   </div>
 </header>
+{#if updatesOpen}
+  <section class="row card" aria-label="Release updates">
+    <select aria-label="Update component" bind:value={component} onchange={()=>release=null}><option value="runtime">Desktop runtime</option><option value="studio">Studio</option></select>
+    {#if component==='runtime'}<select aria-label="Runtime platform" bind:value={platform} onchange={()=>release=null}><option value="linux-x64">Linux x64</option><option value="windows-x64">Windows x64</option></select>{/if}
+    <button disabled={busy} onclick={()=>checkRelease()}>Check release</button>
+    {#if release?.available}<button disabled={busy} onclick={()=>checkRelease(true)}>Install {release.tag}</button>{/if}
+    <button onclick={()=>updatesOpen=false}>Close</button>
+  </section>
+{/if}
 {#if error || sourceError}<p role="alert" class="error banner">{error || sourceError}</p>{/if}
 {#if project}
   <div class="mobile-tabs"><Sections labels={['Editor','Project','Settings']} bind:value={mobilePane}/></div>
@@ -539,8 +573,8 @@
           </div>
           <label class="stack">Import image or sound<input type="file" accept=".ase,.aseprite,.png,.wav,.qoa,.ogg,.opus" onchange={async e=>{
             const input=e.currentTarget,file=input.files[0];if(!file)return;
-            try{const response=await fetch('./api/import?name='+encodeURIComponent(file.name),{method:'POST',body:file});
-              if(!response.ok)throw Error((await response.json()).error);await checkAssets();newSource='assets/'+file.name;}
+            try{const response=await fetch('./api/import?name='+encodeURIComponent(file.name)+'&kind='+assetKind,{method:'POST',body:file});
+              if(!response.ok)throw Error((await response.json()).error);const imported=await response.json();await checkAssets();newSource=imported.path;}
             catch(err){error=err.message;}finally{input.value='';}
           }}></label>
           <div class="row asset-bar">

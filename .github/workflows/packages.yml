@@ -21,7 +21,7 @@ jobs:
           cp "$RUNNER_TEMP/wasm-bindgen-0.2.105-x86_64-unknown-linux-musl/wasm-bindgen" "$HOME/.cargo/bin/"
 
       - run: cargo test --manifest-path runtime/Cargo.toml --locked
-      - run: npm ci && npm run build && node packaging/check-game.mjs
+      - run: npm ci && npm run build && node packaging/check-game.mjs && node packaging/check-scripts.mjs && node packaging/check-desktop.mjs
       - name: Check editor at four screen widths
         run: |
           npm install --prefix "$RUNNER_TEMP/browser-check" playwright-core@1.58.2
@@ -53,6 +53,15 @@ jobs:
       - run: npm ci
       - run: cargo build --manifest-path player/Cargo.toml --features bundled --release --locked
       - run: node packaging/stage.mjs stage
+      - run: node packaging/verify-export.mjs
+      - name: Stage standalone runtime
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            cp stage/gamewaffle-player.exe GameWaffle-Player-windows-x64.exe
+          else
+            cp stage/gamewaffle-player GameWaffle-Player-linux-x64
+          fi
       - if: runner.os == 'Linux'
         run: |
           cp packaging/{AppRun,gamewaffle.desktop,gamewaffle.svg} stage/
@@ -70,6 +79,7 @@ jobs:
           name: package-${{ runner.os }}
           if-no-files-found: error
           path: |
+            GameWaffle-Player-*
             GameWaffle-Setup.exe
             GameWaffle-x86_64.AppImage
   android:

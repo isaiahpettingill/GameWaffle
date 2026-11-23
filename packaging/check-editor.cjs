@@ -17,7 +17,20 @@ for(const width of [1280,800,390,320]){
     if(tab==='World')await page.getByRole('button',{name:'right exit'}).click();
     if(tab==='Game')await page.getByRole('button',{name:'Display',exact:true}).click();
     if(tab==='Assets')await page.getByRole('button',{name:'Combat',exact:true}).click();
-    if(tab==='Blocks')await page.locator('.blocklySvg').first().waitFor();
+    if(tab==='Blocks'){
+      await page.locator('.blocklySvg').first().waitFor();
+      await page.getByRole('button',{name:'Text',exact:true}).click();
+      const source=page.locator('.cm-content');
+      const original=await source.innerText();
+      if(!original.includes('on '))throw Error('Text view has no events');
+      await source.fill('on tick\n  jump(\nend');
+      await page.locator('.cm-lintRange-error, .cm-lint-marker-error').first().waitFor();
+      await page.locator('button[aria-pressed]').filter({hasText:/^Blocks$/}).click();
+      await page.locator('.cm-content:visible').waitFor();
+      await source.fill(original);
+      await page.locator('button[aria-pressed]').filter({hasText:/^Blocks$/}).click();
+      await page.locator('.blocklySvg:visible').first().waitFor();
+    }
     const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);
     if(overflow)throw Error('Horizontal overflow '+width+' '+tab);
   }
