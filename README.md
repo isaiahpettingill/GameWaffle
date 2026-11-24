@@ -1,6 +1,6 @@
 # GameWaffle
 
-Use GameWaffle Studio to make 2D sprite games. Use the Room editor to make maps. Use Blockly to make sprite scripts. The Rust runtime uses Box2D for physics.
+Use GameWaffle Studio to make 2D sprite games. Use the Room editor to make maps. Use Blockly to make sprite scripts. The Rust runtime uses Rapier2D for physics.
 
 ## Build and start Studio
 
@@ -14,7 +14,7 @@ npm run build
 npm start
 ```
 
-Studio opens a Tauri window. Select **Browse** to choose a location for a new project. Check the path under **Create at**. Select **Open project** to browse for a project folder or a `.waffleproj` file. Studio opens your most recent project at startup. Use **File → Project Manager** to open another recent project. Select **Open Basalt Works example** to open a copy of the demo. On Linux, install the WebKitGTK 4.1 and GTK 3 development packages before building Studio. Use `npm run studio:browser` for the browser edition. Select **Top-down Courtyard**, then select **Play room** to try the top-down controls.
+Studio opens a Tauri window. Select **New Project**, enter a game name, and choose a first room. Studio generates a folder name from the game title. Use **Change…** to choose another location. Select **Open Project** to browse for a project folder or a `.waffleproj` file. Studio opens your most recent project at startup. Use **File → Project Manager** to open another recent project. Select **Open Basalt Works example** to open a copy of the demo. On Linux, install the WebKitGTK 4.1 and GTK 3 development packages before building Studio. Use `npm run studio:browser` for the browser edition. Select **Top-down Courtyard**, then select **Play room** to try the top-down controls.
 
 To open a different project, run this command.
 
@@ -27,7 +27,7 @@ npm start -- --project path/to/project
 1. In **Project**, select **New room** (+). Select **New platformer room** or **New top-down room**.
 2. Select the layer that you want to edit. Use **Terrain** or **Walls** for collision. Use **Background** or **Ground** for decoration.
 3. Select a tile from the palette. Select **Brush**. Drag with the left mouse button to paint. Drag with the right mouse button to erase tiles on the active layer. Use **Rectangle** to fill an area. Use **Pick tile** to select a tile from the map.
-4. Select a actor in **Project**. Click the map to add an instance. You can also drag the definition to the map.
+4. Select an entity in **Project**. Click the map to add an instance. You can also drag the definition to the map.
 5. Select **Play room** to save and test the room.
 
 Use **Grid** to show tile boundaries. Use **Collision** to show collision tiles. Use **Pan**, the zoom controls, and **Fit** to change the view. Use **Undo** to reverse a complete brush stroke or room edit. Use **Redo** to apply the change again.
@@ -35,7 +35,7 @@ Use **Grid** to show tile boundaries. Use **Collision** to show collision tiles.
 | Task | Shortcut |
 |---|---|
 | Brush, eraser, rectangle, pick tile | B, E, R, I |
-| Add Sprite, select instance, pan | P, V, H |
+| Place entity, select instance, pan | P, V, H |
 | Pan temporarily | Hold Space or drag with the middle mouse button |
 | Remove the selected sprite | Delete |
 | Undo and redo | Ctrl+Z and Ctrl+Shift+Z |
@@ -43,13 +43,13 @@ Use **Grid** to show tile boundaries. Use **Collision** to show collision tiles.
 
 On macOS, use Command in place of Ctrl.
 
-### Use actor instances
+### Use entity instances
 
-Add a actor once. Add as many instances of that definition as necessary. Instances use the same art and script. Each instance has its own name, position, and game state.
+Add an entity once. Add as many instances of that definition as necessary. Instances use the same art and script. Each instance has its own name, position, and game state.
 
-Select an instance on the map or in the **Instances** panel. Set its player slot if it needs player controls. Open **Instance overrides** to change its starting health, animation, draw layer, or facing. Leave a field empty to use the definition value where applicable. Select **Open actor** or **Open script** to make a change for all instances.
+Select an instance on the map or in the **Instances** panel. Set its player slot if it needs player controls. Open **Instance overrides** to change its starting health, animation, draw layer, or facing. Leave a field empty to use the definition value where applicable. Select **Open entity** or **Open script** to make a change for all instances.
 
-To create an instance during play, use **Create instance of** in a Blockly script. Select the actor. Set the X and Y offsets in pixels from the instance that runs the block. The new instance runs the **Start** event before its first physics step.
+To create an instance during play, use **Create instance of** in a Blockly script. Select the entity. Set the X and Y offsets in pixels from the instance that runs the block. The new instance runs the **Start** event before its first physics step.
 
 ### Platformer and top-down settings
 
@@ -77,7 +77,7 @@ The player applies the effect to the room, sprites, and particles before it draw
 
 Use [demo/project.json](demo/project.json) as an example. Put art and audio files in the project's `assets/` directory. Studio rebuilds the saved project when these files change. Select **Rebuild assets** to start a rebuild manually.
 
-- **Actors.** Choose a sprite file in **Actors → New actor**. Set the physics mode. Open **Collision filter** to set the category, mask, and group. Open **Appearance** to set the visual layer. Select **Code** beside an actor in the project sidebar to open its script. Select **Blocks** or **Text** in the script editor. Studio saves each sprite script as CBOR. The compiler converts the blocks to operation codes and operands.
+- **Entities.** Choose a sprite file in **Entities → New entity**. Set the physics mode. Open **Collision filter** to set the category, mask, and group. Open **Appearance** to set the visual layer. Select **Code** beside an entity in the project sidebar to open its script. Select **Blocks** or **Text** in the script editor. Studio saves each sprite script as CBOR. The compiler converts the blocks to operation codes and operands.
 - **Tiles.** Set the project tile size to 8 × 8, 16 × 16, 24 × 24, or 32 × 32 pixels. Use the same size for all tile frames. Import the Aseprite file as a tile set. Studio creates a tile for each tag. To add a tile while Studio is open, add a tag to the Aseprite file in the project folder and save the file. The new tile appears in the room palette. Save the project to keep the tile definition. The project sidebar lists each source file once. Select a tile in the room palette to paint with it. Each frame in the tag is a variant. Use `:animated:` or `:fluid:` to play the frames in sequence. Use `:mirror-x:`, `:mirror-y:`, or `:rot-90:` to transform the frames. Set tile properties in Studio.
 - **Art.** Studio reads `.ase`, `.aseprite`, and `.png` files. It uses indexed palettes, transparency, frame times, and tag playback direction. Flatten native Aseprite tilemap layers and layers with non-normal blend modes before import.
 - **Collision.** Enable collision on a room layer to use its tile physics. Available tile types include solid tiles, one-way platforms, ladders, breakable tiles, fluid zones, and rigid bodies. The compiler combines adjacent static collision tiles and makes a separate texture atlas for each room.
@@ -89,35 +89,40 @@ Open **Code**, select **Blocks**, then select **Logic**. The **Set** and **Get**
 
 | Scope | Duration | Initial value |
 |---|---|---|
-| Local | One actor instance | Zero |
+| Local | One entity instance | Zero |
 | Global | One game session | Value in **Game**, or zero |
 | Flag | One game session | Value in **Game**, or false |
 
 A room change keeps the global variables and flags. It creates new local variables for the instances in the next room. A game reset restores the initial global variables and flags.
 
-Connect number, variable, comparison, or button blocks to **If** and **While**. Use **Wait** to continue an event after a number of game ticks. The runtime also pauses long scripts after a fixed number of instructions. It continues those scripts on later ticks. A running event has one continuation for each instance. A second occurrence of the same event does not start another continuation.
+Connect boolean variables, comparisons, or input conditions to **If** and **While**. Use **Repeat** for a fixed number of iterations. Use **Wait** to continue an event after a number of game ticks. The runtime also pauses long scripts after a fixed number of instructions. It continues those scripts on later ticks. A running event has one continuation for each instance. A second occurrence of the same event does not start another continuation.
 
-Use integers for variable arithmetic. Use decimal constants for engine parameters such as movement speed. The runtime reports an error if a script divides by zero or exceeds the integer limit.
+WaffleScript has integers, reals, booleans, and strings. Use an explicit conversion for mixed numeric arithmetic. See the scripting guide for type rules, math functions, and translation tables.
 
 ## Export a game
 
-In Studio, open **File** and select **Standalone web game**. Studio saves the project and downloads one HTML file. The file contains the game cartridge and the WebAssembly runtime. Open it in a browser or put it on a static web server. The game can run offline. On Android, use a browser that supports WebAssembly and use the touch controls.
+In Studio, open **File → Export…** and choose **Standalone web game**. Studio saves the project and downloads one HTML file. The file contains the game cartridge and the WebAssembly runtime. Open it in a browser or put it on a static web server. The game can run offline. On Android, use a browser that supports WebAssembly and use the touch controls.
 
-Select **Cartridge** to download only the `.waffle` file. To play this file, select **Open cartridge** in the player.
+Choose **Cartridge** to download the `.waffle` file. If the project has translation tables, select a language for each playable export. To play this file, select **Open cartridge** in the player.
 
 After you build Studio, use these commands to export from the command line.
 
 ```sh
 npm run cart -- path/to/project path/to/game.waffle
+npm run cart -- path/to/project path/to/game-es.waffle --locale es
 npm run export:web -- path/to/project path/to/game.html
 npm run export:web -- path/to/game.waffle path/to/game.html
 ```
 
 ## Run a separate player
 
+Standalone players open without a cartridge. Open a `.waffle` file to start a game.
+
 ### Web
 
-In Studio, select **File → Web player** to get a separate copy. Run `npm run build:player` to build only the web player. Open `web-built/standalone/gamewaffle-player.html` in a browser. Select **Open cartridge**. The player can run offline.
+In Studio, select **File → Export… → Web player** to get a separate copy. Run `npm run build:player` to build only the web player. Open `web-built/standalone/gamewaffle-player.html` in a browser. Select **Open cartridge**. The player can run offline.
+
+Set cover art in **Game → Settings → Cartridge cover art** before exporting. The image is embedded in each exported cartridge, including separate language editions.
 
 ### Desktop
 
@@ -131,17 +136,16 @@ Open the player in `web-built/native/`. Press **F1** to open a cartridge. You ca
 
 ### Android
 
-The native Android player uses SDL3. It includes a demo cartridge. Tap **Open** to select a different cartridge. Use the touch controls or connect a gamepad.
+The native Android player opens to **My games**. Tap **Choose folder** to index the `.waffle` files in a directory and its subfolders. The app remembers that directory. You can also open an individual cartridge from **Library options**. In portrait, the touch gamepad sits below the display. In landscape it overlays the lower corners. Use **Game menu** to save, load, toggle the touch controls, or return to the library.
 
 To build the APK, install Android NDK r27c, Android platform 35, Android build tools 35.0.0, JDK 21, CMake, and Ninja. Get the SDL 3.4.2 source files. Set `ANDROID_NDK_HOME`, `ANDROID_PLATFORM_JAR`, `ANDROID_BUILD_TOOLS`, `JAVA_HOME`, and `SDL_SOURCE` to the paths for these tools and files.
 
 ```sh
 rustup target add aarch64-linux-android x86_64-linux-android
-npm run cart
 bash player/android/build.sh
 ```
 
-Install `web-built/android/GameWaffle-Player.apk` on an Android device. Local builds use a debug key. Tagged releases use the release key. To include a different game, supply its cartridge path as the first argument to the build script.
+Install `web-built/android/GameWaffle-Player.apk` on an Android device. Local builds use a debug key. Tagged releases use the release key.
 
 ### Render resolution
 
@@ -173,21 +177,21 @@ Use the [SDK reference](docs/sdk.md) for cartridge layout, block source, and hos
 
 LAN clients connect to `/lan` with WebSocket. Send a `join` message to request player slots. The host returns their slot numbers in `slots`. Send an `input` message with the button states for each client slot. The host sends `snapshot` messages at 30 Hz. Get the matching cartridge from `/lan.waffle`.
 
-The Box2D Rust port uses its [upstream license](runtime/vendor/box2d-rs/LICENSE). GameWaffle uses a WebAssembly-compatible clock for the profiling timer.
+The runtime uses [Rapier2D](https://rapier.rs/) with four-lane SIMD, enhanced determinism, and thin LTO in release builds. Web builds require WebAssembly SIMD128. Desktop builds use SSE2 on x86-64 and NEON on ARM64.
 
 ## Edit a project
 
-Open a folder to work on its source files. Select **Actors → New actor**, **Assets → Tiles → New tile set**, or **Assets → Sounds → New sound**. Choose a project file, or select **Browse device**. Check the name and select **Create**. Studio reuses an identical source file. If two source files have the same name and different contents, Studio gives the new file a separate path. Existing actors and tiles keep their IDs. A PNG supplies one frame.
+Open a folder to work on its source files. Select **Entities → New entity**, **Assets → Tiles → New tile set**, or **Assets → Sounds → New sound**. Choose a project file, or select **Browse device**. Check the name and select **Create**. Studio reuses an identical source file. If two source files have the same name and different contents, Studio gives the new file a separate path. Existing entities and tiles keep their IDs. A PNG supplies one frame.
 
 Open **Tools → Updates** to check Studio and the desktop runtime. Studio detects the installed versions and the host platform.
 
-Select **File → Editable project** to copy the project to a single `.waffleproj` file. Studio keeps its files in a virtual filesystem. A save replaces the archive. Use this command to open an archive or a folder after you build Studio.
+Select **File → Export… → Editable project** to copy the project to a single `.waffleproj` file. Studio keeps its files in a virtual filesystem. A save replaces the archive. Use this command to open an archive or a folder after you build Studio.
 
 ```sh
 node packaging/studio.mjs path/to/game.waffleproj
 ```
 
-Select **File → Cartridge** to distribute a game. The cartridge contains compiled instructions and room atlases. The player checks an Ed25519 signature before it runs the game. The public key travels with the cartridge. A third party can build and sign a different cartridge.
+Select **File → Export… → Cartridge** to distribute a game. The cartridge contains compiled instructions and room atlases. The player checks an Ed25519 signature before it runs the game. The public key travels with the cartridge. A third party can build and sign a different cartridge.
 
 ## Edit on Android
 
@@ -197,23 +201,51 @@ Extract `GameWaffle-Android-Studio.tar.gz` in Termux. Install Node.js 24 or late
 node packaging/studio.mjs
 ```
 
+## Paint tiles and move entities
+
+In the Room editor, use **Brush** or **Rectangle** to drag a tile from the
+palette onto the active layer. To move an entity, use **Select instance** and
+drag it. **Place entity** places on a click in empty space and moves an existing
+instance when you drag it.
+
+The room canvas has space beyond every edge. Middle-drag or use two fingers to
+pan. A stepped mouse wheel zooms around the pointer. Use a pinch to zoom on a
+touchscreen or touchpad. Continuous touchpad scrolling pans. Hold Ctrl while
+scrolling to zoom with a smooth wheel, or Shift to pan. **Fit** centers the room.
+
+Set a room image in **Room → Background & sound → Background image**. Select
+a PNG or Aseprite project asset. The first frame is drawn behind the room.
+**Background scroll** ranges from 0% for a screen-fixed image to 100% for a
+room-fixed image.
+
+## Generate a HUD minimap
+
+In **Game → Display → HUD minimap**, choose **Whole world** or **Explored
+rooms**. Studio lays out the room outlines from the directions of their exits,
+draws links, and highlights the current room. Explored mode reveals a room
+when the player enters it and saves discoveries with game progress.
+
 ## Connect rooms
 
 Select **World**. Select a room and an exit. Select a destination. Use **Once per save** for a fixed random choice in each new game. Use **On each crossing** to draw again. Add a required flag to lock an exit.
 
 For a continuous crossing, connect opposite edges in both directions. Select **Fixed** and **Connect opposite edges** on both exits. Use equal edge lengths. The camera shows terrain from the next room before the player crosses. Sprites and physics start when the player enters the next room.
 
-Use a camera block to follow an instance, show a position, or follow a selected player. Normal enemy scripts and bodies pause outside the camera and player activity areas. Enable **Actors → Combat → Run scripts off camera** for a boss.
+Use a camera block to follow an instance, show a position, or follow a selected player. Normal enemy scripts and bodies pause outside the camera and player activity areas. Enable **Entities → Combat → Run scripts off camera** for a boss.
 
 ## Items, dialogue, and saves
 
-Use the **Items** blocks to give, remove, or count items in the party inventory. Use **Dialogue & HUD** to show a counter or a message. Press A to advance dialogue. In the Top-down Courtyard, walk up to collect the key.
+Use the **Items** blocks to give, remove, or count items in the party inventory. Use **Looks & sound** to show a counter, message, or game menu. Press A to advance dialogue. In the Top-down Courtyard, walk up to collect the key.
 
 To use a custom bitmap font, import a 96 × 48 pixel sheet. Arrange ASCII characters 32 through 127 in 16 columns and 6 rows. Each cell has 6 × 8 pixels. Select the font in **Game → Display**.
 
-On desktop, press **F4** to map a controller. Press each control in order. The player saves the mapping for that controller model. Press **F5** to save, **F6** to select a slot, or **F9** to load. Android has **Pad**, **Save**, and **Load** controls. The web player has a slot selector.
+On desktop, press **F4** to map a controller. Press each control in order. The player saves the mapping for that controller model. Press **F5** to save, **F6** to select a slot, or **F9** to load. Android has save slots in **Game menu**. The web player has a slot selector.
 
-Each save includes the current room, player positions, global variables, flags, inventory, counters, and exit random state. Use the **Load saved game** event to restore other scene behavior. Set `saveId` in the project to keep its save identity when you rename a game.
+Each save includes progress and the active room’s entities, spawned entities,
+physics poses and velocities, animation progress, open menus, and waiting
+scripts. Scripts resume when their compiled instructions match. Older saves
+still restore their progress fields. The runtime reconstructs contacts when opening a portable save. Libretro save states also preserve the Rapier solver state and the audio playback positions for replay.
+Set `saveId` in the project to keep its save identity when you rename a game.
 
 ## Build release packages
 
@@ -231,9 +263,9 @@ GameWaffle uses the [0BSD license](LICENSE).
 
 ## Add particle effects
 
-Select an actor in **Actors → Particles**. Select an effect and set the rate in particles per second. Each instance has its own emitter. The presets include sparks, dust, smoke, flame, bubbles, rain, and snow.
+Select an entity in **Entities → Particles**. Select an effect and set the rate in particles per second. Each instance has its own emitter. The presets include sparks, dust, smoke, flame, bubbles, rain, and snow.
 
-Use **Particles** in Blockly for bursts, continuous effects, and stop commands. Emitted particles finish their movement after the source disappears. The runtime limits a room to 2,048 live particles and 256 new particles per tick. Particles use a separate random sequence from room connections.
+Use **Looks & sound** in Blockly for bursts, continuous effects, and stop commands. Emitted particles finish their movement after the source disappears. The runtime limits a room to 2,048 live particles and 256 new particles per tick. Particles use a separate random sequence from room connections.
 
 Use an active flag on a sprite, tile, instance, or map layer to control when it exists. A flag change also updates collision and pathfinding for conditional solid tiles. Combine conditions on a definition and its placement to require both.
 
@@ -251,9 +283,8 @@ buttons operate A, B, and X. Use Start for the game menu. RetroArch supplies
 keyboard mapping and the Android touch overlay.
 
 RetroArch saves game progress in its save RAM file. Save states use GameWaffle
-checkpoints. A checkpoint restores the room, player positions, inventory, flags,
-counters, and global variables. Moving bodies and running scripts restart in
-the restored room.
+checkpoints. A checkpoint restores the active room, entity state, inventory,
+variables, and compatible script continuations.
 
 To build a desktop core from source, run this command. Use the same SDL build
 dependencies as the desktop player.
@@ -302,14 +333,14 @@ This preset uses the contrast-sensitive edge reconstruction used by Lemuroid's H
 | Term | Meaning |
 | --- | --- |
 | Asset | A project resource, such as an image, tile, or sound. |
-| Sprite | The image or animation that an actor displays. |
-| Actor | A reusable definition with a sprite, script, and physics properties. |
-| Instance | One occurrence of an actor in a room. |
+| Sprite | The image or animation that an entity displays. |
+| Entity type | A reusable definition with a sprite, script, and physics properties. |
+| Instance | One occurrence of an entity in a room. |
 | Player | One of four input slots assigned to an instance. |
 | Control | A D-pad direction or a console button. |
 | Action | A named input bound to one or more controls. |
 | Item | A registered inventory entry. |
 
-To make an actor playable, select it in **Actors**. Select a player and **Place player in room**. Click the map to place the instance. To assign an existing instance, select it and set **Controlled by**. An actor without a script starts with built-in movement. Clear **Built-in movement** to control movement from its script.
+To make an entity playable, select it in **Entities**. Select a player and **Place player in room**. Click the map to place the instance. To assign an existing instance, select it and set **Controlled by**. An actor without a script starts with built-in movement. Clear **Built-in movement** to control movement from its script.
 
-In **Game → Controls**, create an action such as `jump` and select its controls. In **Blocks → Events**, select the action and **pressed** or **released**. Each player receives input on its own instance. Register inventory items in **Game → Items** before you use them in scripts.
+In **Game → Controls**, create an action such as `jump` and select its controls. Under **On tick**, read the action’s held, pressed, or released state from **Input & sensing**. Each player receives input on its own instance. Register inventory items in **Game → Items** before you use them in scripts.

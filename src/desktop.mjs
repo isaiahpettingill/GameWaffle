@@ -4,6 +4,7 @@ import {homedir} from 'node:os';
 import {createHash,randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {zipSync} from 'fflate';
+import {unpack} from './cartridge.mjs';
 
 const app=fileURLToPath(new URL('../',import.meta.url));
 const cache=join(process.env.LOCALAPPDATA??process.env.XDG_DATA_HOME??join(homedir(),'.local','share'),'GameWaffle','updates');
@@ -63,13 +64,26 @@ export async function update(component,t=nativeTarget,request=fetch){
   if(component==='runtime')await atomic(join(cache,t,'current'),info.tag,0o600);
   return {...info,path};
 }
-export async function exportDesktop(bytes,t=nativeTarget){
+export async function exportDesktop(bytes,t=nativeTarget,request=fetch){
   runtimeAsset(t);
+  const abi=unpack(bytes).runtimeAbi;
+  const compatible=player=>player && (!abi || player.includes(Buffer.from('GAMEWAFFLE_RUNTIME_ABI_'+abi+'\0')));
   const cached=await installedRuntime(t);
-  let player=cached && await optional(cached.path);
-  if(!player && t===nativeTarget)player=await optional(join(app,binary(t)));
-  if(!player && t===nativeTarget)player=await optional(join(app,'web-built','native',binary(t)));
-  if(!player && t!==nativeTarget)player=await readFile((await update('runtime',t)).path);
-  if(!player)throw Error('Install the desktop runtime before export');
+  const paths=cached?[cached.path]:[];
+  if(t===nativeTarget)paths.push(join(app,'web-built','native',binary(t)),join(app,binary(t)));
+  let player;
+  for(const path of paths){
+    const candidate=await optional(path);
+    if(compatible(candidate)){player=candidate;break;}
+  }
+  if(!player && t!==nativeTarget){
+    try{
+      const candidate=await readFile((await update('runtime',t,request)).path);
+      if(compatible(candidate))player=candidate;
+    }catch(error){
+      if(error.message!=='This version is current')throw error;
+    }
+  }
+  if(!player)throw Error('Install or build a desktop player compatible with this cartridge before exporting');
   return zipSync({[binary(t)]:[player,{os:3,attrs:(0o100755<<16)>>>0}],'game.waffle':bytes,'LICENSE':await readFile(join(app,'LICENSE'))},{level:4});
 }

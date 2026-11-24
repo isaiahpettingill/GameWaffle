@@ -3,6 +3,36 @@ const fs=require('node:fs/promises');
 const os=require('node:os');
 const path=require('node:path');
 const assert=require('node:assert/strict');
+async function checkBlockLayout(page,tab){
+  const workspace=page.locator('.block-workspace:visible');
+  await workspace.locator('.blocklySvg:visible').first().waitFor();
+  const category=page.getByLabel('Block category',{exact:true});
+  for(const name of ['Combat','Entities','Routines']){
+    if(await category.isVisible())await category.selectOption({label:name});
+    else await workspace.locator('.blocklyToolboxCategory').filter({hasText:name}).click();
+    const fit=await workspace.evaluate(element=>{
+      const bounds=element.getBoundingClientRect();
+      const flyout=element.querySelector('.blocklyToolboxFlyout');
+      const blocks=[...flyout.querySelectorAll('.blocklyBlockCanvas > .blocklyDraggable')];
+      const paletteEdge=flyout.querySelector('.blocklyFlyoutBackground').getBoundingClientRect().right;
+      const clearBelow=flyout.style.clipPath || flyout.querySelector('[style*="clip-path"]')?.style.clipPath;
+      return {
+        count:blocks.length,
+        allVisible:blocks.every(block=>block.getBoundingClientRect().right<=bounds.right),
+        canvasSpace:bounds.right-paletteEdge,
+        clearBelow:Boolean(clearBelow),
+      };
+    });
+    assert.ok(fit.count>0 && fit.allVisible && fit.canvasSpace>20,tab+' should fit the '+name+' palette');
+    if(name==='Combat')assert.ok(fit.clearBelow,'A short palette leaves the canvas underneath available');
+  }
+  await page.getByRole('button',{name:'Fit blocks',exact:true}).click();
+  await workspace.locator('.blocklyToolboxFlyout').waitFor({state:'hidden'});
+  const workspaceBottom=await workspace.evaluate(element=>element.getBoundingClientRect().bottom);
+  const paneBottom=await page.locator('.code-pane').evaluate(element=>element.getBoundingClientRect().bottom);
+  assert.ok(paneBottom-workspaceBottom<=2,tab+' should use the full height of the code pane');
+}
+
 async function checkFormRows(page,view){
   const errors=await page.locator('.field-row,.record-form,.asset-source,.fields,.pair,form.row,.address').evaluateAll(rows=>{
     const errors=[];
@@ -36,10 +66,12 @@ const url=await new Promise((resolve,reject)=>{
 const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||'/usr/bin/google-chrome',args:['--no-sandbox','--disable-dev-shm-usage']});
 for(const width of [1280,800,390,320]){
   const page=await browser.newPage({viewport:{width,height:760}});
-  page.on('pageerror',err=>console.error(err));
+  const pageErrors=[];page.on('pageerror',err=>pageErrors.push(err.message));
   await page.goto(url+'/');
+  await page.locator('.appbar .status').filter({hasText:/^(Ready|Unsaved project|Project saved)$/}).waitFor({state:'attached'});
+  assert.deepEqual(await page.locator('.banner[role=alert]').allTextContents(),[],'Project opens without a startup error');
   const nav=page.getByRole('navigation',{name:'Editor views'});
-  for(const tab of ['Room','World','Game','Assets','Actors','Code']){
+  for(const tab of ['Room','World','Game','Assets','Entities','Code']){
     await nav.getByText(tab,{exact:true}).click();
     if(tab==='Assets'){
       const field=page.getByLabel('Find source files');
@@ -49,9 +81,12 @@ for(const width of [1280,800,390,320]){
       if(b.x>=a.x+a.width)assert.ok(Math.abs(a.y-b.y)<1,'Source search and import top edges');
       else assert.ok(b.y>=a.y+a.height,'Wrapped import button clears the search field');
     }
-    if(tab==='World')await page.getByRole('button',{name:'right exit'}).click();
+    if(tab==='World'){
+      await page.getByRole('button',{name:'right exit'}).click();
+      await page.getByRole('dialog',{name:'Edit Connection'}).getByRole('button',{name:'Cancel',exact:true}).click();
+    }
     if(tab==='Game'){
-      const form=page.locator('.record-form');
+      const form=page.locator('.record-form').first();
       const fields=form.locator('select,input,button');
       assert.deepEqual(await fields.evaluateAll(nodes=>nodes.map(n=>n.tagName)),['SELECT','INPUT','INPUT','BUTTON']);
       const sizes=await fields.evaluateAll(nodes=>nodes.map(n=>n.getBoundingClientRect().height));
@@ -61,7 +96,7 @@ for(const width of [1280,800,390,320]){
         await checkFormRows(page,section);
       }
     }
-    if(tab==='Actors')await page.getByRole('button',{name:'Combat',exact:true}).click();
+    if(tab==='Entities')await page.getByRole('button',{name:'Combat',exact:true}).click();
     if(tab==='Code'){
       await page.getByRole('button',{name:'Blocks',exact:true}).click();
       await page.locator('.blocklySvg:visible').first().waitFor();
@@ -74,7 +109,7 @@ for(const width of [1280,800,390,320]){
       await page.locator('button[aria-pressed]').filter({hasText:/^Blocks$/}).click();
       await page.locator('.cm-content:visible').waitFor();
       if(width===1280){
-        const sprite=await page.getByLabel('Script file').locator('option').first().innerText();
+        const sprite=(await page.getByLabel('Script file').inputValue()).split(':')[1];
         await page.waitForFunction(async id=>(await(await fetch('./api/recovery/'+encodeURIComponent('./api/script/'+id))).json())?.source?.includes('jump('),sprite);
         await page.reload();await nav.getByText('Code',{exact:true}).click();
         await page.getByText('Recovered script draft').waitFor();
@@ -83,24 +118,159 @@ for(const width of [1280,800,390,320]){
       await source.fill(original);
       await page.locator('button[aria-pressed]').filter({hasText:/^Blocks$/}).click();
       await page.locator('.blocklySvg:visible').first().waitFor();
-      const discard=page.getByRole('button',{name:'Discard',exact:true});
-      if(await discard.isVisible()){await discard.click();await discard.waitFor({state:'hidden'});}
+      await page.locator('summary[aria-label="Script actions"]').click();
+      const discard=page.getByRole('button',{name:'Discard draft…',exact:true});
+      if(await discard.isVisible()){
+        await discard.click();
+        await page.getByRole('dialog',{name:'Discard Script Draft'}).getByRole('button',{name:'Discard draft'}).click();
+        await discard.waitFor({state:'hidden'});
+      }else await page.keyboard.press('Escape');
     }
-    const codePane=await page.locator('.code-pane').boundingBox(),mapPane=await page.locator('.map-pane').boundingBox();
-    assert.ok(codePane?.height>0 && mapPane?.height>0,'Both authoring panes must stay visible in '+tab);
-    assert.ok(width<=620 ? mapPane.y>=codePane.y+codePane.height-1 : mapPane.x>=codePane.x+codePane.width-1,'Authoring pane position');
+    if(tab==='Code'){
+      await checkBlockLayout(page,tab);
+      const codePane=await page.locator('.code-pane').boundingBox(),mapPane=await page.locator('.map-pane').boundingBox();
+      assert.ok(codePane?.height>0 && mapPane?.height>0,'Both authoring panes must stay visible in '+tab);
+      assert.ok(width<=620 ? codePane.y>=mapPane.y+mapPane.height-1 : codePane.x>=mapPane.x+mapPane.width-1,'Authoring pane position');
+    }else if(tab==='Room'){
+      await page.getByLabel('Room map',{exact:true}).waitFor();
+      assert.equal(await page.locator('.code-pane').isVisible(),false,'Room shows the map without the script editor');
+      assert.equal(await page.getByRole('button',{name:'Select instance',exact:true}).getAttribute('aria-pressed'),'true');
+      assert.equal(await page.getByRole('button',{name:'Brush',exact:true}).getAttribute('aria-pressed'),'false');
+    }else{
+      assert.equal(await page.locator('.author-panes').isVisible(),false,'Project view should take the workspace in '+tab);
+      assert.ok(await page.getByRole('region',{name:'Project tools'}).isVisible());
+    }
     await checkFormRows(page,tab);
     const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);
     if(overflow)throw Error('Horizontal overflow '+width+' '+tab);
   }
   if(width===1280){
     await nav.getByText('Room',{exact:true}).click();
+    await page.evaluate(({path,room})=>{
+      localStorage.setItem('gamewaffle.room-view.'+JSON.stringify([path,room]),
+        JSON.stringify({zoom:1e-20,center:[100000,-100000]}));
+    },{path:project,room:'yard'});
+    await page.reload();
+    const roomMap=page.getByLabel('Room map',{exact:true});
+    const viewport=page.locator('.map-pane .viewport');
+    const pan=()=>viewport.evaluate(el=>({x:el.scrollLeft,y:el.scrollTop,w:el.scrollWidth-el.clientWidth,h:el.scrollHeight-el.clientHeight}));
+    await viewport.scrollIntoViewIfNeeded();
+    await page.waitForFunction(()=>document.querySelector('.map-pane .viewport').scrollLeft>0);
+    assert.ok((await roomMap.boundingBox()).width>100,'A stale camera cannot collapse the room canvas');
+    const beforePan=await pan();
+    assert.ok(beforePan.w>200 && beforePan.h>100,'Room needs space beyond its edges');
+    const viewBounds=await viewport.boundingBox(), px=viewBounds.x+viewBounds.width/2, py=viewBounds.y+viewBounds.height/2;
+    await page.mouse.move(px,py);
+    await page.mouse.down({button:'middle'});
+    await page.mouse.move(px-65,py-35,{steps:5});
+    await page.mouse.up({button:'middle'});
+    assert.ok((await pan()).x>beforePan.x+40);
+    const beforeZoom=(await roomMap.boundingBox()).width;
+    await page.mouse.wheel(0,-120);
+    await page.waitForFunction(previous=>document.querySelector('canvas[aria-label="Room map"]').getBoundingClientRect().width>previous,beforeZoom);
+    const beforeWheel=await pan();
+    await page.mouse.wheel(34,20);
+    await page.waitForFunction(previous=>document.querySelector('.map-pane .viewport').scrollLeft>previous,beforeWheel.x+14);
+    const touchStart=await pan();
+    const cdp=await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:2});
+    const touchPoints=[{x:px-20,y:py,id:0},{x:px+20,y:py,id:1}];
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints});
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:touchPoints.map(point=>({...point,x:point.x-42,y:point.y-24}))});
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    assert.ok((await pan()).x>touchStart.x+25);
+    const beforePinch=(await roomMap.boundingBox()).width;
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints});
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:touchPoints.map((point,index)=>({...point,x:point.x+(index===0?-18:18)}))});
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    await page.waitForFunction(previous=>document.querySelector('canvas[aria-label="Room map"]').getBoundingClientRect().width>previous,beforePinch);
+    await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false});
+    await cdp.detach();
+    await page.getByTitle('Fit and center room').click();
+    const getProject=()=>page.evaluate(async()=> (await(await fetch('./api/project')).json()).project);
+    const initial=(await getProject()).rooms.yard;
+    const maker=initial.entities.find(actor=>actor.player===0);
+    const spriteEntry=page.locator('.project .actor-entry').getByRole('button',{name:maker.sprite,exact:true});
+    await page.getByRole('button',{name:'Brush',exact:true}).click();
+    assert.equal(await spriteEntry.getAttribute('draggable'),'false');
+    const tile=page.locator('.map .tile-list').getByRole('button',{name:'stone',exact:true});
+    assert.equal(await tile.getAttribute('draggable'),'true');
+    await roomMap.scrollIntoViewIfNeeded();
+    const bounds=await roomMap.boundingBox(), size=(await getProject()).tileSize;
+    const xy=(x,y)=>[bounds.x+x/(initial.cols*size)*bounds.width,bounds.y+y/(initial.rows*size)*bounds.height];
+    const [tileX,tileY]=xy(60,60);
+    const drop=async (type,value)=>{
+      const dataTransfer=await page.evaluateHandle(([type,value])=>{
+        const transfer=new DataTransfer();transfer.setData(type,value);return transfer;
+      },[type,value]);
+      await roomMap.dispatchEvent('drop',{dataTransfer,clientX:tileX,clientY:tileY});
+      await dataTransfer.dispose();
+    };
+    await drop('application/x-gamewaffle-sprite',maker.sprite);
+    await drop('application/x-gamewaffle-tile','stone');
+    await page.waitForFunction(async()=> (await(await fetch('./api/project')).json()).project.rooms.yard.layers.some(layer=>layer.cells.some(([x,y,id])=>x===2&&y===2&&id==='stone')));
+    assert.equal((await getProject()).rooms.yard.entities.length,initial.entities.length);
+
+    await page.getByRole('button',{name:'Place entity',exact:true}).click();
+    await roomMap.scrollIntoViewIfNeeded();
+    const actorBounds=await roomMap.boundingBox();
+    const fromX=actorBounds.x+maker.x/(initial.cols*size)*actorBounds.width;
+    const fromY=actorBounds.y+maker.y/(initial.rows*size)*actorBounds.height;
+    await page.mouse.move(fromX,fromY);
+    await page.mouse.down();
+    await page.mouse.move(fromX+actorBounds.width/initial.cols*2,fromY,{steps:5});
+    await page.mouse.up();
+    await page.waitForFunction(async previous=> (await(await fetch('./api/project')).json()).project.rooms.yard.entities.some(actor=>actor.player===0 && actor.x!==previous),maker.x);
+    assert.equal((await getProject()).rooms.yard.entities.length,initial.entities.length,'Dragging an existing actor must not copy it');
+
     await page.locator('.inspector').getByRole('button',{name:'Room',exact:true}).click();
     const name=page.getByLabel('Room name'), before=await name.inputValue();
     await name.fill('Saved room');await name.press('Tab');
     await page.waitForFunction(async()=>Object.values((await(await fetch('./api/project')).json()).project.rooms).some(r=>r.title==='Saved room'));
     await page.locator('summary').filter({hasText:'Edit'}).click();
-    await page.getByRole('button',{name:'Undo project edit'}).click();assert.equal(await name.inputValue(),before);
+    await page.locator('.studio-menus').getByRole('button',{name:/^Undo rename of /}).click();assert.equal(await name.inputValue(),before);
+    await page.getByRole('button',{name:'Rendering',exact:true}).click();
+    await page.getByRole('button',{name:'Background image',exact:true}).click();
+    const backgroundPicker=page.getByRole('dialog',{name:'Background image'});
+    await backgroundPicker.getByRole('searchbox').fill('key.png');
+    await backgroundPicker.getByRole('button',{name:'key.png',exact:true}).click();
+    await page.waitForFunction(async()=> (await(await fetch('./api/project')).json()).project.rooms.yard.backgroundImage==='assets/sprites/key.png');
+    const imageResponse=await page.request.get(url+'/api/room-art?path=assets%2Fsprites%2Fkey.png');
+    assert.equal(imageResponse.headers()['content-type'],'image/png');
+    const fileChooser=page.waitForEvent('filechooser');
+    await page.getByRole('button',{name:'Browse for background image'}).click();
+    await (await fileChooser).setFiles({name:'Café at night.PNG',mimeType:'image/png',buffer:await imageResponse.body()});
+    await page.waitForFunction(async()=> (await(await fetch('./api/project')).json()).project.rooms.yard.backgroundImage==='assets/backgrounds/cafe-at-night.png');
+    await page.getByRole('button',{name:'Background image',exact:true}).filter({hasText:'cafe-at-night.png'}).waitFor();
+    await page.locator('.inspector').getByRole('button',{name:'Camera',exact:true}).click();
+    const cameraZoom=page.getByRole('spinbutton',{name:/Default camera zoom/});
+    assert.equal(await cameraZoom.inputValue(),'1');
+    await cameraZoom.fill('1.5');await cameraZoom.press('Tab');
+    await until('Room camera zoom',async()=> (await getProject()).rooms.yard.cameraZoom===1.5,page);
+    const bottomInset=page.getByLabel('Camera bottom inset (tiles)');
+    await bottomInset.fill('2');await bottomInset.press('Tab');
+    await until('Camera bottom inset',async()=> (await getProject()).rooms.yard.cameraBottomInset===2,page);
+    await nav.getByText('Game',{exact:true}).click();
+    await page.getByRole('button',{name:'Display',exact:true}).click();
+    const resolution=page.getByLabel('Resolution',{exact:true});
+    await resolution.selectOption('fixed');
+    const screenHeight=page.getByLabel('Height (px)',{exact:true});
+    await screenHeight.fill('180');await screenHeight.press('Tab');
+    await until('Fixed resolution',async()=> (await getProject()).camera?.resolution?.join('x')==='320x180',page);
+    const fixedPlayer=await browser.newPage({viewport:{width:1000,height:660}});
+    try{
+      await fixedPlayer.goto(url+'/player.html?play=1');
+      await fixedPlayer.getByText('Local game',{exact:true}).waitFor();
+      const checkDisplay=async()=>assert.deepEqual(await fixedPlayer.getByLabel('Game display').evaluate(canvas=>
+        [canvas.width,canvas.height,canvas.dataset.viewHeight]),[320,180,'120']);
+      await checkDisplay();
+      await fixedPlayer.setViewportSize({width:430,height:560});
+      await fixedPlayer.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      await checkDisplay();
+    }finally{await fixedPlayer.close();}
+    await resolution.selectOption('adaptive');
+    await until('Adaptive resolution',async()=> (await getProject()).camera?.resolution===undefined,page);
+    await nav.getByText('Room',{exact:true}).click();
     await page.locator('summary').filter({hasText:'Tools'}).click();
     await page.getByRole('button',{name:'Debug room'}).click();
     const pause=page.getByText(/^Paused at/);await pause.waitFor();
@@ -113,21 +283,408 @@ for(const width of [1280,800,390,320]){
     await page.getByRole('button',{name:'Close',exact:true}).click();
     await page.getByRole('button',{name:'Open script for maker',exact:true}).click();
     await page.getByRole('button',{name:'Text',exact:true}).click();
-    const code='on tick\n  apply_gravity(none)\n  if pressed.x and actor.grounded\n    animate("idle")\n    jump_force(240)\n  end\nend\n';
+    const code='on start\n  set_health_bar(true, "#a6e3a1", "#313244")\nend\non tick\n  apply_gravity(none)\n  if pressed.x and actor.grounded\n    animate("idle")\n    jump_force(240)\n  end\nend\n';
     await page.locator('.cm-content').fill(code);
     await page.waitForFunction(async code=>(await(await fetch('./api/script/maker')).json()).source===code,code);
-    await page.waitForFunction(()=>document.querySelector('.code-pane button.primary')?.disabled);
+    await page.locator('.appbar .status').filter({hasText:'Script saved'}).waitFor();
     await page.getByRole('button',{name:'Blocks',exact:true}).click();
     await page.waitForFunction(()=>[...document.querySelectorAll('.blocklyText')].some(el=>el.textContent.replaceAll('\u00a0',' ')==='On tick'));
+    await page.getByRole('button',{name:'Fit blocks',exact:true}).click();
+    await page.locator('.waffle_color').filter({hasText:'#a6e3a1'}).getByText('#a6e3a1',{exact:true}).click();
+    await page.getByLabel('Choose color',{exact:true}).fill('#f38ba8');
+    await page.getByLabel('Choose color',{exact:true}).press('Escape');
+    await page.waitForFunction(async()=> (await(await fetch('./api/script/maker')).json()).events.start[0].fill==='#f38ba8');
+    await page.getByRole('treeitem',{name:'Operators'}).click();
+    await page.locator('.blocklyFlyout').getByText('sin (°)',{exact:true}).waitFor();
+    await page.getByRole('treeitem',{name:'Operators'}).click();
+    const stageActors=page.getByRole('region',{name:'Entities on the stage'});
+    await stageActors.getByRole('button',{name:'pilot',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('select[aria-label="Script file"]')?.value==='entity:pilot');
+    await page.getByRole('button',{name:'Play here'}).click();
+    const preview=page.frameLocator('iframe[title="Game playtest"]');
+    await preview.getByText('Local game',{exact:true}).waitFor();
+    await preview.getByRole('button',{name:'Stop',exact:true}).click();
+    await page.getByRole('button',{name:'Play here'}).waitFor();
+
+
+    await nav.getByText('Game',{exact:true}).click();
+    await page.getByRole('button',{name:'Text',exact:true}).click();
+    await page.getByRole('button',{name:'Language to add'}).click();
+    let languages=page.getByRole('dialog',{name:'Language to add'});
+    await languages.getByRole('searchbox').fill('English');
+    await languages.getByRole('button',{name:'English',exact:true}).click();
+    await page.getByRole('button',{name:'Add language'}).click();
+    await page.getByLabel('Text name').fill('greeting');
+    await page.getByRole('button',{name:'Add text'}).click();
+    await page.getByLabel('greeting',{exact:true}).fill('Hello!');
+    await page.getByLabel('greeting',{exact:true}).press('Tab');
+    await page.getByRole('button',{name:'Language to add'}).click();
+    languages=page.getByRole('dialog',{name:'Language to add'});
+    await languages.getByRole('searchbox').fill('Spanish');
+    await languages.getByRole('button',{name:'Spanish',exact:true}).click();
+    await page.getByRole('button',{name:'Add language'}).click();
+    await page.getByLabel('greeting',{exact:true}).fill('¡Hola!');
+    await page.keyboard.press('Control+s');
+    await page.waitForFunction(async()=> (await(await fetch('./api/project')).json()).project.localization?.tables.es?.greeting==='¡Hola!');
+    await page.getByRole('button',{name:'Settings',exact:true}).click();
+    const coverChooser=page.waitForEvent('filechooser');
+    await page.getByRole('button',{name:'Choose cover image…'}).click();
+    await (await coverChooser).setFiles({name:'Cover art.png',mimeType:'image/png',buffer:await fs.readFile('demo/assets/sprites/key.png')});
+    await until('Cartridge cover',async()=> (await getProject()).coverImage==='assets/covers/cover-art.png',page);
+    await page.getByAltText('Cartridge cover art').waitFor();
+
+    const fileMenu=page.locator('summary').filter({hasText:/^File$/});
+    await fileMenu.focus();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    const dialog=page.getByRole('dialog',{name:'Export'});
+    await dialog.getByLabel('Format').selectOption('project');
+    assert.equal(await dialog.getByLabel('Language').count(),0);
+    await dialog.getByLabel('Format').selectOption('cartridge');
+    await dialog.getByLabel('Language').selectOption('es');
+    const [download]=await Promise.all([page.waitForEvent('download'),dialog.getByRole('button',{name:'Export',exact:true}).click()]);
+    assert.match(download.suggestedFilename(),/-es\.waffle$/);
+    const {unpack}=await import('../src/cartridge.mjs');
+    const published=unpack(await fs.readFile(await download.path()),{simulation:true});
+    assert.equal(published.locale,'es');
+    assert.equal(published.text.greeting,'¡Hola!');
+    assert.ok(published.fontGlyphs['¡']>=96);
+    assert.deepEqual([...published.coverArt.slice(0,8)],[137,80,78,71,13,10,26,10]);
+    await dialog.waitFor({state:'hidden'});
+    assert.equal(await fileMenu.evaluate(el=>el===document.activeElement),true);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await dialog.waitFor();
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({state:'hidden'});
+
+    await nav.getByText('Code',{exact:true}).click();
+    await page.getByRole('button',{name:'Text',exact:true}).click();
+    const typedCode=`on tick
+  local.target = entity.find("maker")
+  local_real.speed = math.sin(30.0)
+  local_bool.run = local_real.speed > 0.0
+  if local_bool.run
+    repeat 2
+      say(text.greeting)
+    end
+  end
+end
+`;
+    await page.locator('.cm-content').fill(typedCode);
+    await page.waitForFunction(async source=>(await(await fetch('./api/script/pilot')).json()).source===source,typedCode);
+    await page.getByRole('button',{name:'Blocks',exact:true}).click();
+    await page.locator('.blocklyBlockCanvas').getByText('sin (°)',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Text',exact:true}).click();
+    assert.equal((await page.locator('.cm-content').innerText()).trim(),typedCode.trim());
+    await page.getByRole('button',{name:'Blocks',exact:true}).click();
+    const fields=page.locator('.blocklyBlockCanvas .blocklyDropdownText');
+    const entityField=fields.filter({hasText:/^maker$/});
+    await entityField.click();
+    const search=page.getByRole('searchbox',{name:'Search options'});
+    await search.fill('runner');
+    await search.press('Enter');
+    await page.waitForFunction(async()=> (await(await fetch('./api/script/pilot')).json()).events?.tick?.some(row=>row.value?.call==='entity.find'&&row.value.args[0]==='runner'));
+
 
   }
   await page.goto(url+'/player.html');
+  await page.getByText('Choose a cartridge',{exact:true}).waitFor();
+  await page.goto(url+'/player.html?play=1');
   await page.getByText('Local game',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Save',exact:true}).click();
   await page.getByText('Saved slot 1',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Load',exact:true}).click();
   await page.getByText('Loaded slot 1',{exact:true}).waitFor();
+  assert.deepEqual(pageErrors,[],'Uncaught page errors at '+width);
   console.log('Passed editor and player at',width);await page.close();
 }
+const setup=await browser.newPage({viewport:{width:390,height:760}});
+await setup.goto(url+'/projects?action=manager');
+const launch=setup.locator('main');
+const openButton=launch.getByRole('button',{name:'Open Project',exact:true});
+await openButton.click();
+const openDialog=setup.getByRole('dialog',{name:'Open Project'});
+assert.equal(await openDialog.getByRole('textbox').count(),0);
+await openDialog.getByRole('button',{name:'Cancel'}).click();
+assert.equal(await openButton.evaluate(el=>el===document.activeElement),true);
+
+const launcher=new URL(setup.url()).origin;
+const createButton=launch.getByRole('button',{name:'New Project',exact:true});
+await createButton.click();
+const create=setup.getByRole('dialog',{name:'New Project'});
+const gameName="Café Racer: Red & Blue! 🚗";
+const gameField=create.getByRole('textbox',{name:'Game name'});
+assert.equal(await create.getByRole('textbox').count(),1);
+assert.equal(await gameField.evaluate(el=>el===document.activeElement),true);
+await gameField.fill(gameName);
+await create.getByRole('button',{name:'Change…'}).click();
+const folders=setup.getByRole('dialog',{name:'Choose a Folder'});
+assert.equal(await folders.getByRole('textbox').count(),0);
+await folders.getByRole('button',{name:'Use This Folder'}).click();
+assert.equal(await gameField.inputValue(),gameName);
+await create.getByLabel('First room').selectOption('top_down');
+await create.getByRole('button',{name:'Create Project'}).click();
+await setup.getByRole('navigation',{name:'Editor views'}).waitFor();
+const created=await (await setup.request.get(new URL('/api/project',setup.url()).href)).json();
+assert.equal(created.project.name,gameName);
+assert.equal(path.basename(created.path),'cafe-racer-red-blue');
+assert.equal(created.project.rooms.room.view,'top_down');
+
+await setup.goto(launcher+'/?action=manager');
+await openButton.click();
+await openDialog.getByRole('button',{name:'cafe-racer-red-blue',exact:true}).click();
+await openDialog.getByRole('button',{name:'Open This Project'}).click();
+await setup.getByRole('navigation',{name:'Editor views'}).waitFor();
+
+const request=action=>setup.request.post(launcher+'/',{headers:{Origin:launcher},form:action});
+const duplicate=await request({action:'new',name:gameName});
+assert.ok(duplicate.ok(),await duplicate.text());
+assert.ok((await fs.stat(path.join(path.dirname(created.path),'cafe-racer-red-blue-2'))).isDirectory());
+await setup.goto(launcher+'/?action=new');
+await create.waitFor();
+await gameField.fill('CON');
+await create.getByText('Storage options').click();
+await create.getByLabel('Save as').selectOption('archive');
+await create.getByRole('button',{name:'Create Project'}).click();
+await setup.getByRole('navigation',{name:'Editor views'}).waitFor();
+const archived=await (await setup.request.get(new URL('/api/project',setup.url()).href)).json();
+assert.equal(path.basename(archived.path),'con-game.waffleproj');
+assert.equal(archived.project.name,'CON');
+await setup.getByRole('button',{name:'Settings',exact:true}).click();
+await setup.locator('.inspector').getByRole('button',{name:'Room',exact:true}).click();
+await setup.getByRole('button',{name:'Rendering',exact:true}).click();
+const archivedChooser=setup.waitForEvent('filechooser');
+await setup.getByRole('button',{name:'Browse for background image'}).click();
+await (await archivedChooser).setFiles({name:'Night.png',mimeType:'image/png',buffer:await fs.readFile('demo/assets/sprites/key.png')});
+await setup.waitForFunction(async()=> (await(await fetch('./api/project')).json()).project.rooms.room.backgroundImage==='assets/backgrounds/night.png');
+await setup.close();
+console.log('Passed project dialogs, safe project names, file browsing, and collision handling');
+
+const authoring=await browser.newPage({viewport:{width:1280,height:800}});
+await authoring.goto(url+'/');
+async function until(label,check,page=authoring){
+  const deadline=Date.now()+8000;
+  do{
+    if(await check())return;
+    await new Promise(resolve=>setTimeout(resolve,120));
+  }while(Date.now()<deadline);
+  throw Error(label+' was not saved: '+await page.locator('[role=alert]').allTextContents());
+}
+const readProject=async()=> (await (await authoring.request.get(url+'/api/project')).json()).project;
+const views=authoring.getByRole('navigation',{name:'Editor views'});
+await views.getByRole('button',{name:'World',exact:true}).click();
+await authoring.locator('.world').getByRole('button',{name:'Top-down Courtyard'}).click();
+const connection=authoring.getByRole('dialog',{name:'Edit Connection'});
+await authoring.getByRole('button',{name:'right exit'}).click();
+const routing=connection.getByLabel('Routing');
+await routing.selectOption('fixed');
+await routing.selectOption('save');
+const alternate=connection.getByRole('button',{name:'Remove alternate Cooling Vault'});
+await alternate.waitFor();
+await connection.getByRole('button',{name:'Destination',exact:true}).click();
+await connection.getByRole('dialog',{name:'Destination'}).getByRole('button',{name:'Pump Hall'}).click();
+await alternate.waitFor();
+await connection.getByRole('button',{name:'Apply',exact:true}).click();
+await until('Alternate destinations',async()=> (await readProject()).rooms.courtyard.exits.right.targets.join(',')==='arena,vault,yard');
+await views.getByRole('button',{name:'Room',exact:true}).click();
+await authoring.getByRole('button',{name:'Undo connection from Top-down Courtyard'}).click();
+await until('Undo of the connection',async()=> (await readProject()).rooms.courtyard.exits.right.targets.join(',')==='yard,vault');
+
+await authoring.getByRole('button',{name:'New room',exact:true}).click();
+const newRoom=authoring.getByRole('dialog',{name:'New Room'});
+await newRoom.getByLabel('Room name').fill('Upper Deck!');
+await newRoom.getByRole('button',{name:'Create room'}).click();
+await until('New room',async()=> (await readProject()).rooms.upper_deck?.title==='Upper Deck!');
+await views.getByRole('button',{name:'Game',exact:true}).click();
+await authoring.getByRole('button',{name:'Bitfonts',exact:true}).click();
+await authoring.getByRole('button',{name:'Import bitfont…'}).click();
+const bitfont=authoring.getByRole('dialog',{name:'Import Bitfont'});
+const {PNG}=require('pngjs');
+const sheet=new PNG({width:12,height:8});
+sheet.data.fill(255);
+await bitfont.locator('input[type=file]').setInputFiles({name:'Tiny.png',mimeType:'image/png',buffer:PNG.sync.write(sheet)});
+await bitfont.getByLabel('Character for cell 1').fill('A');
+await bitfont.getByLabel('Character for cell 1').press('Enter');
+await bitfont.getByLabel('Character for cell 2').fill('á');
+await bitfont.getByRole('button',{name:'Import',exact:true}).click();
+await bitfont.waitFor({state:'hidden'});
+await until('PNG bitfont',async()=>{
+  const project=await readProject();
+  return project.activeBitfont==='tiny' && project.bitfonts.tiny.assignments[1]==='á';
+});
+await authoring.getByRole('button',{name:'Import bitfont…'}).click();
+await bitfont.locator('input[type=file]').setInputFiles({
+  name:'YAFF Face.yaff',mimeType:'text/plain',
+  buffer:Buffer.from("name: Test\ncell-size: 5 7\n'A':\n  .@.\n  @@@\n  @.@\n"),
+});
+await bitfont.getByRole('button',{name:'Import',exact:true}).click();
+await bitfont.waitFor({state:'hidden'});
+await until('YAFF bitfont',async()=> (await readProject()).activeBitfont==='yaff_face');
+await authoring.getByRole('button',{name:'Import bitfont…'}).click();
+const tagged=await fs.readFile(path.join(project,'assets','sprites','pilot.aseprite'));
+const tagOffset=tagged.indexOf('idle');
+assert.ok(tagOffset>=0);
+tagged.write('U+41',tagOffset,'ascii');
+await bitfont.locator('input[type=file]').setInputFiles({name:'Tagged.aseprite',mimeType:'application/octet-stream',buffer:tagged});
+assert.equal(await bitfont.getByLabel('Glyph width (px)').count(),0);
+await bitfont.getByRole('button',{name:'Import',exact:true}).click();
+await bitfont.waitFor({state:'hidden'});
+await until('Aseprite bitfont',async()=> (await readProject()).activeBitfont==='tagged');
+const {unpack}=await import('../src/cartridge.mjs');
+const renderedFont=unpack(new Uint8Array(await (await authoring.request.get(url+'/demo.waffle')).body()));
+assert.equal(renderedFont.runtimeAbi,11);
+assert.equal(renderedFont.fontGlyphs.A,0);
+assert.equal(renderedFont.fontLayout.width,24);
+await views.getByRole('button',{name:'Code',exact:true}).click();
+await authoring.locator('summary[aria-label="Script actions"]').click();
+await authoring.getByRole('button',{name:'Movement preset…'}).click();
+await authoring.getByRole('dialog',{name:'Add Movement Blocks'}).getByRole('button',{name:'Add blocks'}).click();
+await until('Movement blocks',async()=> {
+  const project=await readProject();
+  const id=Object.keys(project.sprites)[0];
+  const data=await (await authoring.request.get(url+'/api/script/'+id)).json();
+  return data.events?.tick?.some(row=>row.condition?.actor==='is_player');
+});
+const scriptFile=authoring.getByLabel('Script file',{exact:true});
+const stageRoom=authoring.getByRole('button',{name:'Stage room'});
+const stageTitle=await stageRoom.innerText();
+await scriptFile.selectOption('room:vault');
+await until('Room script picker',async()=> await scriptFile.inputValue()==='room:vault');
+assert.equal(await stageRoom.innerText(),stageTitle);
+assert.equal(await views.getByRole('button',{name:'Code',exact:true}).getAttribute('aria-current'),'page');
+await authoring.locator('summary[aria-label="Script actions"]').click();
+await authoring.getByRole('button',{name:'Constants…',exact:true}).click();
+const constantsDialog=authoring.getByRole('dialog',{name:'Script Constants'});
+await constantsDialog.getByRole('button',{name:'Add constant'}).click();
+await constantsDialog.getByLabel('Name').fill('default_zoom');
+await constantsDialog.getByLabel('Type').selectOption('real');
+await constantsDialog.getByLabel('Value').fill('1.25');
+await constantsDialog.getByRole('button',{name:'Apply'}).click();
+await constantsDialog.waitFor({state:'hidden'});
+await until('Typed script constant',async()=> (await (await authoring.request.get(url+'/api/room-script/vault')).json()).constants?.default_zoom?.real===1.25);
+await authoring.getByRole('treeitem',{name:'Variables',exact:true}).click();
+await authoring.locator('.blocklyToolboxFlyout .waffle_constant').filter({hasText:/default_zoom/}).waitFor();
+await authoring.getByRole('button',{name:'Text',exact:true}).click();
+assert.match(await authoring.locator('.cm-content').innerText(),/const default_zoom = 1\.25/);
+await authoring.getByRole('button',{name:'Blocks',exact:true}).click();
+await authoring.getByRole('button',{name:'Upper Deck!',exact:true}).click();
+await until('Sidebar selects room script',async()=> await scriptFile.inputValue()==='room:upper_deck');
+assert.equal(await authoring.locator('.project').getByRole('button',{name:'Upper Deck!',exact:true}).getAttribute('aria-pressed'),'true');
+assert.match(await stageRoom.innerText(),/Upper Deck!/);
+assert.equal(await views.getByRole('button',{name:'Code',exact:true}).getAttribute('aria-current'),'page');
+const roomCode=authoring.getByRole('region',{name:'Room code'});
+await roomCode.locator('summary[aria-label="Script actions"]').click();
+await roomCode.getByRole('button',{name:'New event…'}).click();
+const eventDialog=authoring.getByRole('dialog',{name:'New Event'});
+await eventDialog.getByRole('textbox',{name:'Event name'}).fill('Door opened!');
+await eventDialog.getByRole('button',{name:'Create event'}).click();
+await until('New event registered',async()=> (await readProject()).events?.door_opened==='Door opened!');
+await roomCode.getByRole('button',{name:'Text',exact:true}).click();
+await roomCode.locator('.cm-content').fill(`on start
+  camera(220, 160)
+  camera_zoom(1.5)
+  set_room_shader("snow", 65)
+  emit_event("door_opened")
+  flag.found_key = false
+end
+on received.door_opened
+  global.sender = entity.event_sender
+  draw_text("notice", "A", "tagged", "bottom_right", 4, 6)
+end
+on tick
+  if action.right
+    camera(220, 160)
+  else
+    if action.left
+      set_room_gravity(0)
+    else
+      reset_room_camera()
+    end
+  end
+end
+`);
+await until('Room camera and shader script',async()=>{
+  const response=await authoring.request.get(url+'/api/room-script/upper_deck');
+  const script=await response.json();
+  return script.events?.start?.[1]?.op==='camera_zoom' && script.events.start[2].shader==='snow' &&
+    script.events['received.door_opened']?.[0]?.value?.actor==='event_sender'&&script.events['received.door_opened']?.[1]?.font==='tagged';
+});
+assert.equal((await readProject()).rooms.upper_deck.script,'scripts/rooms/upper_deck.cbor');
+await roomCode.getByRole('button',{name:'Blocks',exact:true}).click();
+await roomCode.getByRole('button',{name:'Fit blocks',exact:true}).click();
+const roomWorkspace=roomCode.locator('.block-workspace:visible');
+await roomWorkspace.locator('.waffle_received_event').filter({hasText:/Door\s+opened!/}).waitFor();
+await roomWorkspace.locator('.waffle_emit_event').filter({hasText:/Door\s+opened!/}).waitFor();
+await roomWorkspace.locator('.waffle_event_sender').waitFor();
+await roomWorkspace.locator('.waffle_draw_text').filter({hasText:/bottom\s+right/}).waitFor();
+const dropdownText=block=>roomWorkspace.locator('.blocklyBlockCanvas '+block+' .blocklyDropdownText');
+const picker=authoring.locator('.block-field-picker:visible');
+await dropdownText('.waffle_emit_event').filter({hasText:/Door\s+opened!/}).click();
+await picker.getByRole('searchbox').fill('Gate opened!');
+await picker.getByRole('button',{name:'New event…',exact:true}).click();
+assert.equal(await eventDialog.getByRole('textbox',{name:'Event name'}).inputValue(),'Gate opened!');
+await eventDialog.getByRole('button',{name:'Create event'}).click();
+await dropdownText('.waffle_emit_event').filter({hasText:/Gate\s+opened!/}).waitFor();
+await until('Event created and selected from Emit event',async()=>{
+  const script=await (await authoring.request.get(url+'/api/room-script/upper_deck')).json();
+  return (await readProject()).events?.gate_opened==='Gate opened!'&&script.events?.start?.[3]?.event==='gate_opened';
+});
+await dropdownText('.waffle_received_event').filter({hasText:/Door\s+opened!/}).click();
+await picker.getByRole('button',{name:'New event…',exact:true}).click();
+await eventDialog.getByRole('textbox',{name:'Event name'}).fill('Cancelled event');
+await eventDialog.getByRole('button',{name:'Cancel',exact:true}).click();
+await dropdownText('.waffle_received_event').filter({hasText:/Door\s+opened!/}).waitFor();
+assert.equal((await readProject()).events.cancelled_event,undefined);
+await dropdownText('.waffle_received_event').filter({hasText:/Door\s+opened!/}).click();
+await picker.getByRole('button',{name:'Gate opened!',exact:true}).click();
+await dropdownText('.waffle_received_event').filter({hasText:/Gate\s+opened!/}).waitFor();
+await dropdownText('.waffle_set').filter({hasText:'found_key'}).click();
+await picker.getByRole('searchbox').fill('Gate unlocked');
+await picker.getByRole('searchbox').press('Enter');
+const flagDialog=authoring.getByRole('dialog',{name:'New Flag'});
+assert.equal(await flagDialog.getByRole('textbox',{name:'Flag name'}).inputValue(),'Gate unlocked');
+await flagDialog.getByRole('button',{name:'Create flag'}).click();
+await dropdownText('.waffle_set').filter({hasText:/Gate\s+unlocked/}).waitFor();
+await until('Flag created and selected from Set',async()=>{
+  const script=await (await authoring.request.get(url+'/api/room-script/upper_deck')).json();
+  return (await readProject()).flags?.gate_unlocked===false&&script.events?.start?.[4]?.name==='gate_unlocked';
+});
+const chain=roomWorkspace.locator('.blocklyBlockCanvas .waffle_if');
+const addBranch=chain.locator('image[alt="Add branch"]');
+const removeBranch=chain.locator('image[alt="Remove else-if branch"]');
+assert.equal(await chain.count(),1,'A nested else containing a single if opens as one chain');
+assert.equal(await removeBranch.count(),1);
+await addBranch.click();
+await until('Added else-if branch',async()=>await removeBranch.count()===2);
+await removeBranch.first().click();
+await until('Removed else-if branch',async()=> await removeBranch.count()===1);
+const detachedBranch=roomWorkspace.locator('.blocklyBlockCanvas .waffle_set_room_gravity.gw-detached');
+await detachedBranch.waitFor();
+await chain.locator('[aria-label="Add branch"]').focus();
+await authoring.keyboard.press('Control+z');
+await until('Undid branch removal',async()=> await removeBranch.count()===2);
+await detachedBranch.waitFor({state:'detached'});
+await chain.locator('.waffle_set_room_gravity').waitFor();
+await chain.locator('image[alt="Remove else branch"]').click();
+await addBranch.click();
+await authoring.getByRole('button',{name:'Add else',exact:true}).click();
+await chain.locator('image[alt="Remove else branch"]').waitFor();
+const roomCategories=await roomWorkspace.locator('.blocklyToolboxCategoryLabel').allTextContents();
+assert.ok(roomCategories.includes('World & camera')&&roomCategories.includes('Entities'));
+assert.ok(!roomCategories.includes('Motion')&&!roomCategories.includes('Combat'));
+const clipboardBlock=roomWorkspace.locator('.waffle_event_sender');
+await clipboardBlock.click();
+await authoring.keyboard.press('Control+c');
+const copiedHint=roomWorkspace.locator('.blocklyToast[data-toast-id="copiedHint"]');
+await copiedHint.waitFor({state:'attached'});
+assert.equal(await copiedHint.isVisible(),false);
+await authoring.keyboard.press('Control+v');
+await until('Pasted block',async()=> await clipboardBlock.count()===2);
+await authoring.close();
+console.log('Passed project authoring, inline event and flag creation, and editable conditional chains');
+
 await browser.close();server.kill();await fs.rm(fixture,{recursive:true,force:true});
 })().catch(e=>{console.error(e);process.exit(1);});

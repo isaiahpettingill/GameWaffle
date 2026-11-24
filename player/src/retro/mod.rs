@@ -70,6 +70,15 @@ struct Descriptor {
 const PAD: u32 = 1;
 const IDS: [u32; 8] = [4, 5, 6, 7, 0, 8, 1, 3];
 const SAVE_SIZE: usize = 4 * 1024 * 1024 + 4;
+const ROLLBACK_TAG: &[u8; 4] = b"GWRS";
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct RollbackState {
+    signature: [u8; 32],
+    physics: serde_bytes::ByteBuf,
+    audio: audio::SavedAudio,
+    ticks: u64,
+}
 struct Core {
     game: Game,
     video: Video,
@@ -77,10 +86,15 @@ struct Core {
     ram: Vec<u8>,
     first: bool,
     ticks: u64,
+    signature: [u8; 32],
 }
 impl Core {
     fn load(bytes: &[u8]) -> Result<Self, Error> {
         let mut game = Game::from_cartridge(bytes)?;
+        // The same cartridge starts from the same seed on every peer.
+        let signature: [u8; 32] = bytes[bytes.len() - 32..].try_into().unwrap();
+        game.runtime
+            .set_seed(u32::from_le_bytes(signature[..4].try_into().unwrap()));
         let video = Video::new(&game)?;
         game.runtime
             .set_view_size(video.dimensions[0], video.dimensions[1]);
@@ -91,20 +105,68 @@ impl Core {
             ram: vec![0; SAVE_SIZE],
             first: true,
             ticks: 0,
+            signature,
         })
     }
     fn restore(&mut self, data: &[u8]) -> bool {
         let Some(save) = checkpoint(data) else {
             return false;
         };
-        if self.game.runtime.load_game(save).is_err() {
-            return false;
+        let tail = &data[save.len() + 4..];
+        if let Some(payload) = tail.strip_prefix(ROLLBACK_TAG) {
+            let Ok(state) = ciborium::from_reader::<RollbackState, _>(payload) else {
+                return false;
+            };
+            if self.signature != state.signature
+                || self
+                    .game
+                    .runtime
+                    .load_rollback(save, &state.physics)
+                    .is_err()
+            {
+                return false;
+            }
+            self.audio.restore(&self.game, state.audio);
+            self.ticks = state.ticks;
+        } else {
+            if self.game.runtime.load_game(save).is_err() {
+                return false;
+            }
+            self.audio = Audio::default();
         }
         self.first = false;
-        self.audio = Audio::default();
         self.refresh_ram();
         true
     }
+    fn serialize(&self, out: &mut [u8]) -> bool {
+        let (Ok(save), Ok(physics)) = (
+            self.game.runtime.save_game(),
+            self.game.runtime.save_rollback(),
+        ) else {
+            return false;
+        };
+        if !write_checkpoint(out, &save) {
+            return false;
+        }
+        let Some(tail) = out.get_mut(save.len() + 4..) else {
+            return false;
+        };
+        let Some((tag, payload)) = tail.split_at_mut_checked(ROLLBACK_TAG.len()) else {
+            return false;
+        };
+        tag.copy_from_slice(ROLLBACK_TAG);
+        ciborium::into_writer(
+            &RollbackState {
+                signature: self.signature,
+                physics: physics.into(),
+                audio: self.audio.save(),
+                ticks: self.ticks,
+            },
+            payload,
+        )
+        .is_ok()
+    }
+
     fn refresh_ram(&mut self) {
         if let Ok(save) = self.game.runtime.save_game() {
             write_checkpoint(&mut self.ram, &save);
@@ -343,12 +405,9 @@ unsafe extern "C" fn retro_serialize(out: *mut c_void, size: usize) -> bool {
     }
     CORE.with_borrow(|c| {
         c.as_ref().is_some_and(|c| {
-            let Ok(save) = c.game.runtime.save_game() else {
-                return false;
-            };
             let bytes = unsafe { slice::from_raw_parts_mut(out.cast(), SAVE_SIZE) };
             bytes.fill(0);
-            write_checkpoint(bytes, &save)
+            c.serialize(bytes)
         })
     })
 }

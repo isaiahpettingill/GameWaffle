@@ -26,10 +26,11 @@ self_cell = { version = "1", optional = true }
 
 [features]
 bundled = ["sdl3/build-from-source-static"]
-libretro = ["dep:self_cell", "sdl3/static-link"]
+libretro = ["dep:self_cell", "sdl3/static-link", "gamewaffle-runtime/rollback"]
 
-[patch.crates-io]
-box2d-rs = { path = "../runtime/vendor/box2d-rs" }
+[profile.release]
+lto = "thin"
+codegen-units = 1
 
 [build-dependencies]
 embed-resource = "3.0.12"

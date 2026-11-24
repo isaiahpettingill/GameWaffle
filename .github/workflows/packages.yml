@@ -66,9 +66,12 @@ jobs:
           curl -fsSL https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.105/wasm-bindgen-0.2.105-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
           cp "$RUNNER_TEMP/wasm-bindgen-0.2.105-x86_64-unknown-linux-musl/wasm-bindgen" "$HOME/.cargo/bin/"
 
-      - run: npm ci --no-audit --no-fund && npm run build
+      - run: npm ci --no-audit --no-fund && npm run check
       - uses: actions/upload-artifact@v4
         with: {name: demo-cartridge, path: web-built/demo.waffle, if-no-files-found: error, retention-days: 1, compression-level: 0}
+      - run: cp web-built/standalone/gamewaffle-player.html GameWaffle-Player.html
+      - uses: actions/upload-artifact@v4
+        with: {name: package-Web, path: GameWaffle-Player.html, if-no-files-found: error, retention-days: 7}
       - run: |
           node packaging/stage.mjs GameWaffle-Studio --android-editor
           tar czf GameWaffle-Android-Studio.tar.gz GameWaffle-Studio
@@ -123,8 +126,10 @@ jobs:
         with: {name: package-Android-Studio}
       - uses: actions/download-artifact@v4
         with: {name: 'desktop-native-${{ runner.os }}'}
+      - uses: actions/download-artifact@v4
+        with: {name: demo-cartridge, path: web-built}
       - if: runner.os == 'Linux'
-        run: bash packaging/linux-deps.sh package ${{ inputs.launch_packages && '--launch' || '' }}
+        run: bash packaging/linux-deps.sh package ${{ (inputs.launch_packages || env.RELEASE_TAG != '') && '--launch' || '' }}
       - name: Assemble Studio
         shell: bash
         run: |
@@ -147,14 +152,14 @@ jobs:
           curl -fsSL https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage -o tool
           chmod +x tool
           ARCH=x86_64 ./tool --appimage-extract-and-run stage GameWaffle-x86_64.AppImage
-          SDL_VIDEO_DRIVER=dummy SDL_AUDIO_DRIVER=dummy ./GameWaffle-x86_64.AppImage --appimage-extract-and-run --player --verify stage/web-built/demo.waffle
+          SDL_VIDEO_DRIVER=dummy SDL_AUDIO_DRIVER=dummy ./GameWaffle-x86_64.AppImage --appimage-extract-and-run --player --verify web-built/demo.waffle
       - if: runner.os == 'Windows'
         shell: pwsh
         run: |
           & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" packaging\windows.nsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Launch the installed Windows apps
-        if: runner.os == 'Windows' && inputs.launch_packages
+        if: runner.os == 'Windows' && (inputs.launch_packages || env.RELEASE_TAG != '')
         shell: pwsh
         run: |
           $target = Join-Path $env:RUNNER_TEMP gw-installed
@@ -171,10 +176,10 @@ jobs:
           } finally { if (!$studio.HasExited) { Stop-Process -Id $studio.Id } }
           $env:SDL_VIDEO_DRIVER = "dummy"
           $env:SDL_AUDIO_DRIVER = "dummy"
-          & "$target\gamewaffle-player.exe" --verify "$target\web-built\demo.waffle"
+          & "$target\gamewaffle-player.exe" --verify "web-built\demo.waffle"
           if ($LASTEXITCODE) { throw "Installed player failed" }
       - name: Launch the Linux Studio AppImage
-        if: runner.os == 'Linux' && inputs.launch_packages
+        if: runner.os == 'Linux' && (inputs.launch_packages || env.RELEASE_TAG != '')
         run: |
           xvfb-run -a bash -ec '
             ./GameWaffle-x86_64.AppImage --appimage-extract-and-run &
@@ -262,17 +267,17 @@ jobs:
           version=${RELEASE_TAG:-$GITHUB_REF_NAME}
           export RELEASE_VERSION_CODE="$GITHUB_RUN_NUMBER" RELEASE_VERSION_NAME="${version#v}"
           export SDL_SOURCE="$RUNNER_TEMP/SDL"
-          USE_PREBUILT_ANDROID_LIBS=1 bash player/android/build.sh web-built/demo.waffle GameWaffle-Player.apk
-      - if: inputs.launch_packages
+          USE_PREBUILT_ANDROID_LIBS=1 bash player/android/build.sh GameWaffle-Player.apk
+      - if: inputs.launch_packages || needs.version.outputs.tag != ''
         run: |
           if [[ ! -d "$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm" ]]; then
             "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018"
           fi
       - name: Enable emulator acceleration
-        if: inputs.launch_packages
+        if: inputs.launch_packages || needs.version.outputs.tag != ''
         run: sudo chmod a+rw /dev/kvm
       - name: Launch the Android APK and core
-        if: inputs.launch_packages
+        if: inputs.launch_packages || needs.version.outputs.tag != ''
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -293,6 +298,7 @@ jobs:
     concurrency: publish-${{ needs.version.outputs.tag }}
     permissions: {contents: write, id-token: write, attestations: write}
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: {pattern: 'package-*', merge-multiple: true, path: dist}
       - uses: actions/attest-build-provenance@v3
@@ -320,5 +326,10 @@ jobs:
             gh release upload "$RELEASE_TAG" dist/* --clobber
             gh release edit "$RELEASE_TAG" --target "$GITHUB_SHA" --draft=false
           else
-            gh release create "$RELEASE_TAG" dist/* --target "$GITHUB_SHA" --generate-notes
+            notes="packaging/release-notes/$RELEASE_TAG.md"
+            if [[ -f "$notes" ]]; then
+              gh release create "$RELEASE_TAG" dist/* --target "$GITHUB_SHA" --notes-file "$notes"
+            else
+              gh release create "$RELEASE_TAG" dist/* --target "$GITHUB_SHA" --generate-notes
+            fi
           fi

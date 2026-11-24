@@ -2,10 +2,26 @@ use crate::{
     Game,
     sound::{Samples, decode},
 };
+use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, rc::Rc};
 
 struct Voice {
+    id: String,
     sample: Rc<Samples>,
+    position: u64,
+    gain: f32,
+    looping: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+pub(super) struct SavedAudio {
+    tracks: [Option<String>; 2],
+    voices: Vec<SavedVoice>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SavedVoice {
+    id: String,
     position: u64,
     gain: f32,
     looping: bool,
@@ -19,6 +35,37 @@ pub(super) struct Audio {
 }
 
 impl Audio {
+    pub fn save(&self) -> SavedAudio {
+        SavedAudio {
+            tracks: self.tracks.clone(),
+            voices: self
+                .voices
+                .iter()
+                .map(|voice| SavedVoice {
+                    id: voice.id.clone(),
+                    position: voice.position,
+                    gain: voice.gain,
+                    looping: voice.looping,
+                })
+                .collect(),
+        }
+    }
+
+    pub fn restore(&mut self, game: &Game, state: SavedAudio) {
+        self.voices.clear();
+        for voice in state.voices.into_iter().take(16) {
+            if !(0.0..=1.0).contains(&voice.gain) {
+                continue;
+            }
+            let prev = self.voices.len();
+            self.play(game, &voice.id, voice.gain, voice.looping);
+            if let Some(restored) = self.voices.get_mut(prev) {
+                restored.position = voice.position;
+            }
+        }
+        self.tracks = state.tracks;
+    }
+
     fn play(&mut self, game: &Game, id: &str, gain: f32, looping: bool) {
         if self.voices.len() >= 16 {
             return;
@@ -36,6 +83,7 @@ impl Audio {
         }
         if let Some(sample) = &self.cache[id] {
             self.voices.push(Voice {
+                id: id.to_owned(),
                 sample: sample.clone(),
                 position: 0,
                 gain,
@@ -45,14 +93,16 @@ impl Audio {
     }
     pub fn frame(&mut self, game: &Game, output: &mut [i16; 1600]) {
         let room = &game.media.rooms[game.runtime.room()];
-        if self.tracks[0] != room.music || self.tracks[1] != room.ambience {
+        let settings = game.runtime.room_settings();
+        let music = crate::active_track(&settings.music, &room.music);
+        let ambience = crate::active_track(&settings.ambience, &room.ambience);
+        if [self.tracks[0].as_deref(), self.tracks[1].as_deref()] != [music, ambience] {
             self.voices.retain(|v| !v.looping);
-            self.tracks = [room.music.clone(), room.ambience.clone()];
-            if let Some(id) = &room.music {
-                self.play(game, id, 0.55, true);
-            }
-            if let Some(id) = &room.ambience {
-                self.play(game, id, 0.4, true);
+            self.tracks = [music.map(str::to_owned), ambience.map(str::to_owned)];
+            for (id, gain) in [(music, 0.55), (ambience, 0.4)] {
+                if let Some(id) = id {
+                    self.play(game, id, gain, true);
+                }
             }
         }
         for id in game.runtime.sounds() {

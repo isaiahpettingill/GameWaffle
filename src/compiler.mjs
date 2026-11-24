@@ -1,7 +1,11 @@
-import {bakeRoomShader} from './room-shaders.mjs';
+import {createHash} from 'node:crypto';
+import {atmospherePresets,bakeRoomShader,bakeShaderPreset} from './room-shaders.mjs';
+import {compileColliders} from './colliders.mjs';
 import {addSeams} from './seams.mjs';
+import {generateMinimap} from './minimap.mjs';
+import {byteCache} from './compile-cache.mjs';
 import {pack} from './pack.mjs';
-import {defaultFont} from './font.mjs';
+import {defaultFont,readBitfont} from './font.mjs';
 import { initialScript, buttons, effects, platformGravity, roomBorder } from './schema.mjs';
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
@@ -14,6 +18,28 @@ import {loadModules} from './modules.mjs';
 import {parseScript} from './wafflescript.mjs';
 import { compileScript, tileSizes, variableName } from './script.mjs';
 import { instanceNames } from './instances.mjs';
+
+function compileLocalization(config = {locale:'',tables:{}}) {
+  const {locale,tables} = config;
+  if (!tables || typeof tables!=='object' || Array.isArray(tables)) throw Error('Expected language tables');
+  const languages = Object.keys(tables);
+  if (!languages.length && locale==='') return {locale,tables:{}};
+  if (!Object.hasOwn(tables,locale)) throw Error('Select a default language');
+  if (languages.length>64) throw Error('Use up to 64 languages');
+  const encoded = Object.fromEntries(Object.entries(tables).map(([language,entries])=>{
+    if (!/^[a-zA-Z]{2,8}(?:-[a-zA-Z0-9]{1,8})*$/.test(language) || language.length>40)
+      throw Error('Invalid language code: '+language);
+    if (!entries || typeof entries!=='object' || Array.isArray(entries)) throw Error('Expected a text table for '+language);
+    return [language,Object.fromEntries(Object.entries(entries).map(([id,translation])=>{
+      if (!variableName(id) || !safe(id) || !Object.hasOwn(tables[locale],id))
+        throw Error('Add text key to the default language: '+id);
+      if (typeof translation!=='string' || Buffer.byteLength(translation)>4096)
+        throw Error('Use up to 4096 bytes of text for '+id);
+      return [id,translation];
+    }))];
+  }));
+  return {locale,tables:encoded};
+}
 
 export function projectPath(root, file) {
   const target = resolve(root, file);
@@ -73,8 +99,16 @@ function transformed(source, flags) {
   return { width, height, rgba };
 }
 
+const atlasCache=byteCache(32*1024*1024);
 function atlas(images) {
   const list = [...images].sort((a,b) => b[1].height - a[1].height || b[1].width - a[1].width);
+  const hash=createHash('sha256');
+  for(const [id,image] of list){
+    hash.update(JSON.stringify([id,image.width,image.height]));
+    hash.update(image.rgba);
+  }
+  const key=hash.digest('hex'), cached=atlasCache.get(key);
+  if(cached)return cached;
   const pixels = list.reduce((total,[,image])=>total+(image.width+1)*(image.height+1),0);
   const estimate = 2 ** Math.ceil(Math.log2(Math.sqrt(Math.max(1,pixels))));
   const width = Math.max(512,Math.min(4096,estimate),...list.map(([,image])=>image.width));
@@ -89,7 +123,8 @@ function atlas(images) {
   if (width > 4096 || y + height > 4096) throw Error('Room atlas exceeds 4096 pixels per side');
   const image = new PNG({ width, height: Math.max(1, y + height) });
   for (const [id, source] of list) blit(source, { width, rgba: image.data }, ...entries[id]);
-  return { entries, png: PNG.sync.write(image) };
+  const png=PNG.sync.write(image);
+  return atlasCache.put(key,{entries,png},png.length+list.length*96);
 }
 
 function wavToQoa(b) {
@@ -123,13 +158,21 @@ function wavToQoa(b) {
 }
 
 const artFile = /\.(ase|aseprite|png)$/i;
-const assetFile = /\.(ase|aseprite|png|wav|opus|ogg|oga|qoa)$/i;
+const assetFile = /\.(ase|aseprite|png|yaff|wav|opus|ogg|oga|qoa)$/i;
+const artCache=byteCache(64*1024*1024);
 async function readArt(file,read) {
   const data=await read(file);
-  if(!file.toLowerCase().endsWith('.png'))return readAseprite(data);
-  if(data.length<24||data.readUInt32BE(16)>4096||data.readUInt32BE(20)>4096)throw Error('PNG exceeds 4096 pixels per side');
-  const {width,height,data:rgba}=PNG.sync.read(data);
-  return {width,height,tags:[],frames:[{duration:100,rgba}]};
+  const png=file.toLowerCase().endsWith('.png');
+  const key=createHash('sha256').update(png?'png':'ase').update(data).digest('hex');
+  const cached=artCache.get(key);
+  if(cached)return cached;
+  let art;
+  if(png){
+    if(data.length<24||data.readUInt32BE(16)>4096||data.readUInt32BE(20)>4096)throw Error('PNG exceeds 4096 pixels per side');
+    const {width,height,data:rgba}=PNG.sync.read(data);
+    art={width,height,tags:[],frames:[{duration:100,rgba}]};
+  }else art=readAseprite(data);
+  return artCache.put(key,{...art,revision:key},art.frames.reduce((bytes,frame)=>bytes+frame.rgba.length,0));
 }
 export async function discoverAssets(root,store) {
   if(store)return (await store.list('assets')).filter(file=>assetFile.test(file)).sort();
@@ -145,12 +188,41 @@ export async function discoverAssets(root,store) {
   return result.sort();
 }
 
+export async function previewRoomArt(file, read, frame=0) {
+  if (!file?.startsWith('assets/') || file.split('/').includes('..') || !artFile.test(file)) throw Error('Choose a project image');
+  const {width,height,frames}=await readArt(file,read);
+  if(!Number.isInteger(frame)||frame<0||!frames[frame])throw Error('Choose an available image frame');
+  return PNG.sync.write({width,height,data:frames[frame].rgba});
+}
+
+async function compileCover(file,read) {
+  if(!file)return;
+  if(typeof file!=='string'||!file.startsWith('assets/')||file.split('/').includes('..')||!artFile.test(file))
+    throw Error('Choose a project image for the cartridge cover');
+  const {width,height,frames}=await readArt(file,read);
+  const scale=Math.min(1,512/Math.max(width,height));
+  const w=Math.max(1,Math.round(width*scale)),h=Math.max(1,Math.round(height*scale));
+  const source=frames[0].rgba;
+  if(w===width&&h===height)return PNG.sync.write({width,height,data:source});
+  const data=Buffer.alloc(w*h*4);
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    const offset=4*(Math.floor(y*height/h)*width+Math.floor(x*width/w));
+    source.copy(data,4*(y*w+x),offset,offset+4);
+  }
+  return PNG.sync.write({width:w,height:h,data});
+}
+
+export async function inspectBitfont(config, read) {
+  const {layout,glyphs}=await readBitfont(config,read,readArt);
+  return {...layout,glyphCount:Object.keys(glyphs).length};
+}
+
 export async function describeArt(root,store) {
   const files = (await discoverAssets(root,store)).filter(file => artFile.test(file));
   const descriptions = await Promise.all(files.map(async file => {
     try {
       const ase = await readArt(file,store?.read ?? (name=>readFile(projectPath(root,name))));
-      return [file, { tags: ase.tags.map(tag => tag.name), width: ase.width, height: ase.height }];
+      return [file, { tags: ase.tags.map(tag => tag.name), width: ase.width, height: ase.height, frames:ase.frames.length, revision:ase.revision }];
     } catch (error) {
       return [file, { error: error.message, tags: [] }];
     }
@@ -185,6 +257,22 @@ export async function previewTiles(tiles,size,read) {
   return result;
 }
 
+function components(value) {
+  if(value==null)return [];
+  if(!Array.isArray(value) || value.length>32 || value.some(name=>!variableName(name)))
+    throw Error('Use up to 32 component names with letters, numbers, and underscores');
+  return [...new Set(value)];
+}
+
+function respawnRule(config,flags) {
+  if(config==null || config.mode==='default')return;
+  if(!['never','on_entry','delay'].includes(config.mode))throw Error('Choose a respawn rule');
+  if(config.mode!=='delay')return {mode:config.mode};
+  const ticks=integer(config.ticks??60,1,216000,'respawn delay');
+  if(config.flag && !Object.hasOwn(flags??{},config.flag))throw Error('Unknown respawn flag: '+config.flag);
+  return {mode:config.mode,ticks,flag:config.flag??null,when:config.when??true};
+}
+
 export async function compileProject(root, { project: draft, scripts = new Map(), store } = {}) {
   if (!store && root.endsWith('.waffleproj')) store=await (await import('./project-store.mjs')).projectStore(root);
   const read = store?.read ?? ((name,encoding)=>readFile(projectPath(root,name),encoding));
@@ -196,7 +284,22 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     if(!variableName(id)||Object.hasOwn(controls,id)||!Array.isArray(keys)||!keys.length||keys.some(key=>!buttons.includes(key)))throw Error('Invalid input action: '+id);
     controls[id]=keys.reduce((mask,key)=>mask|(1<<buttons.indexOf(key)),0);
   }
-  const registry={controls,items:project.items??{}};
+  const localization = compileLocalization(project.localization);
+  const menus=Object.fromEntries(Object.entries(project.menus??{}).map(([id,menu])=>{
+    if(!variableName(id)||!safe(id)||typeof menu.title!=='string'||!Array.isArray(menu.options)||!menu.options.length||menu.options.length>8)
+      throw Error('Give menu '+id+' a title and one to eight options');
+    for(const label of [menu.title,...menu.options]){
+      if(typeof label!=='string'||!label.trim()||Buffer.byteLength(label)>256)throw Error('Invalid label in menu '+id);
+      if(label.startsWith('text.')&&!Object.hasOwn(localization.tables[localization.locale]??{},label.slice(5)))
+        throw Error('Add text key '+label.slice(5)+' for menu '+id);
+    }
+    return [id,{title:menu.title,options:menu.options}];
+  }));
+  const events=project.events??{};
+  if(typeof events!=='object'||Array.isArray(events)||Object.keys(events).length>256
+    ||Object.entries(events).some(([id,label])=>!variableName(id)||typeof label!=='string'||!label.trim()||label.length>100))
+    throw Error('Use up to 256 named events in Game → Events');
+  const registry={fonts:{...project.bitfonts,builtin:true},controls,menus,events,sounds:project.audio??{},roomScript:false,sprites:project.sprites??{},flags:project.flags??{},items:project.items??{},text:localization.tables[localization.locale]??{}};
   const frames = new Map(), sources = new Map();
   async function source(file) {
     if (!sources.has(file)) sources.set(file, await readArt(file,read));
@@ -209,14 +312,16 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     return { image: id, ms: frame.duration };
   }
 
-  const sprites = Object.create(null), dependencies = new Map();
+  let runtimeAbi=9;
+  const sprites = Object.create(null), dependencies = new Map(), spriteFonts = new Map();
   for (const [id, sprite] of Object.entries(project.sprites ?? {})) {
     key(id, 'sprite');
     const ase = await source(sprite.source);
     const all = ase.frames.map((_, i) => register(`sprite/${id}/${i}`, ase, i));
     const clips = Object.create(null);
-    clips.default = { frames: all, repeat: 0 };
-    for (const tag of ase.tags) clips[tag.name] = { frames: tagFrames(tag).map(i => all[i]), repeat: tag.repeat };
+    const clip=(frames,repeat)=>({frames,repeat,durationMs:frames.reduce((ms,frame)=>ms+Math.max(1,frame.ms),0)});
+    clips.default=clip(all,0);
+    for (const tag of ase.tags) clips[tag.name]=clip(tagFrames(tag).map(i=>all[i]),tag.repeat);
     let script = compileScript(initialScript(sprite));
     if (sprite.script) {
       try {
@@ -226,13 +331,22 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         if (error.code !== 'ENOENT') throw error;
       }
     }
-    if(sprite.emitter && (!effects.includes(sprite.emitter.effect) || !Number.isInteger(sprite.emitter.rate) || sprite.emitter.rate<1 || sprite.emitter.rate>240))throw Error('Invalid particle emitter for '+id);
+    if(sprite.gravityMode!=null && !['room','script'].includes(sprite.gravityMode))throw Error('Invalid gravity control for '+id);
+    if(sprite.emitter && (!effects.includes(sprite.emitter.effect) || !Number.isInteger(sprite.emitter.rate) || sprite.emitter.rate<1 || sprite.emitter.rate>240
+      || (sprite.emitter.offset!=null && (!Array.isArray(sprite.emitter.offset)||sprite.emitter.offset.length!==2||sprite.emitter.offset.some(value=>!Number.isFinite(value)||Math.abs(value)>4096)))))
+      throw Error('Invalid particle emitter for '+id);
+    if(script.requiresAbi10)runtimeAbi=10;
     dependencies.set(id,script.dependencies);
-    sprites[id] = { clips, scriptJump:script.scriptJump, scriptGravity:Boolean(sprite.scriptGravity||script.scriptGravity), program:script.events, physics: props(sprite.physics, 'none'), width: sprite.width ?? ase.width,
+    spriteFonts.set(id,script.fontUses);
+    sprites[id] = { clips, components:components(sprite.components), respawn:respawnRule(sprite.respawn,project.flags), scriptJump:sprite.legacyBuiltInJump==null?script.scriptJump:!sprite.legacyBuiltInJump, scriptGravity:sprite.gravityMode!=null?sprite.gravityMode==='script':Boolean(sprite.scriptGravity||script.scriptGravity), program:script.events, physics: props(sprite.physics, 'none'), width: sprite.width ?? ase.width,
       height: sprite.height ?? ase.height, layer: sprite.layer ?? 0, animation: sprite.animation ?? 'default',
-      emitter:sprite.emitter??null, alwaysActive:sprite.alwaysActive??false, team: sprite.team ?? 0, projectile: sprite.projectile };
+      emitter:sprite.emitter?{effect:sprite.emitter.effect,rate:sprite.emitter.rate,offset:sprite.emitter.offset??[0,0]}:null, alwaysActive:sprite.alwaysActive??false, team: sprite.team ?? 0, projectile: sprite.projectile };
     number(sprites[id].width, 1, 8192, 'sprite width');
     number(sprites[id].height, 1, 8192, 'sprite height');
+    if(sprite.collider==='silhouette'||Object.keys(sprite.frameColliders??{}).length){
+      const config=compileColliders(sprite,ase,sprites[id],id);
+      for(const [key,value] of Object.entries(config))if(value)sprites[id][key]=value;
+    }
   }
   for (const [id, targets] of dependencies) for (const target of targets) {
     if (!Object.hasOwn(sprites,target)) throw Error(`Sprite "${id}" adds an instance of unknown sprite "${target}"`);
@@ -262,6 +376,12 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     zoom:integer(project.camera?.zoom??2,1,8,'camera pixel zoom'),
   };
   if (camera.min_width>camera.max_width || camera.min_height>camera.max_height) throw Error('Camera minimum exceeds maximum');
+  const resolution=project.camera?.resolution;
+  if(resolution!=null){
+    if(!Array.isArray(resolution)||resolution.length!==2)throw Error('Set the resolution width and height');
+    camera.resolution=resolution.map(value=>integer(value,64,512,'screen resolution'));
+    runtimeAbi=11;
+  }
   const tiles = Object.create(null);
   for (const [id, tile] of Object.entries(project.tiles ?? {})) {
     key(id, 'tile');
@@ -289,14 +409,33 @@ export async function compileProject(root, { project: draft, scripts = new Map()
   for(const [id,item] of Object.entries(project.items??{})){
     if(!variableName(id))throw Error('Invalid item ID '+id);
     if(item.flag && !variableName(item.flag))throw Error('Invalid item flag '+item.flag);
-    items[id]={consumable:item.consumable===true,flag:item.flag||null};
+    if(item.label?.startsWith('text.')&&!Object.hasOwn(localization.tables[localization.locale]??{},item.label.slice(5)))
+      throw Error('Add text key '+item.label.slice(5)+' for item '+id);
+    items[id]={consumable:item.consumable===true,flag:item.flag||null,...(item.label?{label:item.label}:{})};
     if(item.icon){const art=await source(item.icon);itemIcons.set('ui/item/'+id,{width:art.width,height:art.height,rgba:art.frames[0].rgba});}
   }
-  let font=defaultFont();
-  if(project.font){
+  const builtinFont=defaultFont();
+  const namedFonts=new Map();
+  async function loadFont(id){
+    if(!namedFonts.has(id))namedFonts.set(id,id==='builtin'?builtinFont:await readBitfont(project.bitfonts[id],read,readArt));
+    return namedFonts.get(id);
+  }
+  let font=builtinFont;
+  if(project.activeBitfont && !['builtin','legacy'].includes(project.activeBitfont)){
+    const config=project.bitfonts?.[project.activeBitfont];
+    if(!config)throw Error('Choose an installed bitfont');
+    font=await loadFont(project.activeBitfont);
+  }else if(project.font && project.activeBitfont!=='builtin'){
     const image=await source(project.font);
-    if(image.width!==96 || image.height!==48)throw Error('Use a 96 × 48 pixel bitmap font sheet');
-    font={width:96,height:48,rgba:image.frames[0].rgba};
+    const characters=[...(project.fontCharacters??'')];
+    const height=Math.ceil((96+characters.length)/16)*8;
+    if(characters.length>4096 || new Set(characters).size!==characters.length ||
+      characters.some(character=>character.codePointAt(0)<128 || /\s/u.test(character))) {
+      throw Error('List unique non-ASCII bitmap glyphs in sheet order');
+    }
+    if(image.width!==96 || image.height!==height)throw Error(`Use a 96 × ${height} pixel bitmap font sheet`);
+    font={width:96,height,rgba:image.frames[0].rgba,
+      glyphs:Object.fromEntries(characters.map((character,index)=>[character,96+index]))};
   }
   const rooms = Object.create(null), atlases = Object.create(null);
   for (const [id, room] of Object.entries(project.rooms ?? {})) {
@@ -307,9 +446,19 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     const view = room.view ?? (Math.abs(room.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer');
     if (!['platformer','top_down'].includes(view)) throw Error(`Unknown room view: ${view}`);
     const gravity = view === 'top_down' ? 0 : number(room.gravity ?? platformGravity, -100, 100, 'room gravity');
+    const cameraZoom = number(room.cameraZoom ?? 1, .25, 4, 'default camera zoom');
+    if(cameraZoom!==1)runtimeAbi=Math.max(runtimeAbi,10);
+    const bottomInset=Math.min(rows-1,integer(room.cameraBottomInset??0,0,1023,'bottom camera inset'));
+    if(bottomInset)runtimeAbi=11;
     const ySort = room.ySort ?? view === 'top_down';
     const images = new Map(), baked = [], entities = [], solids = [], blockers = new Set();
-    const usedSprites = new Set();
+    if (room.backgroundImage) {
+      const art=await source(room.backgroundImage);
+      images.set('room/background',{width:art.width,height:art.height,rgba:art.frames[0].rgba});
+      const parallax=number(room.backgroundParallax??1,0,1,'background scroll');
+      baked.push({image:'room/background',layer:-10001,x:0,y:0,width,height,...(parallax===1?{}:{parallax})});
+    }
+    const usedSprites = new Set(), usedFonts = new Set();
     function includeSprite(sprite) {
       if (usedSprites.has(sprite)) return;
       const definition = sprites[sprite];
@@ -318,6 +467,28 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       for (const clip of Object.values(definition.clips)) for (const frame of clip.frames) images.set(frame.image, frames.get(frame.image));
       if (definition.projectile) includeSprite(definition.projectile);
       for (const target of dependencies.get(sprite)) includeSprite(target);
+      for (const font of spriteFonts.get(sprite)) usedFonts.add(font);
+    }
+    let scriptHost;
+    if (room.script) {
+      const isText=room.script.endsWith('.ws');
+      const data=scripts.has('room:'+id)?null:await read(room.script,isText?'utf8':undefined).catch(error=>{
+        if(error.code!=='ENOENT')throw error;
+        return null;
+      });
+      const unit=scripts.get('room:'+id) ?? (data==null?null:isText?parseScript(data):decodeCbor(data));
+      if(unit){
+        const script=compileScript(unit,await loadModules(unit,read),undefined,{...registry,roomScript:true});
+        if(script.requiresAbi10)runtimeAbi=Math.max(runtimeAbi,10);
+        if (Object.keys(script.events).length) {
+          scriptHost='@room/'+id;
+          sprites[scriptHost]={clips:{},program:script.events,physics:props(undefined,'none'),
+            width:1,height:1,layer:0,animation:'default',team:0};
+          for (const sprite of script.dependencies) includeSprite(sprite);
+          for (const font of script.fontUses) usedFonts.add(font);
+          for (const kind of script.shaderPresets) bakeShaderPreset(kind,images);
+        }
+      }
     }
     const players = new Set();
     const names = instanceNames(room.entities ?? []);
@@ -342,7 +513,12 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         players.add(entry.player);
       }
       const physics = entry.physics ? props({ ...definition.physics, ...entry.physics }, definition.physics.mode) : undefined;
-      entities.push({ ...entry,persistence:entry.persistRemoval?'sprite/'+name:null, conditions:conditions(project.sprites[entry.sprite],entry), name, animation, physics });
+      const type=project.sprites[entry.sprite];
+      const rememberState=entry.rememberState??(entry.persistRemoval===true?true:type.rememberState??false);
+      const rememberRemoval=entry.persistRemoval===true && entry.rememberState==null;
+      entities.push({ ...entry, components:components(entry.components), standardRespawn:entry.respawn?.mode==='default',
+        respawn:respawnRule(entry.respawn??type.respawn,flags), persistence:rememberState?'sprite/'+name:null,
+        ...(rememberState&&!rememberRemoval?{rememberRemoval:false}:{}), conditions:conditions(type,entry), name, animation, physics });
     }
     for (const sound of [room.music, room.ambience].filter(Boolean)) {
       if (!Object.hasOwn(audio, sound)) throw Error(`Unknown room audio: ${sound}`);
@@ -416,7 +592,15 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       }
     }
     const ripple = bakeRoomShader(room.shader,images);
-    images.set('ui/font',font);for(const [id,image] of itemIcons)images.set(id,image);
+    let shader;
+    if(atmospherePresets.includes(room.shader?.kind)){
+      shader={kind:room.shader.kind,strength:room.shader.strength??55};
+      bakeShaderPreset(shader.kind,images);
+    }
+    images.set('ui/font',font);
+    if(font.layout||usedFonts.size)images.set('ui/font-fallback',builtinFont);
+    for(const id of usedFonts)images.set('ui/font/'+id,await loadFont(id));
+    for(const [id,image] of itemIcons)images.set(id,image);
     const exits={};
     for(const [edge,exit] of Object.entries(room.exits??{})){
       if(!['left','right','up','down'].includes(edge)||!['fixed','save','crossing'].includes(exit.mode)
@@ -425,9 +609,11 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       exits[edge]={mode:exit.mode,targets:exit.targets,flag:exit.flag||null,when:exit.when??true,adjacent:exit.adjacent??false};
     }
     atlases[id] = atlas(images);
-    rooms[id] = { title: room.title ?? id, ripple, hd:room.shader?.kind==='hd'?(room.shader.strength??35):0, exits, cols, rows, width, height, size, baked, solids, entities,
+    const layoutKey=createHash('sha256').update(JSON.stringify({size,gravity,cols,rows,solids,entities,scriptHost})).digest('hex');
+    rooms[id] = { layoutKey, scriptHost, title: room.title ?? id, ripple, shader, hd:room.shader?.kind==='hd'?(room.shader.strength??35):0, exits, cols, rows, width, height, size, baked, solids, entities,
       blockers: [...blockers], background: room.background ?? '#101a23', music: room.music,
-      ambience: room.ambience, group_camera:room.groupCamera===true, gravity, view, ySort };
+      ambience: room.ambience, group_camera:(room.groupCamera??project.camera?.groupCamera)===true,
+      ...(cameraZoom===1?{}:{cameraZoom}), ...(bottomInset?{cameraHeight:height-bottomInset*size}:{}), gravity, view, ySort };
   }
   addSeams(rooms,atlases,sprites,atlas);
   const start = project.start ?? Object.keys(rooms)[0];
@@ -438,16 +624,20 @@ export async function compileProject(root, { project: draft, scripts = new Map()
   }
   const tilePreviews = Object.fromEntries(Object.entries(tiles).map(([id, tile]) =>
     [id, { mode: tile.physics.mode, variants: tile.variants.map(clip => thumbnail(clip[0])) }]));
-  const spritePreviews = Object.fromEntries(Object.entries(sprites).map(([id, sprite]) =>
+  const spritePreviews = Object.fromEntries(Object.entries(sprites).filter(([id])=>!id.startsWith('@room/')).map(([id, sprite]) =>
     [id, thumbnail((sprite.clips[sprite.animation] ?? sprite.clips.default).frames[0])]));
-  return { controls,items,saveId:project.saveId??project.name, name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
-    tilePreviews, spritePreviews };
+  const coverArt=await compileCover(project.coverImage,read);
+  return { runtimeAbi, controls,items,menus,events:Object.keys(events),localization,minimap:generateMinimap(rooms,start,project.minimap),saveId:project.saveId??project.name, name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
+    coverArt,tilePreviews, spritePreviews, fontGlyphs:font.glyphs,fontLayout:font.layout, fontFallbackGlyphs:font.layout||namedFonts.size?builtinFont.glyphs:undefined,
+    fonts:Object.fromEntries([...namedFonts].map(([id,font])=>[id,{layout:font.layout,glyphs:font.glyphs}])) };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const root = resolve(process.argv[2] ?? 'demo');
   const output = resolve(process.argv[3] ?? 'web-built/demo.waffle');
-  const bytes = pack(await compileProject(root));
+  const [flag,locale,...extra] = process.argv.slice(4);
+  if (flag!==undefined && (flag!=='--locale' || !locale || extra.length)) throw Error('Use --locale followed by a language code');
+  const bytes = pack(await compileProject(root),{locale});
   await mkdir(dirname(output), { recursive: true });
   await writeFile(output, bytes);
   console.log(`Built ${output} (${bytes.length} bytes)`);

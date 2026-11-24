@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 const LIMIT: usize = 2048;
 const BIRTH_LIMIT: usize = 256;
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Effect {
     Sparks,
@@ -15,12 +15,27 @@ pub enum Effect {
     Snow,
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 pub struct Emitter {
     pub effect: Effect,
     pub rate: u16,
-    #[serde(skip)]
+    #[serde(default)]
     pub phase: u16,
+    #[serde(default)]
+    pub offset: [f32; 2],
+    pub until: Option<u64>,
+}
+
+impl Emitter {
+    pub fn advance(&mut self, tick: u64) -> Option<usize> {
+        if self.until.is_some_and(|until| tick >= until) {
+            return None;
+        }
+        self.phase = self.phase.min(59) + self.rate.min(240);
+        let count = self.phase / 60;
+        self.phase %= 60;
+        Some(usize::from(count))
+    }
 }
 
 impl Effect {
@@ -49,6 +64,7 @@ impl Effect {
         }
     }
 }
+#[derive(Clone, Deserialize, Serialize)]
 struct Particle {
     x: f32,
     y: f32,
@@ -59,12 +75,13 @@ struct Particle {
     age: u8,
     style: usize,
 }
-#[derive(Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct Batch {
     pub color: u32,
     pub size: u8,
     pub points: Vec<[i16; 2]>,
 }
+#[derive(Clone, Deserialize, Serialize)]
 pub struct Particles {
     live: Vec<Particle>,
     pub batches: Vec<Batch>,
@@ -106,6 +123,22 @@ impl Default for Particles {
     }
 }
 impl Particles {
+    pub fn valid_save(&self) -> bool {
+        self.live.len() <= LIMIT
+            && self.births <= BIRTH_LIMIT
+            && self.batches.len() == 14
+            && self
+                .batches
+                .iter()
+                .map(|batch| batch.points.len())
+                .sum::<usize>()
+                <= LIMIT
+            && self
+                .live
+                .iter()
+                .all(|particle| particle.style < 13 && particle.age < particle.life)
+    }
+
     pub fn visible_batches(&self) -> &[Batch] {
         if self.live.is_empty() {
             &[]

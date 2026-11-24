@@ -6,6 +6,7 @@ import {pack} from './pack.mjs';
 import {fileHistory} from './file-history.mjs';
 import {recoveryStore} from './recovery.mjs';
 import {projectStore} from './project-store.mjs';
+import {projectBasename} from './resource-name.mjs';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { watch } from 'node:fs';
@@ -13,7 +14,7 @@ import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
 import { dirname, extname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
-import { compileProject, previewTiles, discoverAssets, describeArt, projectPath } from './compiler.mjs';
+import { compileProject, previewTiles, previewRoomArt, inspectBitfont, discoverAssets, describeArt, projectPath } from './compiler.mjs';
 import { encodeCbor, decodeCbor } from './cartridge.mjs';
 import { initialScript,buttons,Opcodes } from './schema.mjs';
 import { embedCartridge, playerTemplate } from './web-export.mjs';
@@ -35,9 +36,10 @@ const site = resolve('web-built/site');
 const wasm = await readFile('web-built/runtime/runtime_bg.wasm');
 initSync({ module: wasm });
 
-const initial = cartFile ? null : await compileProject(root,{store});
-let bytes = cartFile ? await readFile(resolve(cartFile)) : pack(initial);
-let editorBytes = initial ? pack(initial,{editor:true}) : null;
+let cartridge = cartFile ? null : await compileProject(root,{store});
+let bytes = cartFile ? await readFile(resolve(cartFile)) : pack(cartridge);
+let editorBytes = cartridge ? pack(cartridge,{editor:true}) : null;
+let previewKey = cartridge ? thumbnailKey(cartridge) : '';
 let runtime;
 try{runtime=createRuntime(bytes);}
 catch(error){console.error('Could not load the cartridge: '+String(error?.message??error));process.exit(1);}
@@ -78,18 +80,50 @@ function change(fn) {
   mutation = result.catch(() => {});
   return result;
 }
+function explicitBehavior(project) {
+  const legacyPlayerTypes=new Set(Object.values(project.rooms??{}).flatMap(room=>
+    (room.entities??[]).filter(entity=>entity.standardMovement).map(entity=>entity.sprite)));
+  let migrated=false;
+  for(const [id,entity] of Object.entries(project.sprites??{})){
+    const previous=cartridge?.sprites[id];
+    if(!previous)continue;
+    if(entity.gravityMode==null){
+      entity.gravityMode=previous.scriptGravity?'script':'room';
+      migrated=true;
+    }
+    if(legacyPlayerTypes.has(id)&&entity.legacyBuiltInJump==null){
+      entity.legacyBuiltInJump=!previous.scriptJump;
+      migrated=true;
+    }
+  }
+  return migrated;
+}
+
+function thumbnailKey(cart) {
+  return createHash('sha256').update(encodeCbor([cart.tilePreviews,cart.spritePreviews])).digest('hex');
+}
+
 async function recompile(project, scripts, save, sourceStore=store) {
-  const cartridge = await compileProject(root, { project, scripts, store:sourceStore });
-  const updated = pack(cartridge);
-  const preview = pack(cartridge,{editor:true});
+  const next = await compileProject(root, { project, scripts, store:sourceStore });
+  const updated = pack(next);
+  const preview = pack(next,{editor:true});
   const simulation = createRuntime(updated);
   try {
     await save();
+    cartridge = next;
     bytes = updated;
     editorBytes = preview;
+    previewKey = thumbnailKey(next);
     revision++;
     sourceError = '';
   } finally { simulation.free(); }
+}
+async function exportBytes(url) {
+  await mutation;
+  const locale = url.searchParams.get('locale');
+  if (!locale || locale===cartridge?.localization.locale) return bytes;
+  if (!cartridge) throw Error('Choose the export language from the source project');
+  return pack(cartridge,{locale});
 }
 const files = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',
   '.css':'text/css; charset=utf-8', '.svg':'image/svg+xml', '.png':'image/png', '.gif':'image/gif', '.cur':'image/x-icon', '.mp3':'audio/mpeg', '.ogg':'audio/ogg', '.wav':'audio/wav', '.wasm':'application/wasm', '.txt':'text/plain; charset=utf-8' };
@@ -105,9 +139,12 @@ const server = createServer(async (req, res) => {
       res.writeHead(302,{Location:new URL('/'+url.search,await launcher).href});res.end();return;
     }
     if (url.pathname === '/export.html' && req.method === 'GET') {
-      return send(res, 200, embedCartridge(await readFile(playerTemplate, 'utf8'), bytes), 'text/html; charset=utf-8');
+      return send(res, 200, embedCartridge(await readFile(playerTemplate, 'utf8'), await exportBytes(url)), 'text/html; charset=utf-8');
     }
-    if (url.pathname === '/demo.waffle') return send(res, 200, bytes, 'application/octet-stream');
+    if (url.pathname === '/game.waffle' || url.pathname === '/demo.waffle'){
+      res.setHeader('Cache-Control','no-store');
+      return send(res,200,await exportBytes(url),'application/octet-stream');
+    }
     if (url.pathname === '/lan.waffle') return send(res, 200, connections.size ? clientsCart : bytes, 'application/octet-stream');
     if (url.pathname.startsWith('/api/')) {
       if (cartFile || !local(req) || !sameSite(req)) return send(res, 403, {error:'The editor is available on the host computer'});
@@ -123,7 +160,7 @@ const server = createServer(async (req, res) => {
         return send(res,200,await change(()=>recover(key,req.method,value)));
       }
       if(url.pathname==='/api/desktop' && req.method==='GET'){
-        await mutation;return send(res,200,await exportDesktop(bytes,url.searchParams.get('target')??nativeTarget),'application/zip');
+        return send(res,200,await exportDesktop(await exportBytes(url),url.searchParams.get('target')??nativeTarget),'application/zip');
       }
       if(url.pathname==='/api/update' && req.method==='POST'){
         const {component,target,install}=await jsonBody(req);
@@ -147,14 +184,27 @@ const server = createServer(async (req, res) => {
       }
       if (url.pathname === '/api/import' && req.method === 'POST') {
         const name=url.searchParams.get('name');
-        if (!/^[\w .-]+\.(png|ase|aseprite|wav|ogg|opus|qoa)$/i.test(name??''))throw Error('Select an image or sound file');
+        const kind=url.searchParams.get('kind');
+        const bitfont=kind==='font', background=kind==='background', cover=kind==='cover';
+        const allowed=bitfont? /^[^\\/\x00-\x1f]+\.(yaff|ase|aseprite|png)$/i
+          : background||cover? /^[^\\/\x00-\x1f]+\.(ase|aseprite|png)$/i : /^[\w .-]+\.(png|ase|aseprite|wav|ogg|opus|qoa)$/i;
+        if(!allowed.test(name??''))throw Error(background||cover?'Select a PNG or Aseprite image':'Select an image or sound file');
         const chunks=[];let size=0;
         for await(const chunk of req){if((size+=chunk.length)>32*1024*1024)throw Error('File exceeds 32 MiB');chunks.push(chunk);}
-        const group=/\.(wav|ogg|opus|qoa)$/i.test(name)?'audio':url.searchParams.get('kind')==='tile'?'tiles':'sprites';
-        const data=Buffer.concat(chunks);
+        const group=bitfont?'fonts':background?'backgrounds':cover?'covers':/\.(wav|ogg|opus|qoa)$/i.test(name)?'audio':kind==='tile'?'tiles':'sprites';
+        let data=Buffer.concat(chunks),fontConfig;
+        if(bitfont){
+          ({data,fontConfig}=decodeCbor(data));
+          if(!(data instanceof Uint8Array))throw Error('Choose a bitfont file');
+          data=Buffer.from(data.buffer,data.byteOffset,data.byteLength);
+        }
         const result=await change(async()=>{
           const files=new Map((await store.list('assets')).map(path=>[path.toLowerCase(),path]));
-          const base='assets/'+group+'/'+name;
+          const extension=extname(name);
+          const filename=bitfont||background||cover?projectBasename(name.slice(0,-extension.length))+extension.toLowerCase():name;
+          const base='assets/'+group+'/'+filename;
+          if(bitfont)await inspectBitfont({...fontConfig,source:base},async()=>data);
+          if(background||cover)await previewRoomArt(base,async()=>data);
           let path=base,index=0,digest;
           while(files.has(path.toLowerCase())){
             const existing=files.get(path.toLowerCase());
@@ -173,6 +223,11 @@ const server = createServer(async (req, res) => {
         const {tiles,size}=await jsonBody(req);
         return send(res,200,encodeCbor(await previewTiles(tiles,size,store.read)),'application/octet-stream');
       }
+      if (url.pathname === '/api/bitfont' && req.method === 'POST') {
+        return send(res,200,await inspectBitfont(await jsonBody(req),store.read));
+      }
+      if (url.pathname === '/api/room-art' && req.method === 'GET')
+        return send(res,200,await previewRoomArt(url.searchParams.get('path'),store.read,Number(url.searchParams.get('frame')??0)),'image/png');
       if (url.pathname === '/api/preview' && req.method === 'GET') return send(res,200,editorBytes,'application/octet-stream');
       if (url.pathname === '/api/status' && req.method === 'GET') return send(res, 200, {revision, sourceError});
       if (url.pathname === '/api/rebuild' && req.method === 'POST') {
@@ -181,7 +236,9 @@ const server = createServer(async (req, res) => {
       }
       if (url.pathname === '/api/project' && req.method === 'GET') {
         await mutation;
-        return send(res, 200, {path:root,project:JSON.parse(await store.read('project.json','utf8')), assets:await discoverAssets(root,store), art:await describeArt(root,store), revision});
+        const project=JSON.parse(await store.read('project.json','utf8'));
+        explicitBehavior(project);
+        return send(res, 200, {path:root,project, assets:await discoverAssets(root,store), art:await describeArt(root,store), revision, previewKey});
       }
       if (url.pathname === '/api/project' && req.method === 'PUT') {
         const project = await jsonBody(req);
@@ -206,7 +263,11 @@ const server = createServer(async (req, res) => {
             const override={...store,read:(file,encoding)=>file===path?Promise.resolve(encoding?source:Buffer.from(source)):store.read(file,encoding)};
             const modules=await loadModules({imports:[mod[1]]},override.read);
             compileScript(unit,modules);
-            return history.save(path,source,()=>recompile(undefined,undefined,()=>store.save([[path,source]]),override));
+            const project=JSON.parse(await store.read('project.json','utf8'));
+            const migrated=explicitBehavior(project);
+            return history.save(path,source,()=>recompile(project,undefined,()=>store.save([
+              [path,source],...(migrated?[['project.json',JSON.stringify(project,null,2)+'\n']]:[]),
+            ]),override));
           });
           return send(res,200,{ok:true,edit});
         }
@@ -214,16 +275,18 @@ const server = createServer(async (req, res) => {
       if(url.pathname==='/api/modules' && req.method==='POST'){
         const {imports,moduleName}=await jsonBody(req);return send(res,200,await loadModules({imports},store.read,Object.create(null),new Set(moduleName?[moduleName]:[])));
       }
-      const match = url.pathname.match(/^\/api\/script\/([a-zA-Z0-9_-]+)$/);
+      const match = url.pathname.match(/^\/api\/(script|room-script)\/([a-zA-Z0-9_-]+)$/);
       if (match) {
-        const id = match[1];
+        const [,kind,id] = match;
+        const isRoom=kind==='room-script', collection=isRoom?'rooms':'sprites';
+        const defaultPath=`scripts/${collection}/${id}.cbor`;
         if (req.method === 'GET') {
           await mutation;
           const project = JSON.parse(await store.read('project.json','utf8'));
-          if (!Object.hasOwn(project.sprites,id)) return send(res, 404, {error:'Unknown sprite'});
-          const file = project.sprites[id].script ?? `scripts/sprites/${id}.cbor`;
+          if (!Object.hasOwn(project[collection],id)) return send(res, 404, {error:isRoom?'Unknown room':'Unknown entity type'});
+          const file = project[collection][id].script ?? defaultPath;
           const data = await store.read(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
-          const script=data ? (file.endsWith('.ws') ? {...parseScript(data.toString()),source:data.toString()} : decodeCbor(data)) : initialScript(project.sprites[id]);
+          const script=data ? (file.endsWith('.ws') ? {...parseScript(data.toString()),source:data.toString()} : decodeCbor(data)) : initialScript(isRoom?null:project.sprites[id]);
           if(url.searchParams.has('debug')){
             const labels=new WeakMap();
             function index(source,name){
@@ -243,7 +306,7 @@ const server = createServer(async (req, res) => {
               modules[name]=index(await store.read(path,'utf8'),path);
             }
             const names=Object.fromEntries(Object.entries(Opcodes).map(([name,id])=>[id,name]));
-            Object.assign(names,{10:'constant',11:'load',12:'store',13:'calculate',14:'branch',15:'jump',16:'wait',17:'real'});
+            Object.assign(names,{10:'constant',11:'load',12:'store',13:'calculate',14:'branch',15:'jump',16:'wait',17:'real',47:'string',48:'localized text',49:'text command',50:'entity query'});
             const events={};
             compileScript(unit,modules,(event,op,node)=>(events[event]??=[]).push({...labels.get(node),op:names[op]}));
             return send(res,200,events);
@@ -255,13 +318,14 @@ const server = createServer(async (req, res) => {
           if(script.source!=null && formatScript(parseScript(script.source))!==formatScript(script))throw Error('Text and blocks differ');
           const edit=await change(async () => {
             const project = JSON.parse(await store.read('project.json','utf8'));
-            if (!Object.hasOwn(project.sprites,id)) throw Error('Unknown sprite');
-            const established = project.sprites[id].script;
-            const file = established ?? `scripts/sprites/${id}.cbor`;
-            project.sprites[id].script = established ?? `scripts/sprites/${id}.cbor`;
+            if (!Object.hasOwn(project[collection],id)) throw Error(isRoom?'Unknown room':'Unknown entity type');
+            const migrated=explicitBehavior(project);
+            const established = project[collection][id].script;
+            const file = established ?? defaultPath;
+            project[collection][id].script = file;
             const data=file.endsWith('.ws')?(script.source??formatScript(script)):encodeCbor(script);
-            return history.save(file,data,()=>recompile(project,new Map([[id,script]]),async()=>{
-              await store.save([[file,data],...(!established ? [['project.json',JSON.stringify(project,null,2)+'\n']] : [])]);
+            return history.save(file,data,()=>recompile(project,new Map([[isRoom?'room:'+id:id,script]]),async()=>{
+              await store.save([[file,data],...((migrated||!established) ? [['project.json',JSON.stringify(project,null,2)+'\n']] : [])]);
             }),file.endsWith('.ws')?Buffer.from(''):encodeCbor({events:{}}));
           });
           return send(res, 200, {ok:true,edit});
@@ -270,7 +334,11 @@ const server = createServer(async (req, res) => {
       return send(res, 404, {error:'Unknown editor route'});
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, {error:'Method not allowed'});
-    const defaultPage = cartFile || !local(req) ? 'player.html' : 'index.html';
+    if(cartFile&&url.pathname==='/'){
+      url.searchParams.set('play','1');
+      res.writeHead(302,{Location:'/player.html'+url.search});res.end();return;
+    }
+    const defaultPage = !local(req) ? 'player.html' : 'index.html';
     const file = url.pathname === '/' ? defaultPage : decodeURIComponent(url.pathname.slice(1));
     if (file === 'gamewaffle-player.html') return send(res,200,await readFile('web-built/standalone/gamewaffle-player.html'),files['.html']);
     if (file === 'offline.html') return send(res, 200, await readFile('web-built/standalone/player.html'), files['.html']);

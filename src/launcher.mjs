@@ -5,6 +5,7 @@ import {join,resolve,dirname,isAbsolute,sep} from 'node:path';
 import {homedir} from 'node:os';
 import {zipSync} from 'fflate';
 import {projectStore} from './project-store.mjs';
+import {projectBasename} from './resource-name.mjs';
 
 export async function launch(port,open){
   const home=join(homedir(),'GameWaffle');
@@ -80,23 +81,36 @@ export async function launch(port,open){
         project=resolve(form.get('path'));title=JSON.parse(await (await projectStore(project)).read('project.json','utf8')).name;
       }else{
 
-        if(action==='demo'){project=await mkdtemp(join(home,'Basalt Works-'));await cp('demo',project,{recursive:true});title=JSON.parse(await readFile(join(project,'project.json'),'utf8')).name;}
+        if(action==='demo'){project=await mkdtemp(join(home,'basalt-works-'));await cp('demo',project,{recursive:true});title=JSON.parse(await readFile(join(project,'project.json'),'utf8')).name;}
         else{
           const name=form.get('name')?.trim();
-          if(action!=='new'||!name||!/^[-\p{L}\p{N} _]{1,80}$/u.test(name))throw Error('Use letters, numbers, spaces, underscores, or hyphens');
+          if(action!=='new'||!name||name.length>80||/[\p{Cc}\p{Cs}]/u.test(name))throw Error('Enter a game name of up to 80 characters.');
           const destination=form.get('parent')||location;
           if(!isAbsolute(destination)||!(await stat(destination)).isDirectory())throw Error('Select a project location.');
           title=name;
           const view=form.get('view')==='top_down'?'top_down':'platformer';
           const room={title:'First room',cols:24,rows:16,view,entities:[],layers:[{name:'Ground',order:0,collidable:true,cells:[]}]};
           const manifest=JSON.stringify({name,start:'room',tileSize:16,sprites:{},tiles:{},audio:{},rooms:{room}},null,2);
-          if(form.get('storage')==='archive'){
-            project=join(destination,name+'.waffleproj');
-            await writeFile(project,zipSync({'project.json':Buffer.from(manifest)}),{flag:'wx'});
-          }else{
-            project=join(destination,name);await mkdir(project);
-            await mkdir(join(project,'assets'));await mkdir(join(project,'scripts'));
-            await writeFile(join(project,'project.json'),manifest);
+          const archive=form.get('storage')==='archive';
+          const base=projectBasename(name);
+          const occupied=new Set((await readdir(destination)).map(entry=>entry.toLowerCase()));
+          const data=archive?zipSync({'project.json':Buffer.from(manifest)}):null;
+          for(let suffix=1;;suffix++){
+            const filename=base+(suffix>1?'-'+suffix:'')+(archive?'.waffleproj':'');
+            if(occupied.has(filename))continue;
+            project=join(destination,filename);
+            try{
+              if(archive)await writeFile(project,data,{flag:'wx'});
+              else await mkdir(project);
+              break;
+            }catch(err){
+              if(err.code!=='EEXIST')throw err;
+            }
+          }
+          if(!archive){
+            await mkdir(join(project,'assets'));
+            await mkdir(join(project,'scripts'));
+            await writeFile(join(project,'project.json'),manifest,{flag:'wx'});
           }
         }
       }

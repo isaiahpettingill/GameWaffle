@@ -138,11 +138,13 @@ sprites.drone={source:'assets/sprites/drone.aseprite',script:'scripts/sprites/dr
   width:20,height:20,physics:{mode:'dynamic',gravity:0,health:5,elasticity:.4}};
 sprites.spark={source:'assets/sprites/spark.aseprite',width:8,height:8,physics:{mode:'none'}};
 const playerCode = {events:{
-  tick:[{op:'walk',speed:5.25}],
-  a:[{op:'jump',speed:9}],
-  b:[{op:'damage',amount:2,range:36,height:27},{op:'sound',sound:'hit'}],
-  x:[{op:'fire',aim:'heat_seek',speed:13,amount:2}],
-  menu:[{op:'room',room:'vault'}],
+  tick:[
+    {op:'walk',speed:5.25},
+    {op:'if',condition:{pressed:'a'},body:[{op:'jump',speed:9}]},
+    {op:'if',condition:{pressed:'b'},body:[{op:'damage',amount:2,range:36,height:27},{op:'sound',sound:'hit'}]},
+    {op:'if',condition:{pressed:'x'},body:[{op:'fire',aim:'heat_seek',speed:13,amount:2}]},
+    {op:'if',condition:{pressed:'menu'},body:[{op:'room',room:'vault'}]},
+  ],
 }};
 for (const name of names) await writeFile(`demo/scripts/sprites/${name}.cbor`,encodeCbor(playerCode));
 await writeFile('demo/scripts/sprites/drone.cbor',encodeCbor({events:{

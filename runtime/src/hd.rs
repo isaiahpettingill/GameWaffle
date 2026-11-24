@@ -12,10 +12,9 @@ pub fn scale(
     stride: usize,
 ) {
     let distance = |a: &[u8], b: &[u8]| -> u32 {
-        (0..3)
-            .zip([2, 4, 1])
-            .map(|(i, k)| u32::from(a[i].abs_diff(b[i])) * k)
-            .sum::<u32>()
+        (2 * u32::from(a[0].abs_diff(b[0]))
+            + 4 * u32::from(a[1].abs_diff(b[1]))
+            + u32::from(a[2].abs_diff(b[2])))
             / 7
     };
     for y in 0..h {
@@ -24,17 +23,33 @@ pub fn scale(
             let center = pixel(x, y);
             let horizontal = [pixel(x.saturating_sub(1), y), pixel((x + 1).min(w - 1), y)];
             let vertical = [pixel(x, y.saturating_sub(1)), pixel(x, (y + 1).min(h - 1))];
+            if horizontal
+                .iter()
+                .chain(&vertical)
+                .all(|neighbor| center[..3] == neighbor[..3])
+            {
+                let (r, g, b) = (center[0], center[1], center[2]);
+                let pair = [r, g, b, 255, r, g, b, 255];
+                let offset = 2 * y * stride + 8 * x;
+                dst[offset..offset + 8].copy_from_slice(&pair);
+                dst[offset + stride..offset + stride + 8].copy_from_slice(&pair);
+                continue;
+            }
+            let h_contrast = horizontal.map(|neighbor| distance(center, neighbor));
+            let v_contrast = vertical.map(|neighbor| distance(center, neighbor));
+            let h_edge = distance(horizontal[0], horizontal[1]);
+            let v_edge = distance(vertical[0], vertical[1]);
             for (j, v) in vertical.iter().enumerate() {
                 for (i, u) in horizontal.iter().enumerate() {
                     let offset = (2 * y + j) * stride + (2 * x + i) * 4;
-                    let contrast = distance(center, u).min(distance(center, v));
+                    let contrast = h_contrast[i].min(v_contrast[j]);
                     let corner = distance(u, v) < contrast / 2
-                        && distance(u, horizontal[1 - i]) > contrast / 2
-                        && distance(v, vertical[1 - j]) > contrast / 2;
+                        && h_edge > contrast / 2
+                        && v_edge > contrast / 2;
                     let blend = if corner {
                         80
                     } else {
-                        28u32.saturating_sub(distance(center, u).max(distance(center, v)) / 3)
+                        28u32.saturating_sub(h_contrast[i].max(v_contrast[j]) / 3)
                     };
                     let blend = blend * u32::from(strength.min(100)) / 100;
                     for c in 0..3 {

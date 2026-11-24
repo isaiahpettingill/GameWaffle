@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { cp, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { build } from 'vite';
-import { cartridgeMarker, embedCartridge, playerTemplate } from './web-export.mjs';
+import { cartridgeMarker, playerTemplate } from './web-export.mjs';
 
 const options = { stdio: 'inherit' };
 if (process.argv.includes('--native')) {
@@ -25,13 +25,15 @@ await build();
 const player = 'web-built/standalone/player.html';
 await rename(player, playerTemplate);
 const template = await readFile(playerTemplate,'utf8');
-await writeFile('web-built/standalone/gamewaffle-player.html',template.replace(cartridgeMarker,''));
+const empty=template.replace(cartridgeMarker,'');
+await Promise.all([writeFile('web-built/standalone/gamewaffle-player.html',empty),writeFile(player,empty)]);
 if (!process.argv.includes('--player-only')) {
-  const demo = await readFile('web-built/demo.waffle');
-  await writeFile(player,embedCartridge(template,demo));
-  const {Runtime,initSync}=await import('../web-built/runtime/runtime.js');
-  initSync({module:await readFile('web-built/runtime/runtime_bg.wasm')});
-  Runtime.from_cartridge(demo).free();
+  if(process.argv.includes('--check-demo')){
+    const demo = await readFile('web-built/demo.waffle');
+    const {Runtime,initSync}=await import('../web-built/runtime/runtime.js');
+    initSync({module:await readFile('web-built/runtime/runtime_bg.wasm')});
+    Runtime.from_cartridge(demo).free();
+  }
   const {studioBuildId}=await import('./studio-build-state.mjs');
   await writeFile('web-built/studio-build-id',await studioBuildId());
 }

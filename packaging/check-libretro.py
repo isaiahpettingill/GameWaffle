@@ -1,5 +1,6 @@
 """Exercise the libretro ABI with the compiled Basalt Works cartridge."""
 import ctypes as c
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -27,14 +28,17 @@ def register(name, result, args, action):
 
 
 frames, audio, ports = [], [], set()
+video_hashes, audio_hashes = [], []
 def video(data, w, h, pitch):
     samples = c.string_at(data, h * pitch)
     frames.append((w, h, len(set(samples))))
+    video_hashes.append(hashlib.sha256(samples).digest())
 
 
 def sound(data, count):
     samples = (c.c_int16 * (count * 2)).from_address(data)
     audio.append((count, max(samples)))
+    audio_hashes.append(hashlib.sha256(bytes(samples)).digest())
     return count
 
 
@@ -83,6 +87,12 @@ assert len(audio) == 35 and all(n == 800 for n, _ in audio) and any(level > 0 fo
 assert not restore(c.create_string_buffer(b'bad'), 3)
 assert restore(initial, len(initial))
 assert capture()[1]['players'] == before['players']
+original_video, original_audio = video_hashes[-30:], audio_hashes[-30:]
+for _ in range(30):
+    run()
+assert video_hashes[-30:] == original_video, 'Video diverged after restoring the rollback state'
+assert audio_hashes[-30:] == original_audio, 'Audio diverged after restoring the rollback state'
+assert capture()[1]['players'] == after['players']
 reset()
 assert restore(initial, len(initial))
 sram = c.string_at(ram(0), state_size())
@@ -94,4 +104,4 @@ assert abs(capture()[1]['players']['0'][0] - before['players']['0'][0]) < 5
 unload()
 assert not ram(0)
 function('deinit', None)()
-print('Passed libretro input, video, audio, checkpoint, reset, and save RAM checks')
+print('Passed libretro input, video, audio, frame-exact rollback, checkpoint, reset, and save RAM checks')

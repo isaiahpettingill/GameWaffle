@@ -1,12 +1,12 @@
 use crate::model::Room;
-use box2d_rs::b2_math::B2vec2;
+use crate::physics::Vec2;
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashSet},
 };
 
-pub fn waypoint(room: &Room, from: B2vec2, to: B2vec2, blocked: &HashSet<usize>) -> Option<B2vec2> {
-    let index = |p: B2vec2| {
+pub fn waypoint(room: &Room, from: Vec2, to: Vec2, blocked: &HashSet<usize>) -> Option<Vec2> {
+    let index = |p: Vec2| {
         let x = (p.x / room.size).floor().clamp(0.0, (room.cols - 1) as f32) as usize;
         let y = (p.y / room.size).floor().clamp(0.0, (room.rows - 1) as f32) as usize;
         y * room.cols + x
@@ -31,7 +31,7 @@ pub fn waypoint(room: &Room, from: B2vec2, to: B2vec2, blocked: &HashSet<usize>)
             while parents[next] != origin {
                 next = parents[next];
             }
-            return Some(B2vec2::new(
+            return Some(Vec2::new(
                 (next % room.cols) as f32 * room.size + room.size / 2.0,
                 (next / room.cols) as f32 * room.size + room.size / 2.0,
             ));
@@ -62,14 +62,14 @@ pub fn waypoint(room: &Room, from: B2vec2, to: B2vec2, blocked: &HashSet<usize>)
 /// Search from one supported tile to another. Sample each ballistic arc for clearance.
 pub fn platform_move(
     room: &Room,
-    from: B2vec2,
-    to: B2vec2,
+    from: Vec2,
+    to: Vec2,
     blocked: &HashSet<usize>,
     speed: f32,
     gravity: f32,
-) -> B2vec2 {
+) -> Vec2 {
     use std::collections::VecDeque;
-    let cell = |p: B2vec2| {
+    let cell = |p: Vec2| {
         (
             (p.x / room.size).floor() as i32,
             (p.y / room.size).floor() as i32,
@@ -85,11 +85,11 @@ pub fn platform_move(
     let stand = |x: i32, y: i32| open(x, y) && !open(x, y + 1);
     let origin = cell(from);
     let target = cell(to);
-    let mut queue = VecDeque::from([(origin, B2vec2::zero())]);
+    let mut queue = VecDeque::from([(origin, Vec2::ZERO)]);
     let mut seen = HashSet::from([origin]);
     let mut best = (
         origin.0.abs_diff(target.0) + origin.1.abs_diff(target.1),
-        B2vec2::zero(),
+        Vec2::ZERO,
     );
     while let Some(((x, y), first)) = queue.pop_front() {
         if seen.len() > 512 {
@@ -99,7 +99,7 @@ pub fn platform_move(
             for jump in [false, true] {
                 let vx = speed * sign as f32;
                 let vy = if jump { -8. } else { 0. };
-                let velocity = B2vec2::new(vx, vy);
+                let velocity = Vec2::new(vx, vy);
                 let initial = if (x, y) == origin { velocity } else { first };
                 let mut last = (x, y);
                 for tick in 1..=90 {

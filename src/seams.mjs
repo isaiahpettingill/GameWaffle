@@ -1,21 +1,28 @@
 // Bake the visible edge of a fixed neighbor. A 512-pixel camera can see 256
 // pixels past its center. Moving actors belong to the active simulation.
 import {PNG} from 'pngjs';
+import {seamlessNeighbor} from './room-geometry.mjs';
+import {byteCache} from './compile-cache.mjs';
+const decodedAtlases=byteCache(48*1024*1024);
 export function addSeams(rooms,atlases,sprites,packAtlas){
-  const opposite={right:'left',left:'right',up:'down',down:'up'};
   const originals=new Map();
   const image=id=>{
-    if(!originals.has(id))originals.set(id,PNG.sync.read(atlases[id].png));
+    if(!originals.has(id)){
+      const png=atlases[id].png;
+      let decoded=decodedAtlases.get(png);
+      if(!decoded){decoded=PNG.sync.read(png);decodedAtlases.put(png,decoded,decoded.data.length);}
+      originals.set(id,decoded);
+    }
     return originals.get(id);
   };
   const updates={};
   for(const [id,room] of Object.entries(rooms)){
     room.seams={};room.neighbors=[];
     const images=new Map();
-    for(const [edge,exit] of Object.entries(room.exits)){
-      if(!exit.adjacent||exit.mode!=='fixed'||exit.flag)continue;
-      const neighborId=exit.targets[0],other=rooms[neighborId],back=other.exits[opposite[edge]];
-      if(!back?.adjacent||back.mode!=='fixed'||back.flag||back.targets[0]!==id)continue;
+    for(const edge of Object.keys(room.exits)){
+      const neighborId=seamlessNeighbor(rooms,id,edge);
+      if(!neighborId)continue;
+      const other=rooms[neighborId];
       const horizontal=edge==='left'||edge==='right';
       if(horizontal?room.height!==other.height:room.width!==other.width)throw Error('Connected edges must have the same length');
       room.seams[edge]=true;
@@ -36,8 +43,9 @@ export function addSeams(rooms,atlases,sprites,packAtlas){
       for(const entry of entries.sort((a,b)=>a.layer-b.layer)){
         const rect=atlases[neighborId].entries[entry.image];if(!rect)continue;
         const x=Math.round(entry.x)-sx,y=Math.round(entry.y)-sy;
-        for(let dy=Math.max(0,-y);dy<Math.min(rect[3],h-y);dy++)for(let dx=Math.max(0,-x);dx<Math.min(rect[2],w-x);dx++){
-          const i=4*((rect[1]+dy)*source.width+rect[0]+dx),j=4*((y+dy)*w+x+dx),alpha=source.data[i+3]/255;
+        const width=entry.width??rect[2],height=entry.height??rect[3];
+        for(let dy=Math.max(0,-y);dy<Math.min(height,h-y);dy++)for(let dx=Math.max(0,-x);dx<Math.min(width,w-x);dx++){
+          const i=4*((rect[1]+Math.floor(dy*rect[3]/height))*source.width+rect[0]+Math.floor(dx*rect[2]/width)),j=4*((y+dy)*w+x+dx),alpha=source.data[i+3]/255;
           for(let c=0;c<3;c++)rgba[j+c]=Math.round(source.data[i+c]*alpha+rgba[j+c]*(1-alpha));
         }
       }

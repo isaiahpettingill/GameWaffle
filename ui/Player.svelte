@@ -18,12 +18,17 @@
   const keys = new Set(), fingers = new Map(), taps = new Set();
   const embedded = document.getElementById('gamewaffle-cartridge');
   const hosted = !embedded && /^https?:$/.test(location.protocol);
-  const playtest=hosted && new URLSearchParams(location.search).has('playtest');
+  const query=new URLSearchParams(location.search);
+  const playtest=hosted && query.has('playtest');
   let options=$state(false),stopped=false;
   function stop(){
     if(stopped)return;
     stopped=true;loadVersion++;cancelAnimationFrame(loop);disconnect();clear();audio.dispose();
     runtime?.free();runtime=null;
+    if(window.parent!==window && new URLSearchParams(location.search).has('inline')){
+      window.parent.postMessage('gamewaffle:stop-playtest',location.origin);
+      return;
+    }
     if(window.__GAMEWAFFLE_PLAYTEST__){location.replace('/__stop_playtest');return;}
     if(window.opener){window.opener.focus();window.close();}
     if(!window.closed)location.replace('./index.html');
@@ -52,7 +57,7 @@
     status = 'Local game';
     error = '';
   }
-  function show(frame) {
+  function show(frame,paint=true) {
     if (snapshot?.room!==frame.room || snapshot?.tick>frame.tick) {
       const current=cart;
       for(const id of cart.rooms[frame.room].neighbors??[]){
@@ -60,6 +65,13 @@
       }
     }
     snapshot = frame;
+    if(paint)paintFrame(frame);
+    const fault=frame.events?.find(event=>event.kind==='script_error');
+    if (fault) error=`Script ${fault.actor}/${fault.event}: ${fault.message}`;
+    audio.setRoom(frame.room,frame.roomSettings);
+    for (const sound of frame.sounds) audio.play(sound,.65);
+  }
+  function paintFrame(frame){
     if (atlasImages[frame.room]) {
       if (canvas) drawRoom(canvas,cart,frame,atlasImages);
     } else if (cart.atlases[frame.room]) {
@@ -70,10 +82,6 @@
         if (canvas && snapshot?.room===frame.room) drawRoom(canvas,cart,snapshot,atlasImages);
       }).catch(err=>{error=String(err.message??err);});
     }
-    const fault=frame.events?.find(event=>event.kind==='script_error');
-    if (fault) error=`Script ${fault.actor}/${fault.event}: ${fault.message}`;
-    audio.setRoom(frame.room);
-    for (const sound of frame.sounds) audio.play(sound,.65);
   }
   function disconnect() {
     const connection = socket;
@@ -141,6 +149,7 @@
     try {
       elapsed = Math.min(elapsed + (last ? now - last : 0),100);
       last = now;
+      let updated=false;
       while (elapsed >= 1000/60) {
         elapsed -= 1000/60;
         const data = inputs();
@@ -151,9 +160,11 @@
           runtime.set_view_size(Number(canvas.dataset.viewWidth)||canvas.width,Number(canvas.dataset.viewHeight)||canvas.height);
           const mask = data.reduce((bits,input,slot)=>buttons.reduce((value,button,index)=>
             input[button] ? value | (1 << (slot*8+index)) : value,bits),0) >>> 0;
-          show(JSON.parse(runtime.step_buttons(mask)));
+          show(JSON.parse(runtime.step_buttons(mask)),false);
+          updated=true;
         }
       }
+      if(updated)paintFrame(snapshot);
     } catch (err) {
       error = String(err.message ?? err);
       runtime?.free();
@@ -225,10 +236,10 @@
     (async () => {
       try {
         const encoded=embedded?.textContent.trim();
-        if (embedded && !encoded) { status='Choose a cartridge'; return; }
+        if (!encoded&&!playtest&&!(hosted&&query.has('play'))) { status='Choose a cartridge'; return; }
         const buffer=encoded
           ? Uint8Array.from(atob(encoded),c=>c.charCodeAt(0))
-          : new Uint8Array(await (await fetch('./demo.waffle')).arrayBuffer());
+          : new Uint8Array(await (await fetch('./game.waffle')).arrayBuffer());
         const room = hosted ? new URLSearchParams(location.search).get('room') : undefined;
         await load(buffer, room);
       } catch (err) { error=String(err.message ?? err); status='Choose a cartridge'; }
@@ -270,9 +281,11 @@
   </section>{/if}
   <div class="feedback" role="status">{status}{#if lanSlots.length} · P{lanSlots.map(n=>n+1).join(', P')}{/if}</div>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
+  <div class="playfield">
     <div class="screen">
       <canvas tabindex="-1" aria-label="Game display" bind:this={canvas} width="128" height="128"></canvas>
-      {#if touch}
+    </div>
+      {#if touch&&cart}
         <div role="group" aria-label="Touch controls" class="touch" onpointerdown={touchDown} onpointermove={touchMove} onpointerup={touchUp} onpointercancel={touchUp} onlostpointercapture={touchUp}>
           <div class="dpad">
             <button data-button="up" aria-label="Up">▲</button>
@@ -284,30 +297,38 @@
           <div class="actions"><button data-button="x">X</button><button data-button="b">B</button><button data-button="a">A</button></div>
         </div>
       {/if}
-    </div>
+  </div>
 </main>
 
 <style>
   main{height:100dvh;min-height:12rem;display:flex;flex-direction:column;background:#11111b;color:#cdd6f4}
   .toolbar,.options{display:flex;align-items:center;flex-wrap:wrap;gap:.4rem .7rem;padding:.35rem .6rem;background:#181825;border-bottom:1px solid #45475a}
   .identity{display:flex;align-items:center;gap:.45rem;margin-right:auto;min-width:0}.identity strong,.identity small{display:block}.identity strong{font-size:.92rem}.identity small,.options small{color:#bac2de;font-size:.75rem}
-  .transport{gap:.25rem}.toolbar button,.options button,.toolbar select,.options select{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:.3rem;height:2rem;padding:0 .55rem;border:1px solid #45475a;border-radius:1px;background:#1e1e2e;color:inherit;font:500 .8125rem/1.2 system-ui}
+  .transport{gap:.25rem}.toolbar button,.options button,.toolbar select,.options select{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:.3rem;height:2rem;padding:0 .55rem;border:1px solid #45475a;border-radius:1px;background-color:#1e1e2e;color:inherit;font:500 .8125rem/1.2 system-ui}
+  .toolbar select,.options select{display:inline-block;line-height:normal;padding-inline-end:1.75rem}
   .toolbar button :global(svg){width:15px;height:15px}.toolbar button.icon{width:2rem;padding:0}.toolbar .stop{color:#f38ba8}
   label{display:inline-flex;align-items:center;gap:.3rem;font-size:.8rem;color:#bac2de}select{width:auto}
   .feedback,.error{font-size:.75rem;padding:.22rem .6rem;background:#181825}.feedback{color:#bac2de}.error{color:#f38ba8}
+  .playfield{flex:1;min-height:0;position:relative;display:flex;flex-direction:column}
   .screen{flex:1;min-height:0;position:relative;display:grid;place-items:center;overflow:hidden}
   canvas{width:100%;height:100%;position:absolute;inset:0;object-fit:contain}
-  .touch{position:absolute;inset:0;pointer-events:none;touch-action:none;display:flex;align-items:end;justify-content:space-between;padding:clamp(.35rem,2vw,1rem);}
+  .touch{position:absolute;inset:0;pointer-events:none;touch-action:none;display:grid;grid-template-columns:1fr auto 1fr;align-items:end;padding:clamp(.35rem,2vw,1rem);}
   .touch button{pointer-events:auto;touch-action:none;user-select:none;background:#292537d9;border-color:#9d819ccc;color:#fff1d6;min-width:34px;min-height:34px;padding:.2rem;}
-  .dpad{display:grid;grid-template:repeat(3,clamp(25px,7vw,47px))/repeat(3,clamp(25px,7vw,47px));gap:1px;}
+  @media (orientation:portrait){
+    .touch{position:relative;inset:auto;flex:none;align-items:center;min-height:min(24dvh,10rem);padding:.6rem .9rem calc(.6rem + env(safe-area-inset-bottom));background:#181825;border-top:1px solid #45475a}
+    .start{transform:translateY(.8rem)}
+  }
+  .dpad{justify-self:start;display:grid;grid-template:repeat(3,clamp(25px,7vw,47px))/repeat(3,clamp(25px,7vw,47px));gap:1px;}
   .dpad button{font-size:.8rem;min-width:0;min-height:0;}
   .dpad button:nth-child(1){grid-area:1/2;}
   .dpad button:nth-child(2){grid-area:2/1;}
   .dpad button:nth-child(3){grid-area:2/3;}
   .dpad button:nth-child(4){grid-area:3/2;}
-  .actions{display:grid;grid-template-columns:repeat(2,clamp(32px,8vw,50px));gap:.25rem;}
-  .actions button:first-child{grid-column:1/3;justify-self:center;}
-  .actions button{border-radius:50%;aspect-ratio:1;font-weight:750;}
+  .actions{--face-size:clamp(34px,8vw,50px);display:grid;grid-template:repeat(4,calc(var(--face-size)/2))/repeat(2,var(--face-size));gap:2px 4px;justify-self:end;align-items:center}
+  .actions [data-button=x]{grid-area:1/1/span 2}
+  .actions [data-button=b]{grid-area:3/1/span 2}
+  .actions [data-button=a]{grid-area:2/2/span 2}
+  .actions button{width:var(--face-size);height:var(--face-size);border-radius:50%;font-weight:750;}
   .start{font-size:.73rem;}
   @media(pointer:coarse){.toolbar button,.options button,.toolbar select,.options select{height:2.75rem}.toolbar button.icon{width:2.75rem}}
 </style>

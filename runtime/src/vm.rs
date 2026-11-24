@@ -1,55 +1,74 @@
 use crate::{Action, Input, Runtime};
 use num_bigint::BigInt;
-use num_traits::{ToPrimitive, Zero};
-use serde::Deserialize;
+use num_traits::{FromPrimitive, ToPrimitive, Zero};
+use serde::{Deserialize, Serialize};
+use std::hash::{DefaultHasher, Hasher};
 use std::{collections::BTreeMap, rc::Rc};
 
-pub type Variables = BTreeMap<Rc<str>, Integer>;
+pub type Variables = BTreeMap<Rc<str>, Value>;
 #[derive(Clone)]
-pub enum Integer {
+pub enum Value {
     Small(i64),
     Large(BigInt),
+    Real(f64),
+    Text(Rc<str>),
 }
 
-impl Default for Integer {
+impl Default for Value {
     fn default() -> Self {
         Self::Small(0)
     }
 }
-impl From<i64> for Integer {
+impl From<i64> for Value {
     fn from(value: i64) -> Self {
         Self::Small(value)
     }
 }
-impl std::fmt::Display for Integer {
+impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Small(value) => value.fmt(f),
             Self::Large(value) => value.fmt(f),
+            Self::Real(value) => value.fmt(f),
+            Self::Text(value) => value.fmt(f),
         }
     }
 }
-impl Integer {
+impl Value {
     fn zero(&self) -> bool {
-        matches!(self, Self::Small(0))
-    }
-    fn big(&self) -> BigInt {
         match self {
-            Self::Small(value) => (*value).into(),
-            Self::Large(value) => value.clone(),
+            Self::Small(value) => *value == 0,
+            Self::Large(value) => value.is_zero(),
+            Self::Real(value) => *value == 0.0,
+            Self::Text(value) => value.is_empty(),
         }
     }
-    fn float(&self) -> f32 {
+    fn integer(&self) -> Result<BigInt, &'static str> {
         match self {
-            Self::Small(value) => *value as f32,
-            Self::Large(value) => value.to_f32().unwrap_or_default(),
+            Self::Small(value) => Ok((*value).into()),
+            Self::Large(value) => Ok(value.clone()),
+            Self::Real(_) | Self::Text(_) => Err("Expected integer operands"),
         }
     }
-    fn bounded_tick_count(&self) -> u64 {
+    fn from_integer(value: BigInt) -> Self {
+        value
+            .to_i64()
+            .map_or_else(|| Self::Large(value), Self::Small)
+    }
+    fn float(&self) -> f64 {
         match self {
-            Self::Small(value) => (*value).clamp(1, i64::from(u32::MAX)) as u64,
-            Self::Large(value) if value.sign() == num_bigint::Sign::Minus => 1,
-            _ => u64::from(u32::MAX),
+            Self::Small(value) => *value as f64,
+            Self::Large(value) => value.to_f64().unwrap_or_default(),
+            Self::Real(value) => *value,
+            Self::Text(_) => 0.0,
+        }
+    }
+    fn bounded_tick_count(&self) -> Result<u64, &'static str> {
+        match self {
+            Self::Small(value) => Ok((*value).clamp(1, i64::from(u32::MAX)) as u64),
+            Self::Large(value) if value.sign() == num_bigint::Sign::Minus => Ok(1),
+            Self::Large(_) => Ok(u64::from(u32::MAX)),
+            Self::Real(_) | Self::Text(_) => Err("Wait requires integer ticks"),
         }
     }
 }
@@ -86,29 +105,49 @@ type Handler =
 
 struct Instruction {
     handler: Handler,
-    args: [u16; 4],
+    args: [u16; 6],
 }
 
 pub struct Program {
     code: Vec<Instruction>,
+    fingerprint: u64,
     names: Vec<Rc<str>>,
-    constants: Vec<Integer>,
+    constants: Vec<Value>,
     registers: usize,
-    reals: Vec<f32>,
+    reals: Vec<f64>,
 }
 
 pub struct Machine {
     payload: [i64; 2],
+    used_item: Option<Rc<str>>,
     program: Rc<Program>,
-    registers: Vec<Integer>,
-    real_registers: [Option<f32>; REGISTERS],
+    registers: Vec<Value>,
     pc: usize,
     wake: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct SavedMachine {
+    fingerprint: u64,
+    payload: [i64; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    used_item: Option<String>,
+    registers: Vec<SavedRegister>,
+    pc: usize,
+    wake: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+enum SavedRegister {
+    Integer(String),
+    Real(f64),
+    Text(String),
 }
 
 struct Context<'a> {
     runtime: &'a mut Runtime,
     id: u32,
+    received: bool,
     input: Input,
     actions: &'a mut Vec<Action>,
 }
@@ -117,6 +156,15 @@ impl Program {
     pub fn decode(raw: Encoded) -> Result<Self, String> {
         if raw.b.len() > 65535 || raw.n.len() > 4096 || raw.k.len() > 4096 || raw.f.len() > 4096 {
             return Err("Script bytecode exceeds its limits".into());
+        }
+        let mut hasher = DefaultHasher::new();
+        hasher.write(&raw.b);
+        for name in raw.n.iter().chain(&raw.f) {
+            hasher.write(&(name.len() as u64).to_le_bytes());
+            hasher.write(name.as_bytes());
+        }
+        for value in &raw.k {
+            hasher.write(&value.to_le_bytes());
         }
         let mut code = Vec::new();
         let mut positions = BTreeMap::new();
@@ -128,11 +176,21 @@ impl Program {
             let opcode = raw.b[pc];
             pc += 1;
             let layout = match opcode {
-                0 | 1 | 4 | 40 | 42 | 43 => "W",
+                0 | 1 | 4 | 40 | 42 | 43 | 69..=72 => "W",
+                73 => "NNWW",
+                74..=78 => "W",
+                79 | 80 => "N",
+                81 | 83 => "",
+                82 | 87 => "NW",
+                84 | 86 => "N",
+                85 => "NWNNWW",
+                88 | 90 => "WWW",
+                89 => "WW",
+                91 => "W",
                 2 => "WWW",
                 3 | 9 => "NWW",
                 5 | 7 | 8 => "N",
-                6 | 41 | 44 | 45 => "WW",
+                6 | 41 | 44 | 45 | 46 => "WW",
                 10 => "rk",
                 11 => "rsn",
                 12 => "snr",
@@ -141,6 +199,18 @@ impl Program {
                 15 => "j",
                 16 => "r",
                 17 => "rf",
+                47 | 48 => "rN",
+                49 => "orWW",
+                50 => "rorr",
+                51 | 52 => "WWW",
+                53 => "WW",
+                54 => "W",
+                55 | 56 => "N",
+                66 => "WNW",
+                67 | 68 => "NWW",
+                57 | 64 => "",
+                58 | 59 => "WN",
+                60..=63 | 65 => "WNW",
                 18 | 19 | 21 | 27 | 28 => "NW",
                 20 | 22 => "N",
                 33 => "N",
@@ -150,7 +220,7 @@ impl Program {
                 24 => "WW",
                 _ => return Err(format!("Invalid opcode {opcode}")),
             };
-            let mut args = [0; 4];
+            let mut args = [0; 6];
             let read = |pc: &mut usize| {
                 let value = raw.b.get(*pc).copied().ok_or("Incomplete instruction");
                 *pc += 1;
@@ -170,11 +240,19 @@ impl Program {
                     b'k' => index < raw.k.len(),
                     b'f' => index < raw.f.len(),
                     b'N' => index < raw.n.len(),
-                    b'n' if opcode == 11 && args[1] == 5 => index < 14,
+                    b'n' if opcode == 11 && args[1] == 5 => index < 27,
                     b'n' if opcode == 11 && args[1] == 3 => index < 8,
                     b'n' => index < raw.n.len(),
-                    b's' => index < if opcode == 11 { 9 } else { 3 },
-                    b'o' => index < 11,
+                    b's' => {
+                        if opcode == 11 {
+                            index < 15
+                        } else {
+                            matches!(index, 0..=2 | 9..=14)
+                        }
+                    }
+                    b'o' if opcode == 50 => index < 13,
+                    b'o' if opcode == 49 => matches!(index, 20 | 21 | 22 | 33 | 37),
+                    b'o' => index < 34,
                     _ => true,
                 };
                 if !valid {
@@ -200,17 +278,18 @@ impl Program {
         }
         Ok(Self {
             code,
+            fingerprint: hasher.finish(),
             names: raw.n.into_iter().map(Rc::from).collect(),
-            constants: raw.k.into_iter().map(Integer::from).collect(),
+            constants: raw.k.into_iter().map(Value::from).collect(),
             registers,
             reals: raw
                 .f
                 .into_iter()
                 .map(|value| {
                     value
-                        .parse::<f32>()
+                        .parse::<f64>()
                         .ok()
-                        .filter(|value| value.is_finite() && value.abs() <= 10000.0)
+                        .filter(|value| value.is_finite())
                         .ok_or("Invalid real constant")
                 })
                 .collect::<Result<_, _>>()?,
@@ -222,12 +301,70 @@ impl Machine {
     pub fn new(program: Rc<Program>, payload: [i64; 2]) -> Self {
         Self {
             payload,
-            registers: vec![Integer::default(); program.registers],
-            real_registers: [None; REGISTERS],
+            used_item: None,
+            registers: vec![Value::default(); program.registers],
             program,
             pc: 0,
             wake: 0,
         }
+    }
+
+    pub fn with_used_item(mut self, item: String) -> Self {
+        self.used_item = Some(item.into());
+        self
+    }
+
+    pub fn save(&self) -> SavedMachine {
+        SavedMachine {
+            fingerprint: self.program.fingerprint,
+            payload: self.payload,
+            used_item: self.used_item.as_deref().map(str::to_owned),
+            registers: self
+                .registers
+                .iter()
+                .map(|value| match value {
+                    Value::Real(real) => SavedRegister::Real(*real),
+                    Value::Text(text) => SavedRegister::Text(text.to_string()),
+                    _ => SavedRegister::Integer(value.to_string()),
+                })
+                .collect(),
+            pc: self.pc,
+            wake: self.wake,
+        }
+    }
+
+    pub fn restore(program: Rc<Program>, saved: SavedMachine) -> Option<Self> {
+        if saved.fingerprint != program.fingerprint
+            || saved.pc > program.code.len()
+            || saved.registers.len() != program.registers
+        {
+            return None;
+        }
+        let registers = saved
+            .registers
+            .into_iter()
+            .map(|register| match register {
+                SavedRegister::Real(real) if real.is_finite() => Some(Value::Real(real)),
+                SavedRegister::Text(text) if text.len() <= 4096 => Some(Value::Text(text.into())),
+                SavedRegister::Integer(value) if value.len() <= 2468 => value
+                    .parse::<BigInt>()
+                    .ok()
+                    .filter(|number| number.bits() <= INTEGER_BITS)
+                    .map(Value::from_integer),
+                _ => None,
+            })
+            .collect::<Option<_>>()?;
+        Some(Self {
+            program,
+            registers,
+            payload: saved.payload,
+            used_item: saved
+                .used_item
+                .filter(|item| item.len() <= 4096)
+                .map(Rc::from),
+            pc: saved.pc,
+            wake: saved.wake,
+        })
     }
 
     pub fn restart(&mut self) {
@@ -239,7 +376,7 @@ impl Machine {
         &mut self,
         runtime: &mut Runtime,
         id: u32,
-        _event: &str,
+        event: &str,
         input: Input,
         actions: &mut Vec<Action>,
     ) -> Result<bool, &'static str> {
@@ -248,6 +385,7 @@ impl Machine {
         }
         let program = self.program.clone();
         let mut cx = Context {
+            received: event.starts_with("received."),
             runtime,
             id,
             input,
@@ -261,7 +399,7 @@ impl Machine {
             };
             #[cfg(target_arch = "wasm32")]
             if cx.runtime.debug {
-                if debug_break(id, _event, self.pc) {
+                if debug_break(id, event, self.pc) {
                     debug_inspect(&cx.runtime.inspect_actor(id));
                 }
                 (first.handler)(first, &program, self, &mut cx, 1)?;
@@ -279,7 +417,7 @@ impl Machine {
 
 // The loader resolves each opcode once. Each handler reads the next handler
 // address directly from the decoded instruction stream.
-const HANDLERS: [Handler; 46] = [
+const HANDLERS: [Handler; 92] = [
     execute::<0>,
     execute::<1>,
     execute::<2>,
@@ -326,6 +464,52 @@ const HANDLERS: [Handler; 46] = [
     execute::<43>,
     execute::<44>,
     execute::<45>,
+    execute::<46>,
+    execute::<47>,
+    execute::<48>,
+    execute::<49>,
+    execute::<50>,
+    execute::<51>,
+    execute::<52>,
+    execute::<53>,
+    execute::<54>,
+    execute::<55>,
+    execute::<56>,
+    execute::<57>,
+    execute::<58>,
+    execute::<59>,
+    execute::<60>,
+    execute::<61>,
+    execute::<62>,
+    execute::<63>,
+    execute::<64>,
+    execute::<65>,
+    execute::<66>,
+    execute::<67>,
+    execute::<68>,
+    execute::<69>,
+    execute::<70>,
+    execute::<71>,
+    execute::<72>,
+    execute::<73>,
+    execute::<74>,
+    execute::<75>,
+    execute::<76>,
+    execute::<77>,
+    execute::<78>,
+    execute::<79>,
+    execute::<80>,
+    execute::<81>,
+    execute::<82>,
+    execute::<83>,
+    execute::<84>,
+    execute::<85>,
+    execute::<86>,
+    execute::<87>,
+    execute::<88>,
+    execute::<89>,
+    execute::<90>,
+    execute::<91>,
 ];
 fn execute<const OP: u8>(
     i: &Instruction,
@@ -345,6 +529,86 @@ fn execute<const OP: u8>(
         15 => jump(i, m, cx),
         16 => wait(i, m, cx),
         17 => real(i, m, cx),
+        47 => {
+            m.registers[i.args[0] as usize] =
+                Value::Text(program.names[i.args[1] as usize].clone());
+            Ok(())
+        }
+        48 => {
+            m.registers[i.args[0] as usize] = Value::Text(Rc::from(
+                cx.runtime
+                    .localized_text(&program.names[i.args[1] as usize]),
+            ));
+            Ok(())
+        }
+        49 => text_command(i, m, cx),
+        50 => entity_query(i, m, cx),
+        73 => {
+            let [projectile, aim, speed, damage, ..] = i.args;
+            cx.runtime.fire_projectile(
+                cx.id,
+                &program.names[projectile as usize],
+                &program.names[aim as usize],
+                m.registers[speed as usize].float() as f32,
+                m.registers[damage as usize].float() as f32,
+                cx.actions,
+            );
+            Ok(())
+        }
+        74..=83 => room_command::<OP>(i, m, cx),
+        84 => {
+            let name = &program.names[i.args[0] as usize];
+            if cx.runtime.game.events.contains(name.as_ref())
+                && cx.actions.len() < crate::MAX_ACTIONS
+            {
+                let sender = if Some(cx.id) == cx.runtime.room_script_id {
+                    0
+                } else {
+                    cx.id
+                };
+                cx.actions.push(Action::Broadcast(crate::Broadcast {
+                    name: name.to_string(),
+                    sender,
+                }));
+            }
+            Ok(())
+        }
+        85 => draw_hud_text(i, m, cx),
+        86 => {
+            let font = &program.names[i.args[0] as usize];
+            if (font.is_empty() || cx.runtime.game.fonts.contains(font.as_ref()))
+                && cx.runtime.hud_font != font.as_ref()
+            {
+                cx.runtime.hud_font = font.to_string();
+            }
+            Ok(())
+        }
+        88 => {
+            let [enabled, fill, track, ..] = i.args;
+            let color = |index: u16| {
+                let Value::Text(text) = &m.registers[index as usize] else {
+                    return Err("Health bar color requires text");
+                };
+                if !crate::RoomSettings::valid_color(text) {
+                    return Err("Use a health bar color such as #a6e3a1");
+                }
+                u32::from_str_radix(&text[1..], 16).map_err(|_| "Invalid health bar color")
+            };
+            let style = if m.registers[enabled as usize].zero() {
+                None
+            } else {
+                Some(crate::HealthBarStyle {
+                    fill: color(fill)?,
+                    track: color(track)?,
+                })
+            };
+            let actor = cx.runtime.actors.get_mut(&cx.id).unwrap();
+            if actor.sprite.is_some() {
+                actor.health_bar = style;
+            }
+            Ok(())
+        }
+        51..=54 | 58..=63 | 65 | 66 | 89..=91 => entity_command::<OP>(i, m, cx),
         _ => engine::<OP>(i, m, cx),
     }?;
     if count > 1 && m.wake <= cx.runtime.tick {
@@ -356,22 +620,20 @@ fn execute<const OP: u8>(
 }
 
 fn constant(i: &Instruction, m: &mut Machine, _: &mut Context<'_>) -> Result<(), &'static str> {
-    m.real_registers[i.args[0] as usize] = None;
     m.registers[i.args[0] as usize] = m.program.constants[i.args[1] as usize].clone();
     Ok(())
 }
 
 fn real(i: &Instruction, m: &mut Machine, _: &mut Context<'_>) -> Result<(), &'static str> {
-    m.registers[i.args[0] as usize] = Integer::default();
-    m.real_registers[i.args[0] as usize] = Some(m.program.reals[i.args[1] as usize]);
+    m.registers[i.args[0] as usize] = Value::Real(m.program.reals[i.args[1] as usize]);
     Ok(())
 }
 
 fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'static str> {
-    let [dest, scope, key, _] = i.args;
+    let [dest, scope, key, _, ..] = i.args;
     let value = if scope == 3 {
         let input = cx.input;
-        Integer::from(i64::from(
+        Value::from(i64::from(
             [
                 input.up,
                 input.down,
@@ -385,27 +647,42 @@ fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'
         ))
     } else if scope == 5 {
         let a = &cx.runtime.actors[&cx.id];
-        Integer::from(match key {
-            0 => i64::from(cx.id),
-            1 => a.p.x.round() as i64,
-            2 => a.p.y.round() as i64,
-            3 => a.v.x.round() as i64,
-            4 => a.v.y.round() as i64,
-            5 => a.health.round() as i64,
-            6 => i64::from(cx.runtime.grounded(cx.id)),
-            7 => a.player.map_or(0, |p| p as i64 + 1),
-            8 => m.payload[0],
-            9 => m.payload[1],
-            11 => i64::from(a.last_spawn),
-            12 => a.answer,
-            13 => i64::from(a.item_count),
-            _ => cx
-                .runtime
-                .actors
-                .get(&(m.payload[0] as u32))
-                .and_then(|a| a.player)
-                .map_or(0, |p| p as i64 + 1),
-        })
+        match key {
+            17 => Value::Real(f64::from(a.p.x)),
+            18 => Value::Real(f64::from(a.p.y)),
+            19 => Value::Real(f64::from(a.v.x)),
+            20 => Value::Real(f64::from(a.v.y)),
+            21 => Value::Real(f64::from(a.health)),
+            22 => Value::from(a.menu_choice as i64),
+            23 => Value::Text(Rc::from(a.menu_item.as_str())),
+            24 => Value::Text(Rc::from(a.menu_id.as_str())),
+            25 => Value::Text(m.used_item.clone().unwrap_or_default()),
+            26 => Value::from(if cx.received { m.payload[0] } else { 0 }),
+            _ => Value::from(match key {
+                0 => i64::from(cx.id),
+                1 => a.p.x.round() as i64,
+                2 => a.p.y.round() as i64,
+                3 => a.v.x.round() as i64,
+                4 => a.v.y.round() as i64,
+                5 => a.health.round() as i64,
+                6 => i64::from(cx.runtime.grounded(cx.id)),
+                7 => a.player.map_or(0, |p| p as i64 + 1),
+                8 => m.payload[0],
+                9 => m.payload[1],
+                11 => i64::from(a.last_spawn),
+                12 => a.answer,
+                13 => i64::from(a.item_count),
+                14 => i64::from(a.v.length_squared() > 0.0025),
+                15 => i64::from(a.player.is_some()),
+                16 => a.facing as i64,
+                _ => cx
+                    .runtime
+                    .actors
+                    .get(&(m.payload[0] as u32))
+                    .and_then(|a| a.player)
+                    .map_or(0, |p| p as i64 + 1),
+            }),
+        }
     } else if (6..=8).contains(&scope) {
         let mask = cx
             .runtime
@@ -415,16 +692,17 @@ fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'
             .copied()
             .unwrap_or(0);
         let now = cx.input.bits() & mask != 0;
-        let before = cx.runtime.actors[&cx.id]
-            .player
+        let before = cx
+            .runtime
+            .input_slot(cx.id)
             .is_some_and(|slot| cx.runtime.prior_buttons[slot] & mask != 0);
-        Integer::from(i64::from(match scope {
+        Value::from(i64::from(match scope {
             7 => now && !before,
             8 => before && !now,
             _ => now,
         }))
     } else if scope == 4 {
-        Integer::from(i64::from(
+        Value::from(i64::from(
             *cx.runtime
                 .inventory
                 .get(m.program.names[key as usize].as_ref())
@@ -432,28 +710,40 @@ fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'
         ))
     } else {
         let name = &m.program.names[key as usize];
-        match scope {
-            0 => cx.runtime.actors[&cx.id].variables.get(name),
-            1 => cx.runtime.globals.get(name),
-            _ => cx.runtime.flags.get(name),
-        }
-        .cloned()
-        .unwrap_or_default()
+        let table = match scope {
+            0 | 9 | 11 | 13 => &cx.runtime.actors[&cx.id].variables,
+            1 | 10 | 12 | 14 => &cx.runtime.globals,
+            _ => &cx.runtime.flags,
+        };
+        let fallback = || match scope {
+            9 | 10 => Value::Real(0.0),
+            13 | 14 => Value::Text(Rc::from("")),
+            _ => Value::default(),
+        };
+        table.get(name).cloned().unwrap_or_else(fallback)
     };
-    m.real_registers[dest as usize] = None;
     m.registers[dest as usize] = value;
     Ok(())
 }
 
 fn store(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'static str> {
-    let [scope, key, source, _] = i.args;
+    let [scope, key, source, _, ..] = i.args;
     let table = match scope {
-        0 => &mut cx.runtime.actors.get_mut(&cx.id).unwrap().variables,
-        1 => &mut cx.runtime.globals,
+        0 | 9 | 11 | 13 => &mut cx.runtime.actors.get_mut(&cx.id).unwrap().variables,
+        1 | 10 | 12 | 14 => &mut cx.runtime.globals,
         _ => &mut cx.runtime.flags,
     };
     let name = &m.program.names[key as usize];
     let value = &m.registers[source as usize];
+    let valid = match scope {
+        9 | 10 => matches!(value, Value::Real(_)),
+        11 | 12 => matches!(value, Value::Small(0 | 1)),
+        13 | 14 => matches!(value, Value::Text(_)),
+        _ => matches!(value, Value::Small(_) | Value::Large(_)),
+    };
+    if !valid {
+        return Err("Wrong type for this variable");
+    }
     if scope == 2 && table.contains_key(name) == value.zero() {
         cx.runtime.gates_dirty = true;
     }
@@ -466,7 +756,7 @@ fn store(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &
         table.insert(
             name.clone(),
             if scope == 2 {
-                Integer::from(1)
+                Value::from(1)
             } else {
                 value.clone()
             },
@@ -476,14 +766,88 @@ fn store(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &
 }
 
 fn calculate(i: &Instruction, m: &mut Machine, _: &mut Context<'_>) -> Result<(), &'static str> {
-    let [dest, op, a, b] = i.args;
+    let [dest, op, a, b, ..] = i.args;
     let a = &m.registers[a as usize];
     let b = &m.registers[b as usize];
     if matches!(op, 3 | 4) && b.zero() {
         return Err("Division by zero");
     }
-    let small = if let (Integer::Small(a), Integer::Small(b)) = (a, b) {
-        match op {
+    let value = match (op, a, b) {
+        (_, Value::Text(a), Value::Text(b)) => match op {
+            0 if a.len() + b.len() <= 4096 => Value::Text(Rc::from(format!("{a}{b}"))),
+            0 => return Err("String exceeds 4096 bytes"),
+            5 => Value::from(i64::from(a == b)),
+            11 => Value::from(i64::from(a != b)),
+            _ => return Err("Operation does not accept strings"),
+        },
+        (_, Value::Text(_), _) | (_, _, Value::Text(_)) => return Err("Operand types must match"),
+        (33, Value::Small(0 | 1), _) => a.clone(),
+        (17, Value::Small(_) | Value::Large(_), _) => real_result(a.float())?,
+        (_, Value::Real(a), Value::Real(b)) => calculate_real(op, *a, *b)?,
+        (_, Value::Real(_), _) | (_, _, Value::Real(_)) => {
+            return Err("Numeric types must match");
+        }
+        _ => calculate_integer(op, a, b)?,
+    };
+    m.registers[dest as usize] = value;
+    Ok(())
+}
+
+fn real_result(value: f64) -> Result<Value, &'static str> {
+    if value.is_finite() {
+        Ok(Value::Real(value))
+    } else {
+        Err("Math result is not finite")
+    }
+}
+
+fn calculate_real(op: u16, a: f64, b: f64) -> Result<Value, &'static str> {
+    let boolean = |test| Ok(Value::from(i64::from(test)));
+    let value = match op {
+        0 => a + b,
+        1 => a - b,
+        2 => a * b,
+        3 => a / b,
+        4 => a % b,
+        5 => return boolean(a == b),
+        6 => return boolean(a < b),
+        7 => return boolean(a <= b),
+        11 => return boolean(a != b),
+        12 => return boolean(a > b),
+        13 => return boolean(a >= b),
+        14 => a.min(b),
+        15 => a.max(b),
+        16 => a.abs(),
+        18..=21 => {
+            let integer = match op {
+                18 => a.floor(),
+                19 => a.ceil(),
+                20 => a.round(),
+                _ => a.trunc(),
+            };
+            return BigInt::from_f64(integer)
+                .map(Value::from_integer)
+                .ok_or("Invalid real value");
+        }
+        22 => a.sqrt(),
+        23 => a.to_radians().sin(),
+        24 => a.to_radians().cos(),
+        25 => a.to_radians().tan(),
+        26 => a.asin().to_degrees(),
+        27 => a.acos().to_degrees(),
+        28 => a.atan().to_degrees(),
+        29 => a.atan2(b).to_degrees(),
+        30 => a.powf(b),
+        31 => a.ln(),
+        32 => a.exp(),
+        _ => return Err("Operation requires integer operands"),
+    };
+    real_result(value)
+}
+
+fn calculate_integer(op: u16, a: &Value, b: &Value) -> Result<Value, &'static str> {
+    if let (Value::Small(a), Value::Small(b)) = (a, b) {
+        let small = match op {
             0 => a.checked_add(*b),
             1 => a.checked_sub(*b),
             2 => a.checked_mul(*b),
@@ -494,41 +858,53 @@ fn calculate(i: &Instruction, m: &mut Machine, _: &mut Context<'_>) -> Result<()
             7 => Some(i64::from(a <= b)),
             8 => Some(i64::from(*a != 0 && *b != 0)),
             9 => Some(i64::from(*a != 0 || *b != 0)),
-            _ => Some(i64::from(*a == 0)),
-        }
-    } else {
-        None
-    };
-    let value = if let Some(value) = small {
-        Integer::Small(value)
-    } else {
-        let (a, b) = (a.big(), b.big());
-        let boolean = |test| BigInt::from(i64::from(test));
-        let value = match op {
-            0 => a + b,
-            1 => a - b,
-            2 => a * b,
-            3 => a / b,
-            4 => a % b,
-            5 => boolean(a == b),
-            6 => boolean(a < b),
-            7 => boolean(a <= b),
-            8 => boolean(!a.is_zero() && !b.is_zero()),
-            9 => boolean(!a.is_zero() || !b.is_zero()),
-            _ => boolean(a.is_zero()),
+            10 => Some(i64::from(*a == 0)),
+            11 => Some(i64::from(a != b)),
+            12 => Some(i64::from(a > b)),
+            13 => Some(i64::from(a >= b)),
+            14 => Some(*a.min(b)),
+            15 => Some(*a.max(b)),
+            16 => a.checked_abs(),
+            _ => return Err("Operation requires real operands"),
         };
-        if value.bits() > INTEGER_BITS {
-            return Err("Script integer limit reached");
+        if let Some(value) = small {
+            return Ok(Value::Small(value));
         }
-        value.to_i64().map_or(Integer::Large(value), Integer::Small)
+    }
+    let (a, b) = (a.integer()?, b.integer()?);
+    let boolean = |test| BigInt::from(i64::from(test));
+    let value = match op {
+        0 => a + b,
+        1 => a - b,
+        2 => a * b,
+        3 => a / b,
+        4 => a % b,
+        5 => boolean(a == b),
+        6 => boolean(a < b),
+        7 => boolean(a <= b),
+        8 => boolean(!a.is_zero() && !b.is_zero()),
+        9 => boolean(!a.is_zero() || !b.is_zero()),
+        10 => boolean(a.is_zero()),
+        11 => boolean(a != b),
+        12 => boolean(a > b),
+        13 => boolean(a >= b),
+        14 => a.min(b),
+        15 => a.max(b),
+        16 => num_traits::Signed::abs(&a),
+        _ => return Err("Operation requires real operands"),
     };
-    m.real_registers[dest as usize] = None;
-    m.registers[dest as usize] = value;
-    Ok(())
+    if value.bits() > INTEGER_BITS {
+        return Err("Script integer limit reached");
+    }
+    Ok(Value::from_integer(value))
 }
 
 fn branch(i: &Instruction, m: &mut Machine, _: &mut Context<'_>) -> Result<(), &'static str> {
-    if m.registers[i.args[0] as usize].zero() {
+    let condition = &m.registers[i.args[0] as usize];
+    if matches!(condition, Value::Real(_) | Value::Text(_)) {
+        return Err("Condition requires a boolean");
+    }
+    if condition.zero() {
         m.pc = i.args[1] as usize;
     }
     Ok(())
@@ -539,7 +915,7 @@ fn jump(i: &Instruction, m: &mut Machine, _: &mut Context<'_>) -> Result<(), &'s
 }
 fn wait(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'static str> {
     let ticks = &m.registers[i.args[0] as usize];
-    let count = ticks.bounded_tick_count();
+    let count = ticks.bounded_tick_count()?;
     m.wake = cx.runtime.tick.saturating_add(count);
     Ok(())
 }
@@ -549,24 +925,17 @@ fn engine<const OP: u8>(
     m: &mut Machine,
     cx: &mut Context<'_>,
 ) -> Result<(), &'static str> {
-    let named = matches!(OP, 3 | 5 | 7 | 8 | 9 | 18..=22 | 27 | 28 | 33..=39);
+    let named =
+        matches!(OP, 3 | 5 | 7 | 8 | 9 | 18..=22 | 27 | 28 | 33..=39 | 55 | 56 | 67 | 68 | 87);
     let arg = |index: usize| {
         if index == 0 && named {
             return 0.0;
         }
-        if let Some(value) = m
-            .real_registers
-            .get(i.args[index] as usize)
-            .copied()
-            .flatten()
-        {
-            return value;
-        }
         m.registers
             .get(i.args[index] as usize)
-            .map(Integer::float)
+            .map(Value::float)
             .unwrap_or_default()
-            .clamp(-10000.0, 10000.0)
+            .clamp(-10000.0, 10000.0) as f32
     };
     let name = if named {
         &*m.program.names[i.args[0] as usize]
@@ -581,5 +950,349 @@ fn engine<const OP: u8>(
         name,
         cx.actions,
     );
+    Ok(())
+}
+
+fn draw_hud_text(i: &Instruction, m: &Machine, cx: &mut Context<'_>) -> Result<(), &'static str> {
+    let [label, text, font, anchor, x, y] = i.args;
+    let label = &m.program.names[label as usize];
+    let font = &m.program.names[font as usize];
+    let anchor = crate::HudAnchor::from_name(&m.program.names[anchor as usize])
+        .ok_or("Choose a HUD anchor")?;
+    let Value::Text(text) = &m.registers[text as usize] else {
+        return Err("HUD text requires a string");
+    };
+    if !font.is_empty() && !cx.runtime.game.fonts.contains(font.as_ref()) {
+        return Err("Choose a registered bitfont");
+    }
+    if !cx.runtime.hud_text.contains_key(label.as_ref()) && cx.runtime.hud_text.len() >= 64 {
+        return Ok(());
+    }
+    let offset = [x, y].map(|register| {
+        m.registers[register as usize]
+            .float()
+            .clamp(-4096., 4096.)
+            .round() as i32
+    });
+    if !cx.runtime.hud_text.get(label.as_ref()).is_some_and(|old| {
+        old.value == text.as_ref()
+            && old.font == font.as_ref()
+            && old.anchor == anchor
+            && old.offset == offset
+    }) {
+        cx.runtime.hud_text.insert(
+            label.to_string(),
+            crate::HudText {
+                value: text.to_string(),
+                font: font.to_string(),
+                anchor,
+                offset,
+            },
+        );
+    }
+    Ok(())
+}
+
+fn room_command<const OP: u8>(
+    i: &Instruction,
+    m: &Machine,
+    cx: &mut Context<'_>,
+) -> Result<(), &'static str> {
+    let runtime = &mut cx.runtime;
+    if runtime.room_script_id != Some(cx.id) {
+        return Err("Room controls require a room script");
+    }
+    let operand = i.args[0] as usize;
+    match OP {
+        74 => {
+            let target = entity_id(&m.registers[operand]);
+            if runtime.entity(target).is_some() {
+                runtime.camera_actor = Some(target);
+                runtime.camera_point = None;
+                runtime.group_camera = false;
+            }
+        }
+        75 => {
+            let zoom = m.registers[operand].float().clamp(0.25, 4.0) as f32;
+            runtime.room_settings.zoom = (zoom != 1.0).then_some(zoom);
+        }
+        76 => {
+            let gravity = m.registers[operand].float().clamp(-100.0, 100.0) as f32;
+            if gravity != runtime.room_gravity() {
+                runtime.room_settings.gravity = Some(gravity);
+                runtime.apply_room_gravity();
+            }
+        }
+        77 => {
+            let Value::Text(color) = &m.registers[operand] else {
+                return Err("Background color requires text");
+            };
+            if !crate::RoomSettings::valid_color(color) {
+                return Err("Use a background color such as #101a23");
+            }
+            if runtime.room_settings.background.as_deref() != Some(color) {
+                runtime.room_settings.background = Some(color.to_string());
+            }
+        }
+        78 => runtime.room_settings.y_sort = Some(!m.registers[operand].zero()),
+        79 | 80 => {
+            let track = &m.program.names[operand];
+            let current = if OP == 79 {
+                &mut runtime.room_settings.music
+            } else {
+                &mut runtime.room_settings.ambience
+            };
+            if current.as_deref() != Some(track) {
+                *current = Some(track.to_string());
+            }
+        }
+        81 => {
+            runtime.camera_actor = None;
+            runtime.camera_point = None;
+            runtime.camera_slot = 0;
+            let room = &runtime.game.rooms[&runtime.room];
+            runtime.group_camera = room.group_camera;
+            runtime.room_settings.zoom = room.camera_zoom;
+        }
+        82 => {
+            let kind = crate::ShaderKind::from_name(&m.program.names[operand])
+                .ok_or("Choose a room shader preset")?;
+            let strength = m.registers[i.args[1] as usize]
+                .float()
+                .clamp(0.0, 100.0)
+                .round() as u8;
+            runtime.room_settings.shader = Some(crate::RoomShader { kind, strength });
+        }
+        83 => runtime.room_settings.shader = None,
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+fn text_command(i: &Instruction, m: &Machine, cx: &mut Context<'_>) -> Result<(), &'static str> {
+    let [opcode, text, a, b, ..] = i.args;
+    let Value::Text(message) = &m.registers[text as usize] else {
+        return Err("Command requires a string");
+    };
+    let number = |index: u16| m.registers[index as usize].float().clamp(-10000.0, 10000.0) as f32;
+    cx.runtime.engine(
+        cx.id,
+        cx.input,
+        opcode.into(),
+        [0.0, number(a), number(b)],
+        message,
+        cx.actions,
+    );
+    Ok(())
+}
+
+fn entity_id(value: &Value) -> u32 {
+    match value {
+        Value::Small(id) => u32::try_from(*id).unwrap_or_default(),
+        _ => 0,
+    }
+}
+
+fn entity_query(
+    i: &Instruction,
+    m: &mut Machine,
+    cx: &mut Context<'_>,
+) -> Result<(), &'static str> {
+    let [dest, op, a, b, ..] = i.args;
+    let a = &m.registers[a as usize];
+    let b = &m.registers[b as usize];
+    let runtime = &cx.runtime;
+    let value = match op {
+        0 | 1 => {
+            let Value::Text(name) = a else {
+                return Err("Expected an entity or component name");
+            };
+            let found = if op == 0 {
+                runtime
+                    .named_entities
+                    .get(name.as_ref())
+                    .and_then(|id| runtime.entity(*id))
+            } else {
+                let origin = runtime.actors[&cx.id].p;
+                let radius = b.float().clamp(0.0, 100000.0) as f32;
+                runtime
+                    .entity_ids
+                    .iter()
+                    .filter(|id| **id != cx.id)
+                    .map(|id| &runtime.actors[id])
+                    .filter(|actor| runtime.has_component(actor, name))
+                    .map(|actor| (actor, (actor.p - origin).length_squared()))
+                    .filter(|(_, distance)| *distance <= radius * radius)
+                    .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.id.cmp(&b.0.id)))
+                    .map(|(actor, _)| actor)
+            };
+            Value::from(found.map_or(0, |actor| i64::from(actor.id)))
+        }
+        2 => Value::from(i64::from(runtime.entity(entity_id(a)).is_some())),
+        3 => {
+            let Value::Text(name) = b else {
+                return Err("Expected a component name");
+            };
+            Value::from(i64::from(
+                runtime
+                    .entity(entity_id(a))
+                    .is_some_and(|actor| runtime.has_component(actor, name)),
+            ))
+        }
+        9..=12 => {
+            let Value::Text(key) = b else {
+                return Err("Expected an entity field name");
+            };
+            let (prefix, fallback) = match op {
+                10 => ("real.", Value::Real(0.0)),
+                11 => ("bool.", Value::from(0)),
+                12 => ("text.", Value::Text("".into())),
+                _ => ("", Value::from(0)),
+            };
+            runtime
+                .entity(entity_id(a))
+                .and_then(|actor| actor.variables.get(format!("{prefix}{key}").as_str()))
+                .cloned()
+                .unwrap_or(fallback)
+        }
+        _ => Value::Real(runtime.entity(entity_id(a)).map_or(0.0, |actor| {
+            f64::from(match op {
+                4 => actor.p.x,
+                5 => actor.p.y,
+                6 => actor.v.x,
+                7 => actor.v.y,
+                _ => actor.health,
+            })
+        })),
+    };
+    m.registers[dest as usize] = value;
+    Ok(())
+}
+
+fn entity_command<const OP: u8>(
+    i: &Instruction,
+    m: &Machine,
+    cx: &mut Context<'_>,
+) -> Result<(), &'static str> {
+    let id = entity_id(&m.registers[i.args[0] as usize]);
+    if cx.runtime.entity(id).is_none() || cx.actions.len() >= crate::MAX_ACTIONS {
+        return Ok(());
+    }
+    let number = |index: usize| {
+        m.registers[i.args[index] as usize]
+            .float()
+            .clamp(-10000.0, 10000.0) as f32
+    };
+    match OP {
+        51 => cx.runtime.engine(
+            id,
+            cx.input,
+            46,
+            [number(1), number(2), 0.0],
+            "",
+            cx.actions,
+        ),
+        52 => cx
+            .runtime
+            .engine(id, cx.input, 6, [number(1), number(2), 0.0], "", cx.actions),
+        53 if number(1) > 0.0 => cx.actions.push(Action::Damage {
+            source: cx.id,
+            target: id,
+            amount: Some(number(1)),
+        }),
+        89 if number(1) > 0.0 => cx.actions.push(Action::Heal(id, number(1))),
+        90 => cx.runtime.engine(
+            id,
+            cx.input,
+            45,
+            [number(1), number(2), 0.0],
+            "",
+            cx.actions,
+        ),
+        91 => cx.actions.push(Action::Damage {
+            source: cx.id,
+            target: id,
+            amount: None,
+        }),
+        58 | 59 => {
+            let name = &m.program.names[i.args[1] as usize];
+            let actor = cx.runtime.actors.get_mut(&id).unwrap();
+            if OP == 59 {
+                actor.components.retain(|entry| entry != name.as_ref());
+            } else if actor.components.len() < 64
+                && !actor.components.iter().any(|entry| entry == name.as_ref())
+            {
+                actor.components.push(name.to_string());
+            }
+        }
+        60..=63 => {
+            let name = &m.program.names[i.args[1] as usize];
+            let value = &m.registers[i.args[2] as usize];
+            let prefix = match (OP, value) {
+                (60, Value::Small(_) | Value::Large(_)) => "",
+                (61, Value::Real(_)) => "real.",
+                (62, Value::Small(0 | 1)) => "bool.",
+                (63, Value::Text(_)) => "text.",
+                _ => return Err("Wrong entity field type"),
+            };
+            let fields = &mut cx.runtime.actors.get_mut(&id).unwrap().variables;
+            let key = format!("{prefix}{name}");
+            if value.zero() {
+                fields.remove(key.as_str());
+            } else if fields.len() < VARIABLE_LIMIT || fields.contains_key(key.as_str()) {
+                fields.insert(key.into(), value.clone());
+            } else {
+                return Err("Entity field limit reached");
+            }
+        }
+        65 => {
+            let mode = &m.program.names[i.args[1] as usize];
+            let ticks = entity_id(&m.registers[i.args[2] as usize]).clamp(1, 216000);
+            if let Some(spawn) = cx
+                .runtime
+                .actors
+                .get_mut(&id)
+                .and_then(|actor| actor.origin.as_mut())
+            {
+                spawn.respawn = match mode.as_ref() {
+                    "never" => Some(crate::Respawn {
+                        mode: crate::RespawnMode::Never,
+                        ticks: 0,
+                        flag: None,
+                        when: true,
+                    }),
+                    "on_entry" => Some(crate::Respawn {
+                        mode: crate::RespawnMode::OnEntry,
+                        ticks: 0,
+                        flag: None,
+                        when: true,
+                    }),
+                    "delay" => Some(crate::Respawn {
+                        mode: crate::RespawnMode::Delay,
+                        ticks,
+                        flag: None,
+                        when: true,
+                    }),
+                    _ => None,
+                };
+            }
+        }
+        66 => {
+            let flag = &m.program.names[i.args[1] as usize];
+            let when = !m.registers[i.args[2] as usize].zero();
+            if let Some(rule) = cx
+                .runtime
+                .actors
+                .get_mut(&id)
+                .and_then(|actor| actor.origin.as_mut())
+                .and_then(|spawn| spawn.respawn.as_mut())
+            {
+                rule.flag = (!flag.is_empty()).then(|| flag.to_string());
+                rule.when = when;
+            }
+        }
+        54 => cx.actions.push(Action::Remove(id)),
+        _ => {}
+    }
     Ok(())
 }

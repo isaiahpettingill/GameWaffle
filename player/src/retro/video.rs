@@ -1,10 +1,25 @@
-use crate::{Error, Game, draw};
+use crate::{Error, Game, draw, fit_frame};
 use sdl3::{
-    pixels::PixelFormat,
+    pixels::{Color, PixelFormat},
+    rect::Rect,
     render::{Canvas, FRect, Texture, TextureCreator},
     surface::{Surface, SurfaceContext},
+    sys::surface::SDL_SCALEMODE_NEAREST,
 };
 use self_cell::self_cell;
+
+// The Android core renders into memory owned by SDL surfaces. RetroArch owns
+// the activity, so the private SDL copy cannot wait for SDLActivity callbacks.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+extern "C" fn __wrap_Android_WaitActiveAndLockActivity() -> bool {
+    true
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+extern "C" fn __wrap_Android_UnlockActivityMutex() {}
+
 struct RoomTextures<'a> {
     atlas: Texture<'a>,
     ripple: Option<Texture<'a>>,
@@ -20,7 +35,8 @@ self_cell!(
 
 pub(super) struct Video {
     canvas: Canvas<Surface<'static>>,
-    atlas: Option<(String, CachedAtlas)>,
+    presentation: Option<Surface<'static>>,
+    atlas: Option<(String, bool, bool, CachedAtlas)>,
     pub dimensions: [u32; 2],
     rectangles: Vec<FRect>,
 }
@@ -28,15 +44,12 @@ pub(super) struct Video {
 impl Video {
     pub fn new(game: &Game) -> Result<Self, Error> {
         let cam = game.media.camera;
-        let [_, _, w, h] = gamewaffle_runtime::viewport(
-            cam,
-            [320 * cam.zoom.max(1).min(16), 240 * cam.zoom.max(1).min(16)],
-            [320, 240],
-            [160., 120.],
-        );
+        let zoom = cam.zoom.clamp(1, 16);
+        let [w, h] = cam.view_size([320 * zoom, 240 * zoom], None);
         let canvas = Surface::new(w, h, PixelFormat::XRGB8888)?.into_canvas()?;
         Ok(Self {
             canvas,
+            presentation: None,
             atlas: None,
             dimensions: [w, h],
             rectangles: Vec::new(),
@@ -46,18 +59,47 @@ impl Video {
         let snapshot = game.runtime.view();
         let id = snapshot.room;
         let room = &game.media.rooms[id];
+        let focus = snapshot
+            .focus
+            .or_else(|| {
+                snapshot
+                    .actors
+                    .iter()
+                    .find(|a| a.player == Some(0))
+                    .map(|a| [a.x, a.y])
+            })
+            .unwrap_or([room.width as f32 / 2., room.height as f32 / 2.]);
         let [w, h] = self.dimensions;
-        let hd = room.hd.unwrap_or(0) > 0;
+        let cam = game.media.camera;
+        let view = gamewaffle_runtime::viewport_zoom(
+            cam,
+            [
+                w.saturating_mul(cam.zoom.max(1)),
+                h.saturating_mul(cam.zoom.max(1)),
+            ],
+            [room.width, room.camera_height()],
+            focus,
+            snapshot.room_settings.zoom,
+        );
+        let [_, _, w, h] = view;
+        let hd = room.hd_strength(snapshot.room_settings.shader) > 0;
+        let ripple_active = room
+            .ripple_settings(snapshot.room_settings.shader)
+            .is_some();
         let scale = if hd { 2 } else { 1 };
-        if self.canvas.surface().width() != w * scale {
+        if self.canvas.surface().width() != w * scale || self.canvas.surface().height() != h * scale
+        {
             self.atlas = None;
             self.canvas =
                 Surface::new(w * scale, h * scale, PixelFormat::XRGB8888)?.into_canvas()?;
         }
-        if self.atlas.as_ref().is_none_or(|a| a.0 != id) {
+        if self
+            .atlas
+            .as_ref()
+            .is_none_or(|a| a.0 != id || a.1 != hd || a.2 != ripple_active)
+        {
             let atlas = CachedAtlas::try_new(self.canvas.texture_creator(), |creator| {
-                let [w, h] = self.dimensions;
-                let ripple = if room.ripple.is_some() {
+                let ripple = if ripple_active {
                     Some(creator.create_texture_target(PixelFormat::RGBA32, w, h)?)
                 } else {
                     None
@@ -72,39 +114,18 @@ impl Video {
                     },
                 })
             })?;
-            self.atlas = Some((id.to_owned(), atlas));
+            self.atlas = Some((id.to_owned(), hd, ripple_active, atlas));
         }
-        let focus = snapshot
-            .focus
-            .or_else(|| {
-                snapshot
-                    .actors
-                    .iter()
-                    .find(|a| a.player == Some(0))
-                    .map(|a| [a.x, a.y])
-            })
-            .unwrap_or([room.width as f32 / 2., room.height as f32 / 2.]);
-        let [w, h] = self.dimensions;
-        let cam = game.media.camera;
-        let view = gamewaffle_runtime::viewport(
-            cam,
-            [
-                w.saturating_mul(cam.zoom.max(1)),
-                h.saturating_mul(cam.zoom.max(1)),
-            ],
-            [room.width, room.height],
-            focus,
-        );
         self.atlas
             .as_mut()
             .unwrap()
-            .1
+            .3
             .with_dependent_mut(|_, textures| {
                 draw(
                     &mut self.canvas,
                     game,
                     &snapshot,
-                    &textures.atlas,
+                    &mut textures.atlas,
                     view,
                     &mut self.rectangles,
                     textures.ripple.as_mut(),
@@ -112,12 +133,30 @@ impl Video {
                 )
             })?;
         self.canvas.present();
-        let surface = self.canvas.surface();
+        let mut surface = self.canvas.surface();
+        if let Some([width, height]) = cam
+            .fixed_resolution()
+            .filter(|&size| size != [w * scale, h * scale])
+        {
+            if self.presentation.is_none() {
+                self.presentation = Some(Surface::new(width, height, PixelFormat::XRGB8888)?);
+            }
+            let output = self.presentation.as_mut().unwrap();
+            output.fill_rect(None, Color::RGB(14, 14, 22))?;
+            let [x, y, fit_w, fit_h] = fit_frame([w, h], [width, height]);
+            surface.blit_scaled(
+                None,
+                output,
+                Rect::new(x as i32, y as i32, fit_w, fit_h),
+                SDL_SCALEMODE_NEAREST,
+            )?;
+            surface = output;
+        }
         surface.with_lock(|pixels| {
             output(
                 pixels.as_ptr().cast(),
-                w * scale,
-                h * scale,
+                surface.width(),
+                surface.height(),
                 surface.pitch() as usize,
             )
         });

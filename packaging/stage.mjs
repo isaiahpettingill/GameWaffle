@@ -4,7 +4,7 @@ const target=process.argv[2], windows=process.platform==='win32';
 await mkdir(target,{recursive:true});
 const prebuilt=process.argv.includes('--desktop-only');
 if(!prebuilt){
-  for(const file of ['src','package.json','demo','LICENSE','packaging/studio.mjs','packaging/gamewaffle.svg','web-built/runtime','web-built/site','web-built/standalone','web-built/demo.waffle','runtime/vendor/box2d-rs/LICENSE']){
+  for(const file of ['src','package.json','demo','LICENSE','packaging/studio.mjs','packaging/gamewaffle.svg','web-built/runtime','web-built/site','web-built/standalone']){
     await cp(file,join(target,file),{recursive:true});
   }
   const packages=['ws','pngjs','qoa-format','fflate','cbor-x'];

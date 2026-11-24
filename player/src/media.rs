@@ -12,28 +12,84 @@ type Error = Box<dyn std::error::Error>;
 #[derive(Deserialize)]
 pub struct Media {
     pub name: String,
+    pub minimap: Option<Minimap>,
     pub rooms: BTreeMap<String, Room>,
     pub atlases: BTreeMap<String, Atlas>,
     #[serde(default)]
     pub camera: Camera,
     #[serde(default)]
     pub audio: BTreeMap<String, Sound>,
+    #[serde(rename = "fontGlyphs", default)]
+    pub font_glyphs: BTreeMap<char, i32>,
+    #[serde(rename = "fontLayout")]
+    pub font_layout: Option<FontLayout>,
+    #[serde(default)]
+    pub fonts: BTreeMap<String, NamedFont>,
+    #[serde(rename = "fontFallbackGlyphs", default)]
+    pub font_fallback_glyphs: BTreeMap<char, i32>,
+}
+
+#[derive(Deserialize)]
+pub struct NamedFont {
+    pub layout: Option<FontLayout>,
+    pub glyphs: BTreeMap<char, i32>,
+}
+
+#[derive(Deserialize)]
+pub struct FontLayout {
+    pub width: u32,
+    pub height: u32,
+    pub columns: i32,
+}
+
+#[derive(Deserialize)]
+pub struct Minimap {
+    pub mode: String,
+    pub rooms: BTreeMap<String, [i32; 4]>,
+    pub edges: Vec<[String; 2]>,
 }
 
 #[derive(Deserialize)]
 pub struct Room {
+    pub shader: Option<gamewaffle_runtime::RoomShader>,
     pub hd: Option<u8>,
     pub ripple: Option<[u8; 3]>,
     #[serde(default)]
     pub seams: BTreeMap<String, bool>,
     pub width: u32,
     pub height: u32,
+    #[serde(rename = "cameraHeight")]
+    pub camera_height: Option<u32>,
     pub background: String,
     pub baked: Vec<Layer>,
     #[serde(rename = "ySort", default)]
     pub y_sort: bool,
     pub music: Option<String>,
     pub ambience: Option<String>,
+}
+
+impl Room {
+    pub fn camera_height(&self) -> u32 {
+        self.camera_height
+            .unwrap_or(self.height)
+            .clamp(1, self.height.max(1))
+    }
+
+    pub fn hd_strength(&self, shader: Option<gamewaffle_runtime::RoomShader>) -> u8 {
+        shader
+            .or(self.shader)
+            .map_or(self.hd.unwrap_or(0), |shader| shader.hd())
+    }
+
+    pub fn ripple_settings(
+        &self,
+        shader: Option<gamewaffle_runtime::RoomShader>,
+    ) -> Option<[u8; 3]> {
+        match shader.or(self.shader) {
+            Some(shader) => shader.ripple(),
+            None => self.ripple,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -44,6 +100,9 @@ pub struct Layer {
     pub x: i32,
     #[serde(default)]
     pub y: i32,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub parallax: Option<f32>,
 }
 
 #[derive(Deserialize)]

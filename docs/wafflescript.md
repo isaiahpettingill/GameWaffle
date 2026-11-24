@@ -1,48 +1,318 @@
 # Edit a script
 
-Open **Code** beside an actor. The room map stays open while you edit. Select **Text** to open CodeMirror. Studio saves valid edits automatically. If a script is incomplete, Studio keeps a draft for that actor.
+Open **Code** beside an entity. Edit its script on the right and use the stage on the left to see the selected room. The Project sidebar highlights the room or entity whose script is open. **Play here** runs the current room in the stage. **Stop** or Esc returns to the stage preview. Select **Text** to open CodeMirror. Studio saves valid edits automatically and keeps incomplete scripts as drafts.
 
 Both views use one compiler. The cartridge contains register bytecode. Studio
 keeps comments with the text until you change the program in Blocks.
 
+Use the **+** on an **if** block to add **else if** or **else**. Use **−** on a branch to remove it and detach any blocks inside. Text uses `elif` for the same chain. The chain runs the first matching branch. Put independent checks in separate `if` blocks to let both run on the same tick.
+
+## Room scripts
+
+Pick a room from **Room scripts** in the script file menu. This keeps the current stage and editor view. Selecting a room in the sidebar also selects its script. Use **World & camera** for the room controls. A room script starts on each entry, runs its own tick, and reads controller 1. The room inspector supplies defaults on each entry. When you load a save, the current room state is restored before `on restored`.
+
+```ruby
+on start
+  camera_follow_entity(entity.find("Elevator"))
+  camera_zoom(1.5)
+  set_room_gravity(12.0)
+  set_room_background("#342850")
+  set_room_depth_sort(true)
+end
+
+on tick
+  if action.x
+    camera(360, 160)
+  else
+    camera_follow_entity(entity.find("Elevator"))
+  end
+end
+```
+
+Choose a placed entity from the searchable **Find entity** block or connect an entity query. Set the starting zoom in the room inspector under **Camera**. Zoom is a multiplier from 0.25× to 4×, and 1× uses the game’s default zoom. **Reset room camera** restores the room’s default target and zoom. Use **Set room music** and **Set room ambience** to select a sound or choose **None**. In the room inspector under **Rendering**, use **Browse…** to import a PNG or Aseprite background into the project. You can also choose an existing project image.
+
+## Sprite shadows
+
+In an entity script, open **Looks & sound → Set sprite shadow**. **Behind** draws an offset silhouette that follows the current animation, rotation, and flips. **Ground** draws a shadow at the sprite’s feet in top-down rooms and on the nearest surface below it in platformer rooms. Set opacity from 0 to 100. Choose **None** to clear the shadow.
+
+```ruby
+on start
+  set_sprite_shadow("ground", 45)
+end
+```
+
+## Health and physics objects
+
+In an entity script, use **Looks & sound → Show health bar** to display that entity’s health above its sprite. Bars start off. Pick the fill and background colors, or pass hex colors in text. The bar fills relative to **Starting health** in the entity’s physics settings.
+
+```ruby
+on start
+  set_health_bar(true, "#a6e3a1", "#313244")
+end
+```
+
+A **Dynamic** body can be pushed by another moving body. A **Breakable** body stays in place until its health reaches zero. Under **Entities**, use **Push entity** to apply an impulse to a dynamic body, **Damage entity** and **Heal entity** to adjust health, or **Break entity** to run the normal damage and destroy events immediately. Configure respawn rules on the entity or instance.
+
+## Script constants
+
+Open **Constants…** in the script actions menu to give a value a name and choose its type. Drag the constant from **Variables** into any compatible input. Constants are local to the script and evaluate to the same value each time.
+
+```ruby
+const crate_push = 3.0
+
+on a
+  push_entity(entity.find("Crate"), const.crate_push, 0)
+end
+```
+
+## Room shaders
+
+In the room inspector, open **Shader** to pick an effect and adjust its strength. Fog, Volumetric lighting, and Lens flare add screen-space lighting over the scene. Snow, Rain, and Wind animate over the scene. HUD text and the minimap stay clear.
+
+A room script can switch presets with **World & camera → Set room shader**. Strength takes a number from 0 to 100. Choose **None** to turn the effect off. Use **Reset room shader** to restore the inspector preset and its settings.
+
+```ruby
+on tick
+  if pressed.a
+    set_room_shader("rain", 65)
+  end
+  if pressed.b
+    reset_room_shader()
+  end
+end
+```
+
+## Named events
+
+Open the picker on **Emit event** or **When I receive** and choose **New event…** to create and select an event in one step. You can also create events in the script actions menu or under **Game → Events**. The message reaches matching listeners in the current room on the next tick. Repeated messages queue behind a listener that is waiting.
+
+The **Event sender** block returns the sending entity. Plug it into an entity query to read that entity's position, health, or fields. Check **Entity exists?** before using it if the sender might have been removed. Events from a room script have no sender entity.
+
+```ruby
+on start
+  emit_event("switch_activated")
+end
+
+on received.switch_activated
+  if entity.exists(entity.event_sender)
+    global_real.switch_x = entity.x(entity.event_sender)
+  end
+end
+```
+
+## HUD text
+
+Under **Text**, use **Draw HUD text** to give a label a font, a screen anchor, and pixel offsets. Use the same name to update the label or remove it with **Hide HUD element**. Right and bottom offsets move the text inward from those edges. Use **Set HUD font** to choose the font for counters, dialogue, and menus. The font pickers list the fonts from **Game → Bitfonts**.
+
+```ruby
+on start
+  set_hud_font("builtin")
+  draw_text("level_title", text.level_title, "", "top_center", 0, 8)
+end
+```
+
 ## Events and data
 
-New actors start with an **On tick** block that applies room gravity. Put the gravity block inside a condition to control when the actor falls. A dynamic body uses its gravity scale and the room gravity once per physics step. A modifier of `none` uses a multiplier of 1. A modifier of 0 disables gravity for that step. Existing actors use automatic gravity until their script uses `apply_gravity`.
+A dynamic body uses the room gravity and its own gravity scale by default. For conditional gravity, choose **Entities → Physics settings → Gravity control → Script applies gravity each tick**, then run `apply_gravity(none)` from **On tick** whenever gravity should apply. A modifier of `none` uses a multiplier of 1. Skipping the call leaves gravity off for that tick.
+
+**Code → Movement preset…** inserts editable movement into **On tick**. The platformer preset reads held directions and checks for a grounded jump on the first tick of an X press. The top-down preset reads held directions on both axes. Assigning a controller connects input to an instance. Set its body to Dynamic when it needs physics movement.
 
 ```ruby
 on tick
   apply_gravity(none)
-  if pressed.x and actor.grounded
+  if pressed.x and entity.grounded
     animate("jump")
     jump_force(240)
   end
 end
 ```
 
-Select a tag from the actor's animation menu. This example uses a tag named `jump`. Force uses newtons. For direct control, use `force(x, y)` or `impulse(x, y)`. A negative Y value pushes the actor up. `pressed.x` is true on the first tick of a press. Use `action.x` for held input. Optional inputs accept `none` or an omitted trailing argument. Zero is a numeric value.
+In Blocks, start with **Events → On tick**, add **Control → If**, and plug an
+**Input & sensing** block into its condition. Combine checks with **and**, **or**,
+and **not** from **Operators**. A down check runs its branch on every tick the input is held.
+A just-pressed or just-released check runs its branch once per transition.
 
-Start an event with `on`. End it with `end`. Use `if`, `else`, and `while`
+For example, this applies horizontal force while a direction is held and jumps
+once per press when grounded:
+
+```ruby
+on tick
+  apply_gravity(none)
+  if action.left
+    force(-40, 0)
+  end
+  if action.right
+    force(40, 0)
+  end
+  if pressed.a and entity.grounded
+    jump_force(240)
+  end
+end
+```
+
+Use `button.left` for the raw controller button or `action.left` for the
+input action. Named actions from the game's control map work with `action`,
+`pressed`, and `released`. To move an existing `on pressed.jump` stack into
+`on tick`, place its commands inside `if pressed.jump`.
+
+Select a tag from the entity's animation menu. This example uses a tag named `jump`. Force uses newtons. For direct control, use `force(x, y)` or `impulse(x, y)`. A negative Y value pushes the entity up. `pressed.x` is true on the first tick of a press. Use `action.x` for held input. Optional inputs accept `none` or an omitted trailing argument. Zero is a numeric value.
+
+Start an event with `on`. End it with `end`. Use `if`, `elif`, `else`, and `while`
 for control flow. Use `wait(1)` to resume on the next tick. Use a number,
 a true or false value, or an expression for a numeric block input. Put text
 and engine options in double quotes. Start a comment with `#`.
 
 ```ruby
-on a
-  if item.key < 1
-    say("Find the key.")
-  else
-    flag.open = true
+on tick
+  if pressed.a
+    if item.key < 1
+      say("Find the key.")
+    else
+      flag.open = true
+    end
   end
 end
 ```
 
-Use `local.name` for a actor instance and `global.name` for the game.
-Use `flag.name` for a game flag. Read a button with `button.a`.
+## Types and math
+
+| Type | Literals | Actor variables | Game variables |
+| --- | --- | --- | --- |
+| Integer | `2`, `-8` | `local.count` | `global.score` |
+| Real | `2.0`, `0.5` | `local_real.angle` | `global_real.speed` |
+| Boolean | `true`, `false` | `local_bool.ready` | `global_bool.ready`, `flag.ready` |
+| String | `"Hello"` | `local_string.title` | `global_string.title` |
+
+Unset variables read as zero, false, or an empty string according to their type.
+Use the name picker on a variable block to create a field, flag, or variable for its selected scope.
+Conditions, logical operators, and boolean assignments or arguments accept
+numbers. Zero is false and every other number is true. Read a button with
+`button.a` or a mapped action with `action.jump`. `entity.grounded`,
+`entity.moving`, and `entity.is_player` are entity conditions. Compare numbers
+with `==`, `!=`, `<`, `<=`, `>`, or `>=`. Use `+` to join two strings.
+
+Integer division truncates toward zero. Real division keeps the fraction.
+Use matching numeric types in arithmetic and comparisons. Convert integers with
+`math.to_real`, reals with `math.floor`, `math.ceil`, `math.round`, or
+`math.trunc`, and booleans with `math.to_integer`. Use an integer count for `repeat` and `wait`. Use `change global.score by 1`
+to add to a numeric variable.
+
+The **Operators** palette includes absolute value, min/max, square root, power,
+natural log, exponential, sine, cosine, tangent, and inverse trig.
+Trig takes degrees and inverse trig returns degrees. Use `math.atan2(y, x)`
+for a direction angle. `entity.x_real`, `entity.y_real`, `entity.vx_real`,
+`entity.vy_real`, and `entity.health_real` retain fractional values.
+
+```ruby
+on tick
+  change local_real.angle by 3.0
+  if entity.is_player and button.right
+    move_by(1.5, math.sin(local_real.angle))
+  end
+end
+```
+
+## Entities and components
+
+Use the searchable pickers in the **Entities** palette. Entity lookups take
+the selected instance name. Component lookups take the selected component
+name. Target sockets start with a searchable entity lookup and can also
+accept a computed result. Use **Game → Variables → Add entity field** to name
+a new field and make it available in the pickers. Older scripts can still use
+the actor prefix for entity readings.
+
+Add component names such as `enemy`, `patrol`, or `pickup` in
+**Entities → Appearance**. In **Room → Instances**, add components for an
+individual placement. Actors already have `transform`, `sprite`, and
+`health` components. Actors with physics, player input, or scripts also
+expose `body`, `player`, or `script`.
+
+Open **Entities** in the block palette to find an entity by its instance name
+or find the nearest other entity with a component. Entity IDs are valid within
+the current room. A query returns 0 if it finds no match. Check an ID with
+`entity.exists` before using it later. Entity writes affect the selected
+entity’s typed local variables, so another entity can set a value your own script
+reads with `local`, `local_real`, `local_bool`, or `local_string`.
+
+```ruby
+on tick
+  local.target = entity.nearest("enemy", 96)
+  if pressed.x and entity.exists(local.target)
+    add_component(local.target, "alerted")
+    set_entity_real(local.target, "speed", 2.5)
+    damage_entity(local.target, 1)
+    animate_once("attack")
+  end
+end
+
+on animation_finished
+  animate("idle")
+end
+```
+
+Use **Play animation once** for a clip that should stop on its last frame.
+The completion event also fires when a finite clip reaches the end of its
+configured repeats.
+
+## Respawn rules
+
+In **Entities → Appearance**, set the default **Respawn** rule. Override it
+for a placed instance in **Room → Instances → Placement**. Use **Never** to
+keep a defeated instance absent, **On room re-entry** to reset it when the
+player returns, or **After a delay** to respawn after a number of game ticks.
+A delayed respawn can also wait for a flag to reach a chosen value.
+
+The Entities palette has **Set entity respawn** and **Entity respawns when**
+blocks for changing these rules from a script. Set the rule while the entity
+is present. Pending respawns are carried in saved games.
+
+Persistent particle emitters preserve their emission phase when a script
+sets the same effect each tick. The **Looks & sound** palette also supports
+timed emitters and bursts at an offset. Emission is shared between active
+entities when the room hits its particle budget.
+
+## Game menus and inventory
+
+Create named menus in **Game → Menus**. Open a menu with `show_menu("pause")`
+or open the starting menu from a starting room entity’s `on start` event.
+Use Up and Down to highlight an option, A to select it, or B to cancel.
+The room is paused while a menu is open.
+
+Handle `on menu_selected` and read `entity.menu_id` and `entity.menu_choice`.
+Choices start at 1. Cancel returns 0. `show_inventory()` lists carried items.
+The selected item’s ID appears in `entity.menu_item`. Use
+`use_selected_item()` to apply its item settings and run `on use_item`.
+Menu labels and item display names can use a `text.key` from **Game → Text**.
+
+## Text and languages
+
+In **Game → Text**, add the default language, add a text key, then fill translations
+in the other language tables. Use a **Text key** reporter in Blocks or
+`text.greeting` in WaffleScript. Dialogue and HUD labels accept strings built
+from literals, variables, and keys.
+
+```ruby
+on start
+  say(text.greeting)
+end
+```
+
+Open **File → Export…**, choose a format and language, then export once per
+language. Each playable export contains the selected text table with missing
+entries filled from the default language. The editable project keeps all
+translation tables.
+
+The built-in bitmap font includes common accented Latin letters. For other
+glyphs, import a custom 96-pixel-wide font sheet. Place extra glyphs after the
+96 ASCII cells and list those characters in sheet order in **Game → Display**.
+Each row contains 16 cells of 6 × 8 pixels.
 
 ## Modules and routines
 
 Select **New module**. Enter a name such as `score`. Define a function in
-the module. A function returns one expression and takes up to two parameters.
+the module. A function returns one expression and takes up to two parameters. Parameters
+default to integers. Annotate other types with `: real`, `: boolean`,
+or `: string`, as in `def wave(angle: real)`.
 
 ```ruby
 def bonus(points, multiplier)
@@ -62,8 +332,10 @@ proc award()
   burst("sparks", 8)
 end
 
-on b
-  award()
+on tick
+  if pressed.b
+    award()
+  end
 end
 ```
 
@@ -79,7 +351,7 @@ and circular module imports cause a build error.
 | `assets/sprites/` | Sprite sources in PNG or Aseprite format |
 | `assets/tiles/` | Tile sources |
 | `assets/audio/` | Sound and music sources |
-| `scripts/sprites/` | One CBOR script per actor |
+| `scripts/sprites/` | One CBOR script per entity |
 | `scripts/modules/` | Shared WaffleScript modules with the .ws extension |
 
 A sprite can use a .ws file as its source. Set its script path in project.json.
@@ -88,12 +360,12 @@ A folder project and a .waffleproj archive use the same paths.
 
 ## Desktop export and updates
 
-Save the project. Open **Export**. Select **Linux game** or **Windows game**.
+Open **File → Export…** and select **Linux game** or **Windows game**.
 Extract the ZIP. Keep the player and game.waffle together. Start the player.
 The game uses the runtime in its folder.
 
 The desktop edition of Studio includes the runtime for its platform. To get
-the runtime for another platform, select **Export**, then **Updates**. Select
+the runtime for another platform, select **Tools → Updates**. Select
 the platform, check the release, and install the runtime. Export the game again
 to include a newer runtime. Select **Studio** to update the application. Close
 the current Studio session before you use the new version.
@@ -117,3 +389,16 @@ end
 ```
 
 Use `follow_player(2)` to follow player 2. Use `set_position(x, y)` to move the current instance to a room position in pixels and clear its velocity.
+
+
+### Item effects
+
+Read `entity.used_item` in an `on use_item` handler to apply an item’s effect. **Item reference** provides a searchable item picker in Blocks. In WaffleScript, compare with `item_key("potion")`.
+
+```ruby
+on use_item
+  if entity.used_item == item_key("potion")
+    flag.potion_used = true
+  end
+end
+```

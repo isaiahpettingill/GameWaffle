@@ -11,11 +11,10 @@ function run(command,args){
 const id=await studioBuildId();
 let ready=false;
 try{
-  await Promise.all(['site/projects.html','site/index.html','runtime/runtime_bg.wasm','runtime/runtime.js','standalone/gamewaffle-player.html','demo.waffle'].map(p=>access('web-built/'+p)));
+  await Promise.all(['site/projects.html','site/index.html','runtime/runtime_bg.wasm','runtime/runtime.js','standalone/gamewaffle-player.html'].map(p=>access('web-built/'+p)));
   ready=(await readFile('web-built/studio-build-id','utf8'))===id;
 }catch{}
 if(!ready){
-  run(process.execPath,['src/compiler.mjs']);
   run(process.execPath,['src/build.mjs']);
 }
 const args=process.argv.slice(2);

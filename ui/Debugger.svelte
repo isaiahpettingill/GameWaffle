@@ -1,5 +1,6 @@
 <script>
   import {onMount} from 'svelte';
+  import SearchSelect from './SearchSelect.svelte';
   import {unpack} from '../src/cartridge.mjs';
   import {loadAtlas,drawRoom} from './render.js';
   let {room,onClose}=$props();
@@ -25,7 +26,7 @@
     let closed=false;
     (async()=>{
       if(typeof SharedArrayBuffer==='undefined')throw Error('Open the debugger in Studio on localhost.');
-      const bytes=new Uint8Array(await (await fetch('./demo.waffle')).arrayBuffer());
+      const bytes=new Uint8Array(await (await fetch('./game.waffle')).arrayBuffer());
       if(closed)return;
       cart=unpack(bytes);
       control=new Int32Array(new SharedArrayBuffer(69*4));control[0]=1;
@@ -38,7 +39,9 @@
           stop=data.stop;running=false;
           const sprite=data.state?.sprite;
           if(sprite&&!symbols[sprite]){
-            const r=await fetch('./api/script/'+encodeURIComponent(sprite)+'?debug');
+            const roomScript=sprite.startsWith('@room/');
+            const path=roomScript?'room-script/'+encodeURIComponent(sprite.slice(6)):'script/'+encodeURIComponent(sprite);
+            const r=await fetch('./api/'+path+'?debug');
             if(r.ok)symbols={...symbols,[sprite]:await r.json()};
           }
         }
@@ -57,19 +60,21 @@
   <div class="row"><h2>Script debugger</h2><button onclick={onClose}>Close</button></div>
   <div tabindex="0" role="application" aria-label="Debug game input" onkeydown={e=>key(e,true)} onkeyup={e=>key(e,false)} onblur={()=>control&&Atomics.store(control,1,0)}><canvas bind:this={canvas}></canvas></div>
   <div class="row"><button disabled={!stop} onclick={()=>resume(false)}>Continue</button><button disabled={!stop} onclick={()=>resume(true)}>Step instruction</button><button disabled={!running} onclick={()=>Atomics.store(control,0,1)}>Pause</button></div>
-  <p role="status">{stop ? `Paused at ${stop.event} · instruction ${stop.pc} · actor ${stop.actor}` : 'Running'}</p>
+  <p role="status">{stop ? `Paused at ${stop.event} · instruction ${stop.pc} · entity ${stop.actor}` : 'Running'}</p>
   {#if stop&&current}<p><code>{current.file}:{current.line} {current.text}</code> · {current.op}</p>{/if}
   <form class="row" onsubmit={e=>{e.preventDefault();breakpoint();}}>
     <label>Event<input placeholder="tick" maxlength="64" bind:value={event}></label>
     <label>Instruction<input type="number" min="0" bind:value={pc}></label>
-    <label>Instance ID (0 = any)<input type="number" min="0" bind:value={actor}></label>
+    <SearchSelect label="Debug entity" value={actor}
+      options={[{value:0,label:'Any entity'},...(state?.entities??[]).map(entry=>({value:entry.id,label:entry.name??'Entity'}))]}
+      onChange={value=>actor=value}/>
     <button disabled={!state}>Set breakpoint</button><button type="button" disabled={!state} onclick={()=>{event='';breakpoint();}}>Clear</button>
   </form>
-  {#if state}<p>{state.room} · Tick {state.tick} · {state.sprite??'Actor'} {state.actor}</p>
+  {#if state}<p>{state.room} · Tick {state.tick} · {state.sprite?.startsWith('@room/')?'Room script':(state.sprite??'Entity')+' '+state.actor}</p>
     {#each ['globals','flags','locals'] as scope}<h3>{scope}</h3><dl>{#each Object.entries(state[scope]??{}) as [name,value]}<dt>{name}</dt><dd>{value}</dd>{:else}<dd>None</dd>{/each}</dl>{/each}
   {/if}
   {#if error}<p role="alert">{error}</p>{/if}
 </section>
 <style>
-.debugger{padding:.8rem;overflow:auto;max-height:85dvh}.debugger canvas{width:min(100%,32rem);height:12rem;object-fit:contain;background:#16191b}.debugger label{max-width:10rem}dl{display:grid;grid-template-columns:auto 1fr;margin:.3rem 0}dd{overflow-wrap:anywhere}
+.debugger{padding:.8rem;overflow-y:auto;overflow-x:hidden;max-height:85dvh}.debugger canvas{width:min(100%,32rem);height:12rem;object-fit:contain;background:#16191b}.debugger label{max-width:10rem}dl{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);margin:.3rem 0}dd{overflow-wrap:anywhere}
 </style>

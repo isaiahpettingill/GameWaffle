@@ -2,7 +2,7 @@ import { decode as decodeQoa } from 'qoa-format';
 
 export function createAudio() {
   let context, master;
-  let muted = true, cart, roomId, roomGeneration=0;
+  let muted = true, cart, music, ambience, roomGeneration=0;
   const sources = [], decoded = new Map();
   function stopRoom() {
     roomGeneration++;
@@ -12,7 +12,7 @@ export function createAudio() {
     stopRoom();
     decoded.clear();
     cart = value;
-    roomId = undefined;
+    music = ambience = undefined;
   }
   function decode(id) {
     if (decoded.has(id)) return decoded.get(id);
@@ -47,14 +47,14 @@ export function createAudio() {
       return true;
     } catch { return false; }
   }
-  function setRoom(id) {
-    if (roomId === id) return;
-    const previous=cart?.rooms[roomId],room=cart?.rooms[id];
-    roomId=id;
-    if(previous && previous.music===room?.music && previous.ambience===room?.ambience)return;
+  function setRoom(id,settings) {
+    const room=cart?.rooms[id];
+    const nextMusic=settings?.music??room?.music, nextAmbience=settings?.ambience??room?.ambience;
+    if(music===nextMusic && ambience===nextAmbience)return;
+    music=nextMusic;ambience=nextAmbience;
     stopRoom();
-    play(room?.music,.7,true);
-    play(room?.ambience,.45,true);
+    play(music,.7,true);
+    play(ambience,.45,true);
   }
   async function toggle() {
     muted = !muted;
@@ -63,9 +63,8 @@ export function createAudio() {
       context ??= new AudioContext();
       if (!master) { master = context.createGain(); master.connect(context.destination); }
       await context.resume();
-      const room = roomId;
-      roomId = undefined;
-      setRoom(room);
+      play(music,.7,true);
+      play(ambience,.45,true);
     }
     if (master) master.gain.value = muted ? 0 : 1;
     return muted;

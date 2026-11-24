@@ -27,7 +27,7 @@ fn read_optional_float<'de, D: serde::Deserializer<'de>>(
     Ok(Option::<Number>::deserialize(decoder)?.map(|number| number.0))
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     #[default]
@@ -42,7 +42,7 @@ pub enum Mode {
     Fluid,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Physics {
     pub mode: Mode,
@@ -91,29 +91,37 @@ impl Default for Physics {
     }
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct Frame {
     pub image: String,
     pub ms: u32,
 }
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 pub struct Clip {
+    #[serde(default, rename = "durationMs")]
+    pub duration_ms: u64,
     pub frames: Vec<Frame>,
     pub repeat: u32,
 }
 
 impl Clip {
-    pub fn image(&self, elapsed: u64) -> &str {
-        let duration = self
-            .frames
+    pub fn duration(&self) -> u64 {
+        if self.duration_ms > 0 {
+            return self.duration_ms;
+        }
+        self.frames
             .iter()
             .map(|frame| u64::from(frame.ms.max(1)))
-            .sum::<u64>();
+            .sum()
+    }
+
+    pub fn image_with_repeat(&self, elapsed: u64, repeat: u32) -> &str {
+        let duration = self.duration();
         if duration == 0 {
             return "";
         }
-        if self.repeat > 0 && elapsed / duration >= u64::from(self.repeat) {
+        if repeat > 0 && elapsed / duration >= u64::from(repeat) {
             return self.frames.last().map_or("", |frame| &frame.image);
         }
         let mut cursor = elapsed % duration;
@@ -127,8 +135,22 @@ impl Clip {
     }
 }
 
+#[derive(Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Collider {
+    Polygon { points: Vec<[f32; 2]> },
+    Circle { center: [f32; 2], radius: f32 },
+}
+
 #[derive(Deserialize)]
 pub struct Sprite {
+    #[serde(default)]
+    pub collider: Vec<Collider>,
+    #[serde(default, rename = "frameColliders")]
+    pub frame_colliders: BTreeMap<String, Vec<Collider>>,
+    pub respawn: Option<Respawn>,
+    #[serde(default)]
+    pub components: Vec<String>,
     #[serde(default, rename = "scriptJump")]
     pub script_jump: bool,
     #[serde(default, rename = "scriptGravity")]
@@ -150,12 +172,51 @@ pub struct Sprite {
     pub projectile: Option<String>,
 }
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RespawnMode {
+    Never,
+    OnEntry,
+    Delay,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct Respawn {
+    pub mode: RespawnMode,
+    #[serde(default)]
+    pub ticks: u32,
+    pub flag: Option<String>,
+    #[serde(default = "enabled")]
+    pub when: bool,
+}
+
+fn enabled() -> bool {
+    true
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct PendingRespawn {
+    pub spawn: Spawn,
+    pub due: u64,
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
 pub struct Spawn {
+    #[serde(default, rename = "standardRespawn")]
+    pub standard_respawn: bool,
+    pub respawn: Option<Respawn>,
+    #[serde(default)]
+    pub components: Vec<String>,
     #[serde(default, rename = "standardMovement")]
     pub standard_movement: bool,
     #[serde(default)]
     pub persistence: Option<String>,
+    #[serde(
+        default,
+        rename = "rememberRemoval",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub remember_removal: Option<bool>,
     #[serde(default)]
     pub conditions: Vec<(String, bool)>,
     pub blocker: Option<usize>,
@@ -204,8 +265,14 @@ pub struct Exit {
 }
 #[derive(Clone, Deserialize)]
 pub struct Room {
+    #[serde(default, rename = "scriptHost")]
+    pub script_host: Option<String>,
+    #[serde(default, rename = "layoutKey")]
+    pub layout_key: String,
     #[serde(default)]
     pub group_camera: bool,
+    #[serde(default, rename = "cameraZoom")]
+    pub camera_zoom: Option<f32>,
     #[serde(default)]
     pub seams: BTreeMap<String, bool>,
     #[serde(default)]
@@ -233,11 +300,38 @@ impl Room {
 
 #[derive(Deserialize)]
 pub struct Item {
+    pub label: Option<String>,
     pub consumable: bool,
     pub flag: Option<String>,
 }
+#[derive(Clone, Deserialize)]
+pub struct MenuDefinition {
+    pub title: String,
+    pub options: Vec<String>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct Menu {
+    pub id: String,
+    pub controls: String,
+    pub owner: u32,
+    pub title: String,
+    pub options: Vec<String>,
+    pub selected: usize,
+    pub items: Vec<String>,
+}
 #[derive(Deserialize)]
 pub struct Game {
+    #[serde(default)]
+    pub fonts: std::collections::BTreeSet<String>,
+    #[serde(default)]
+    pub events: std::collections::BTreeSet<String>,
+    #[serde(default)]
+    pub minimap: String,
+    #[serde(default)]
+    pub text: BTreeMap<String, String>,
+    #[serde(default)]
+    pub menus: BTreeMap<String, MenuDefinition>,
     #[serde(default)]
     pub controls: BTreeMap<String, u8>,
     #[serde(default)]
@@ -300,6 +394,11 @@ pub struct ActorView<'a> {
     pub width: f32,
     pub height: f32,
     pub angle: f32,
+    pub flip_y: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<ShadowView>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "healthBar")]
+    pub health_bar: Option<HealthBarView>,
     pub layer: i32,
     pub facing: f32,
     pub image: &'a str,
@@ -307,6 +406,40 @@ pub struct ActorView<'a> {
     pub name: Option<&'a str>,
     pub player: Option<usize>,
     pub health: f32,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShadowPlacement {
+    Behind,
+    Ground,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+pub struct SpriteShadow {
+    pub placement: ShadowPlacement,
+    pub opacity: u8,
+}
+
+#[derive(Serialize)]
+pub struct ShadowView {
+    #[serde(flatten)]
+    pub style: SpriteShadow,
+    pub rect: [f32; 4],
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+pub struct HealthBarStyle {
+    pub fill: u32,
+    pub track: u32,
+}
+
+#[derive(Serialize)]
+pub struct HealthBarView {
+    #[serde(flatten)]
+    pub style: HealthBarStyle,
+    pub rect: [f32; 4],
+    pub fraction: f32,
 }
 
 #[derive(Serialize)]
@@ -329,14 +462,131 @@ pub enum RuntimeEvent {
     },
 }
 
+#[derive(Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RoomSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shader: Option<crate::RoomShader>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zoom: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gravity: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y_sort: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub music: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ambience: Option<String>,
+}
+
+impl RoomSettings {
+    pub(crate) fn valid_color(value: &str) -> bool {
+        value.len() == 7
+            && value.starts_with('#')
+            && value[1..].bytes().all(|c| c.is_ascii_hexdigit())
+    }
+
+    pub(crate) fn valid(&self) -> bool {
+        self.shader.is_none_or(|shader| shader.strength <= 100)
+            && self.zoom.is_none_or(|zoom| (0.25..=4.0).contains(&zoom))
+            && self
+                .gravity
+                .is_none_or(|gravity| (-100.0..=100.0).contains(&gravity))
+            && self.background.as_deref().is_none_or(Self::valid_color)
+            && self
+                .music
+                .iter()
+                .chain(&self.ambience)
+                .all(|sound| sound.len() <= 96)
+    }
+
+    pub(crate) fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HudAnchor {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    CenterLeft,
+    Center,
+    CenterRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+impl HudAnchor {
+    pub(crate) fn from_name(value: &str) -> Option<Self> {
+        Some(match value {
+            "top_left" => Self::TopLeft,
+            "top_center" => Self::TopCenter,
+            "top_right" => Self::TopRight,
+            "center_left" => Self::CenterLeft,
+            "center" => Self::Center,
+            "center_right" => Self::CenterRight,
+            "bottom_left" => Self::BottomLeft,
+            "bottom_center" => Self::BottomCenter,
+            "bottom_right" => Self::BottomRight,
+            _ => return None,
+        })
+    }
+
+    pub fn position(
+        self,
+        [width, height]: [u32; 2],
+        [text_width, text_height]: [u32; 2],
+        [x, y]: [i32; 2],
+    ) -> [f32; 2] {
+        let ww = width as f32 - text_width as f32;
+        let hh = height as f32 - text_height as f32;
+        let px = match self {
+            Self::TopRight | Self::CenterRight | Self::BottomRight => ww - x as f32,
+            Self::TopCenter | Self::Center | Self::BottomCenter => (ww / 2.).floor() + x as f32,
+            _ => x as f32,
+        };
+        let py = match self {
+            Self::BottomLeft | Self::BottomCenter | Self::BottomRight => hh - y as f32,
+            Self::CenterLeft | Self::Center | Self::CenterRight => (hh / 2.).floor() + y as f32,
+            _ => y as f32,
+        };
+        [px, py]
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct HudText {
+    pub value: String,
+    pub font: String,
+    pub anchor: HudAnchor,
+    pub offset: [i32; 2],
+}
+
 #[derive(Serialize)]
 pub struct Snapshot<'a> {
+    #[serde(
+        rename = "roomSettings",
+        skip_serializing_if = "RoomSettings::is_default"
+    )]
+    pub room_settings: &'a RoomSettings,
     pub room: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explored: Option<&'a std::collections::BTreeSet<String>>,
     pub tick: u64,
     pub actors: Vec<ActorView<'a>>,
     pub particles: &'a [crate::particles::Batch],
     pub focus: Option<[f32; 2]>,
     pub dialog: Option<&'a str>,
+    pub menu: Option<&'a Menu>,
+    #[serde(rename = "hudFont", skip_serializing_if = "str::is_empty")]
+    pub hud_font: &'a str,
+    #[serde(rename = "hudText", skip_serializing_if = "BTreeMap::is_empty")]
+    pub hud_text: &'a BTreeMap<String, HudText>,
     pub icons: &'a BTreeMap<String, [i32; 2]>,
     pub bars: &'a BTreeMap<String, [i32; 2]>,
     pub counters: &'a BTreeMap<String, i32>,

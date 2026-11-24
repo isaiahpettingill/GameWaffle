@@ -1,15 +1,46 @@
+import {shaderPresets} from './room-shaders.mjs';
 export const effects=['sparks','dust','smoke','flame','bubbles','rain','snow'];
 export const platformGravity = 16;
 export const roomBorder = (room, topDown) => room.border ?? (room.closedEdges == null ? (topDown ? 'closed' : 'sides') : room.closedEdges ? 'closed' : 'open');
-export const Events = ['start','use_item', 'restored', 'tick', 'a', 'b', 'x', 'menu', 'begin_contact', 'end_contact', 'damage', 'destroy'];
+export const Events = ['start','use_item', 'restored', 'tick', 'a', 'b', 'x', 'menu', 'begin_contact', 'end_contact', 'damage', 'destroy', 'animation_finished', 'menu_selected'];
+export const receivedEvent=name=>/^received\.[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name);
 export const inputEvent=name=>/^(pressed|released)\.[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name);
-export const initialScript=actor=>actor?.scriptGravity?{events:{tick:[{op:'apply_gravity',modifier:null}]}}:{events:{}};
+export const initialScript=actor=>actor?.scriptGravity&&actor.gravityMode!=='room'?{events:{tick:[{op:'apply_gravity',modifier:null}]}}:{events:{}};
+export const hudAnchors=['top_left','top_center','top_right','center_left','center','center_right','bottom_left','bottom_center','bottom_right'];
 export const Blocks = {
+  draw_text:['Draw HUD text %2 named %1 in %3 at %4 with X %5 Y %6',[
+    ['label','text','message'],['value','string','Hello!'],['font','text',''],['anchor',hudAnchors,'top_left'],
+    ['x','number',4],['y','number',4],
+  ]],
+  set_hud_font:['Set HUD font to %1',[['font','text','']]],
+  emit_event:['Emit event %1',[['event','text','']]],
   apply_gravity:['Apply gravity with modifier %1',[['modifier','number',1,'optional']]],
   force:['Apply force X %1 Y %2 N',[['x','number',0],['y','number',0]]],
   impulse:['Apply impulse X %1 Y %2 N·s',[['x','number',0],['y','number',0]]],
   follow_player:['Follow player %1',[['player','number',1]]],
-  set_position:['Set position X %1 Y %2',[['x','number',0],['y','number',0]]],
+  set_position:['Go to X %1 Y %2',[['x','number',0],['y','number',0]]],
+  show_menu:['Show menu %1',[['menu','text','pause']]],
+  show_inventory:['Show inventory menu',[]],
+  use_selected_item:['Use selected inventory item',[]],
+  respawn_when:['Entity %1 respawns when %2 is %3',[['entity','number',0],['flag','text',''],['when','boolean',true]]],
+  emit_for:['Emit %1 at %2 per second for %3 ticks',[['effect',effects,'smoke'],['rate','number',18],['ticks','integer',60]]],
+  burst_at:['Burst %1 at X %2 Y %3 offset',[['effect',effects,'sparks'],['x','number',0],['y','number',0]]],
+  set_respawn:['Set entity %1 respawn to %2, delay %3 ticks',[['entity','number',0],['mode',['default','never','on_entry','delay'],'on_entry'],['ticks','integer',60]]],
+  add_component:['Add component %2 to entity %1',[['entity','number',0],['component','text','enemy']]],
+  remove_component:['Remove component %2 from entity %1',[['entity','number',0],['component','text','enemy']]],
+  set_entity_integer:['Set entity %1 integer %2 to %3',[['entity','number',0],['field','text','score'],['value','integer',0]]],
+  set_entity_real:['Set entity %1 real %2 to %3',[['entity','number',0],['field','text','speed'],['value','real',{real:0}]]],
+  set_entity_boolean:['Set entity %1 boolean %2 to %3',[['entity','number',0],['field','text','ready'],['value','boolean',false]]],
+  set_entity_string:['Set entity %1 string %2 to %3',[['entity','number',0],['field','text','label'],['value','string','']]],
+  move_entity:['Move entity %1 by X %2 Y %3',[['entity','number',0],['x','number',1],['y','number',0]]],
+  entity_velocity:['Set entity %1 velocity X %2 Y %3',[['entity','number',0],['x','number',0],['y','number',0]]],
+  damage_entity:['Damage entity %1 by %2',[['entity','number',0],['amount','number',1]]],
+  heal_entity:['Heal entity %1 by %2',[['entity','number',0],['amount','number',1]]],
+  push_entity:['Push entity %1 with impulse X %2 Y %3',[['entity','number',0],['x','number',4],['y','number',0]]],
+  break_entity:['Break entity %1',[['entity','number',0]]],
+  remove_entity:['Remove entity %1',[['entity','number',0]]],
+  animate_once:['Play animation %1 once',[['tag','text','idle']]],
+  move_by:['Move by X %1 Y %2',[['x','number',1],['y','number',0]]],
   burst: ['Burst %1 with %2 particles', [['effect',effects,'sparks'],['count','number',12]]],
   emit: ['Emit %1 at %2 per second', [['effect',effects,'smoke'],['rate','number',16]]],
   stop_fx: ['Stop particle emitter', []],
@@ -27,12 +58,35 @@ export const Blocks = {
   follow: ['Follow this instance', []],
   camera: ['Point camera at X %1 Y %2', [['x','number',0],['y','number',0]]],
   release_camera: ['Follow player 1', []],
+  camera_follow_entity: ['Follow entity %1', [['entity','number',0]]],
+  camera_zoom: ['Set camera zoom to %1×', [['zoom','number',1]]],
+  reset_room_camera: ['Reset room camera', []],
+  set_room_gravity: ['Set room gravity to %1', [['gravity','number',{real:9.8}]]],
+  set_room_background: ['Set room background color to %1', [['color','string','#101a23']]],
+  set_room_depth_sort: ['Sort entities by depth %1', [['enabled','boolean',true]]],
+  set_room_music: ['Set room music to %1', [['sound','text','']]],
+  set_room_ambience: ['Set room ambience to %1', [['sound','text','']]],
+  set_room_shader: ['Set room shader to %1 at %2% strength', [['shader',shaderPresets,'fog'],['strength','number',55]]],
+  reset_room_shader: ['Reset room shader', []],
   give: ['Give %1 × %2', [['item','text','coin'],['count','number',1,'optional']]],
   take: ['Remove %1 × %2', [['item','text','coin'],['count','number',1,'optional']]],
   say: ['Say %1', [['text','text','Hello!']]],
   counter: ['Show counter %1 with value %2', [['label','text','Coins'],['value','number',0]]],
-  hide: ['Hide counter %1', [['label','text','Coins']]],
+  hide: ['Hide HUD element %1', [['label','text','Coins']]],
   walk: ['Move with D-pad at %1', [['speed', 'number', 4]]],
+  flip_sprite_x:['Flip sprite horizontally %1',[['enabled','boolean',true]]],
+  flip_sprite_y:['Flip sprite vertically %1',[['enabled','boolean',true]]],
+  set_sprite_rotation:['Set sprite rotation to %1°',[['degrees','number',0]]],
+  rotate_sprite:['Rotate sprite by %1°',[['degrees','number',90]]],
+  set_sprite_shadow:['Set sprite shadow to %1 at %2% opacity',[
+    ['placement',['behind','ground','none'],'behind'],['opacity','number',45,'optional'],
+  ]],
+  set_health_bar:['Show health bar %1 with fill %2 and background %3',[
+    ['enabled','boolean',true],['fill','string','#a6e3a1','optional'],['track','string','#313244','optional'],
+  ]],
+  fire_projectile:['Fire %1 toward %2 at speed %3 with %4 damage',[
+    ['projectile','text','spark'],['aim',['facing','position','trajectory','heat_seek'],'facing'],['speed','number',8],['amount','number',1],
+  ]],
   jump_force: ['Jump with force %1 N', [['force','number',240]]],
   jump: ['Jump at speed %1', [['speed', 'number', 8]]],
   damage: ['Deal %1 damage in a %2 × %3 attack box', [['amount', 'number', 1], ['range', 'number', 28], ['height', 'number', 24]]],
@@ -44,9 +98,42 @@ export const Blocks = {
   room: ['Go to room %1', [['room','text','yard']]],
   spawn: ['Create instance of %1 at offset X %2 Y %3', [['sprite','text','drone'],['x','number',0,'optional'],['y','number',0,'optional']]],
 };
+export const messageInputs = {say:'text',ask:'text',counter:'label',bar:'label',hide:'label'};
 export const Opcodes = Object.freeze({
-  walk:0, jump:1, damage:2, fire:3, chase:4, sound:5, velocity:6, animate:7, room:8, spawn:9, give:18, take:19, say:20, counter:21, hide:22, follow:23, camera:24, release_camera:25, remove_self:26, burst:27, emit:28, stop_fx:29,group_camera:30,checkpoint:31,retry_checkpoint:32,ask:33,give_player:34,take_player:35,count_player:36,bar:37,use_player_item:38,item_icon:39,follow_player:40,set_position:41,jump_force:42,apply_gravity:43,force:44,impulse:45,
+  walk:0, jump:1, damage:2, fire:3, chase:4, sound:5, velocity:6, animate:7, room:8, spawn:9, give:18, take:19, say:20, counter:21, hide:22, follow:23, camera:24, release_camera:25, remove_self:26, burst:27, emit:28, stop_fx:29,group_camera:30,checkpoint:31,retry_checkpoint:32,ask:33,give_player:34,take_player:35,count_player:36,bar:37,use_player_item:38,item_icon:39,follow_player:40,set_position:41,jump_force:42,apply_gravity:43,force:44,impulse:45,move_by:46,move_entity:51,entity_velocity:52,damage_entity:53,remove_entity:54,animate_once:55,show_menu:56,show_inventory:57,add_component:58,remove_component:59,set_entity_integer:60,set_entity_real:61,set_entity_boolean:62,set_entity_string:63,use_selected_item:64,set_respawn:65,respawn_when:66,emit_for:67,burst_at:68,flip_sprite_x:69,flip_sprite_y:70,set_sprite_rotation:71,rotate_sprite:72,fire_projectile:73,camera_follow_entity:74,camera_zoom:75,set_room_gravity:76,set_room_background:77,set_room_depth_sort:78,set_room_music:79,set_room_ambience:80,reset_room_camera:81,set_room_shader:82,reset_room_shader:83,emit_event:84,draw_text:85,set_hud_font:86,
+  set_sprite_shadow:87,set_health_bar:88,heal_entity:89,push_entity:90,break_entity:91,
 });
+export const roomCommands = ['camera_follow_entity','camera_zoom','reset_room_camera','set_room_gravity',
+  'set_room_background','set_room_depth_sort','set_room_music','set_room_ambience','set_room_shader','reset_room_shader'];
 export const buttons = ['up','down','left','right','a','b','x','menu'];
 
-export const readings=['id','x','y','vx','vy','health','grounded','player','other','damage','other_player','last_spawn','answer','item_count'];
+export const actorReadings = {
+  id:'integer',x:'integer',y:'integer',vx:'integer',vy:'integer',health:'integer',
+  grounded:'boolean',player:'integer',other:'integer',damage:'integer',other_player:'integer',
+  last_spawn:'integer',answer:'integer',item_count:'integer',moving:'boolean',is_player:'boolean',facing:'integer',
+  x_real:'real',y_real:'real',vx_real:'real',vy_real:'real',health_real:'real',
+  menu_choice:'integer',menu_item:'string',menu_id:'string',used_item:'string',event_sender:'integer',
+};
+const readingNames=Object.keys(actorReadings);
+export const readings=readingNames.filter(name=>['integer','boolean'].includes(actorReadings[name]));
+export const realReadings=readingNames.filter(name=>actorReadings[name]==='real');
+export const stringReadings=readingNames.filter(name=>actorReadings[name]==='string');
+
+export const entityQueries = {
+  find: ['Entity named %1','integer',[['string','enemy']]],
+  nearest: ['Nearest entity with %1 within %2 px','integer',[['string','enemy'],['number',96]]],
+  exists: ['Entity %1 exists?','boolean',[['integer',0]]],
+  has: ['Entity %1 has component %2?','boolean',[['integer',0],['string','enemy']]],
+  x: ['X position of entity %1','real',[['integer',0]]],
+  y: ['Y position of entity %1','real',[['integer',0]]],
+  vx: ['X velocity of entity %1','real',[['integer',0]]],
+  vy: ['Y velocity of entity %1','real',[['integer',0]]],
+  health: ['Health of entity %1','real',[['integer',0]]],
+  integer: ['Entity %1 integer %2','integer',[['integer',0],['string','score']]],
+  real: ['Entity %1 real %2','real',[['integer',0],['string','speed']]],
+  boolean: ['Entity %1 boolean %2','boolean',[['integer',0],['string','ready']]],
+  string: ['Entity %1 string %2','string',[['integer',0],['string','label']]],
+};
+
+
+export const valueInput=type=>['number','integer','real','boolean','string'].includes(type);

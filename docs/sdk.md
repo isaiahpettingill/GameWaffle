@@ -12,7 +12,7 @@ The source structure and opcode assignments are provisional. Use the compiler to
 | `pack(cartridge)` | Write playable cartridge bytes. |
 | `unpack(bytes)` | Read media for display and audio. |
 
-The `scripts` override is a map from sprite IDs to Blockly source objects. Each script has an `events` object. Each event contains an array of statements.
+The `scripts` override maps entity type IDs and `room:<id>` keys to Blockly source objects. Each script has an `events` object. Each event contains an array of statements.
 
 ## Scripting
 
@@ -56,12 +56,26 @@ Example of an event that increases a score and sets a flag.
 | `if` | `condition`, `body`, optional `otherwise` |
 | `while` | `condition`, `body` |
 | `wait` | `ticks` |
+| `repeat` | `times`, `body` |
+| `change` | `scope`, `name`, `value` |
 
-Use `{ "scope": "local", "get": "name" }` to get a local variable. Use `global` for a shared variable. Use `flag` for a Boolean value. Undefined values read as zero. The runtime converts zero to false and other values to true when it reads a condition or sets a flag.
+Use `local` or `global` for integer variables, `local_real` or `global_real`
+for reals, `local_bool` or `global_bool` for booleans, and `local_string`
+or `global_string` for strings. The `flag` scope is boolean. Represent a real
+literal as `{ "real": 2 }`, a string as a JSON string, and a translated string
+as `{ "text": "greeting" }`. Use `{ "button": "a" }` for a boolean button
+check. Comparison and logical operations return booleans. In boolean contexts, zero
+is false and nonzero numbers are true.
 
-Use an integer, a Boolean, a variable read, a button read, or an operation as an expression. Use `{ "button": "a" }` to read the current state of button A. Use `calc`, `left`, and `right` for an operation. The `not` operation uses only `left`.
+Use `calc`, `left`, and `right` for an infix operator. Use
+`{ "call": "math.sin", "args": [{ "real": 90 }] }` for a math function.
+Integers use exact arithmetic with a limit of 8,192 bits. Reals use finite
+64-bit floating point. Type checking runs before the compiler emits bytecode.
+Script errors report division by zero and nonfinite math results at runtime.
 
-The language can express integer counter machines. The implementation applies instruction, integer, and memory limits. Small values use signed 64-bit integers. Larger calculation results can use up to 8,192 bits. A script that reaches a limit reports a script error.
+The project’s `localization` object has a default `locale` and a `tables`
+map from language codes to text dictionaries. `pack(cart, { locale: "es" })`
+bakes one language into the cartridge, filling missing keys from the default table.
 
 ## Rust host
 
@@ -90,20 +104,27 @@ The final 96 bytes contain a 32-byte Ed25519 public key and a 64-byte signature.
 See the [engine command reference](blocks.md) for commands, events, and actor readings.
 Run `node packaging/sdk-reference.mjs` after you change the schema.
 
-Select **Save instance state** to keep the position, velocity, health,
-animation, facing direction, local variables, and removal state of a named
-instance when you leave the room or save the game. Keep the instance name stable across game updates. Set
-**Remember destroyed tiles** to keep a removed tile absent at its layer and cell.
+In an entity’s **Lifecycle** settings, select **Remember state between room visits** to retain a named instance’s position, velocity, health, animation, facing direction, and local variables. Choose **Never** under **Respawn** to keep a removed instance absent. The room instance can override the entity type’s defaults. Keep instance names stable across game updates. Set **Remember destroyed tiles** to keep removed tiles absent at their layer and cell.
 
-Use **Follow all players** to center the view between the outermost players.
+In **Game → Display**, set **Resolution** to **Fixed** and enter a width and height in pixels. **Adapt to window** uses the window size, pixel zoom, and resolution limits. Camera zoom changes how much of the room is visible. Follow stops at room edges and can show adjoining terrain at seamless connections. Use **Camera bottom inset** in a room’s Camera settings to leave unused rows below the screen.
+
+In **Game → Camera**, choose **All players** to center the view between the outermost players. A room can choose its initial target. Room scripts can change the target, zoom, gravity, background color, depth sorting, music, ambience, and shaders during play. See [Room scripts](wafflescript.md#room-scripts).
 Use **Set checkpoint** and **Return to checkpoint** to retry within the current
 session. Disk save slots have a separate lifetime.
 
-In a damage event, read `actor.other_player` to award an item to the player
-who dealt damage. Player numbers range from 1 through 4. Read `actor.item_count`
-after a player inventory command. Read `actor.last_spawn` after the spawn
+In a damage event, read `entity.other_player` to award an item to the player
+who dealt damage. Player numbers range from 1 through 4. Read `entity.item_count`
+after a player inventory command. Read `entity.last_spawn` after the spawn
 tick completes. To get a yes or no answer, ask a question, wait one tick, and
-read `actor.answer`. A selects yes. B selects no.
+read `entity.answer`. A selects yes. B selects no.
+
+## Bitfonts
+
+In **Game → Bitfonts**, import a font or choose an installed font for HUD text, menus, and dialogue. The built-in face supplies missing glyphs.
+
+- **PNG** sheets use a grid. Set the glyph width and height, then click cells and enter one character per cell. Press Enter to advance. Duplicate assignments use the first cell in sheet order.
+- **Aseprite** files use each tag name as its character and the first frame in that tag. Use a literal character, a code point such as `U+00E9`, or `space`. Duplicate labels use the first tag. The exact case takes priority, with a fallback to the other case.
+- **YAFF** imports monochrome, single-character glyphs and reads glyph labels and basic cell metrics from the file. [YAFF file format](https://github.com/robhagemans/monobit/blob/master/YAFF.md)
 
 ## Native LAN games
 
