@@ -20,7 +20,7 @@
   const sourceOptions=$derived([...new Set([...sources.filter(value=>fontFile.test(value)),...(source?[source]:[])])]
     .map(value=>({value,label:value.split('/').at(-1)})));
 
-  function open(id=''){
+  export function open(id=''){
     const config=fonts[id];
     editing=id;name=config?.name??'';source=config?.source??'';width=config?.glyphWidth??6;height=config?.glyphHeight??8;
     assignments=config?.assignments??Object.fromEntries([...(config?.characters??'')].map((label,index)=>[index,label]));file=null;error='';

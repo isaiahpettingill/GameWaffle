@@ -2,10 +2,24 @@ import * as Blockly from 'blockly/core';
 
 export class SearchDropdown extends Blockly.FieldDropdown {
   static fromJson(options) {
-    const field=new SearchDropdown(options.options);
+    // Older scripts and scripts shared between rooms can reference assets
+    // outside the current picker. Keep the stored value intact when loading.
+    let field;
+    field=new SearchDropdown(()=>{
+      const choices=options.options();
+      const selected=field?.loadingValue??field?.getValue();
+      return typeof selected==='string'&&!choices.some(([,value])=>value===selected)
+        ? [...choices,[selected||'None',selected]] : choices;
+    });
     field.maxDisplayLength=24;
     field.create=options.create;
     return field;
+  }
+
+  loadState(state){
+    this.loadingValue=state;
+    try{super.loadState(state);}
+    finally{this.loadingValue=undefined;}
   }
 
   showEditor_() {

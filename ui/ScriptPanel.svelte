@@ -19,7 +19,7 @@
   let { sprite, isRoom=false, isGame=false, isTile=false, variant=0, title=sprite, tileScripts=[], roomScripts, entityScripts, onSelectFile, sprites, actorDefinition, animations, newActor, items, textKeys, menus, references, actions, onBeforeSave, hasLegacyMovement, initialMovement, onMovementPreset, dirty = $bindable(false), status=$bindable(''), mode=$bindable('blocks'), onSave,onFileEdit,onNewEvent,onNewField } = $props();
   const baseFile=$derived(isGame?'game':isTile?'tile:'+sprite+':'+variant:(isRoom?'room:':'entity:')+sprite);
   const currentFile=$derived(selected?'module:'+selected:baseFile);
-  const registry=()=>({collections:validateCollections(references.collections),fonts:references.fontsLabels,events:references.eventsLabels,constants:references.gameConstants,gameScript:isGame&&!selected,tileScript:isTile&&!selected,roomScript:selected?undefined:isRoom||isGame,sounds:Object.fromEntries(references.sounds.map(id=>[id,true])),sprites:Object.fromEntries(sprites.map(id=>[id,true])),items:Object.fromEntries(items.map(id=>[id,true])),controls:Object.fromEntries(actions.map(id=>[id,true])),text:Object.fromEntries(textKeys.map(id=>[id,true])),menus:Object.fromEntries(menus.map(id=>[id,true])),flags:Object.fromEntries(references.flags.map(id=>[id,true]))});
+  const registry=()=>({shaders:references.shaders,collections:validateCollections(references.collections),propertyAliases:references.propertyAliases,fonts:references.fontsLabels,events:references.eventsLabels,constants:references.gameConstants,gameScript:isGame&&!selected,tileScript:isTile&&!selected,roomScript:selected?undefined:isRoom||isGame,tiles:Object.fromEntries((references.tiles??[]).map(id=>[id,true])),sounds:Object.fromEntries(references.sounds.map(id=>[id,true])),sprites:Object.fromEntries(sprites.map(id=>[id,true])),items:Object.fromEntries(items.map(id=>[id,true])),controls:Object.fromEntries(actions.map(id=>[id,true])),text:Object.fromEntries(textKeys.map(id=>[id,true])),menus:Object.fromEntries(menus.map(id=>[id,true])),flags:Object.fromEntries(references.flags.map(id=>[id,true]))});
   let timer,pendingSave,editNumber=0,saving=$state(false);
   let draft,recovered=$state(false);
   function changed(){
@@ -87,7 +87,7 @@
         await draft.write(null);previous=null;
       }
       original=data;textEditor?.dispose();textEditor=null;
-      blockEditor.setRoomContext((isRoom||isGame)&&!selected,isGame&&!selected,isTile&&!selected);
+      blockEditor.setRoomContext((isRoom||isGame)&&!selected,isGame&&!selected,isTile&&!selected,Boolean(selected));
       blockEditor.load(data);
       recovered=!!previous;dirty=recovered;
       mode=previous?.mode??mode;
@@ -254,7 +254,7 @@
         <select class="category-picker" aria-label="Block category" value={String(selectedCategory)} disabled={!ready||busy}
           onchange={event=>blockEditor.selectCategory(Number(event.currentTarget.value))}>
           <option value="-1">Add block</option>
-          {#each blockCategories((isRoom||isGame)&&!selected,isGame&&!selected,isTile&&!selected) as category,index}<option value={String(index)}>{category}</option>{/each}
+          {#each blockCategories((isRoom||isGame)&&!selected,isGame&&!selected,isTile&&!selected,Boolean(selected)) as category,index}<option value={String(index)}>{category}</option>{/each}
         </select>
       {/if}
       <div class="edit-tools">

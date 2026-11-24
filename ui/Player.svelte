@@ -8,7 +8,8 @@
   import { drawRoom, loadAtlas } from './render.js';
   import { createAudio } from './audio.js';
 
-  let canvas, shell, fileInput;
+  let shaderStatus=$state('');
+  let canvas, presentation, shell, fileInput;
   let cart = $state.raw(null), snapshot = $state.raw(null);
   let touch = $state(false), muted = $state(true), players = $state(1);
   let status = $state('Loading cartridge…'), error = $state(''), lanSlots = $state([]);
@@ -37,13 +38,21 @@
   const keyboard = { ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right', KeyZ:'a',Semicolon:'a',Quote:'b',Space:'x',MouseLeft:'a',MouseRight:'b',KeyX:'b',KeyC:'x',Enter:'menu',KeyW:'up',KeyS:'down',KeyA:'left',KeyD:'right' };
   const second = { KeyI:'up',KeyK:'down',KeyJ:'left',KeyL:'right',KeyN:'a',KeyM:'b',Comma:'x',Period:'menu' };
   const gamepad = [12,13,14,15,0,1,2,9];
+  const connectedPads=()=>Array.from(navigator.getGamepads?.()??[]).filter(pad=>pad?.connected);
+  const padSlots=new Map();
+  let padRange='';
+
+  function cameraWindow(){
+    const box=canvas?.parentElement?.getBoundingClientRect();
+    return box?.width&&box?.height?[Math.floor(box.width),Math.floor(box.height)]:[640,480];
+  }
 
   async function load(bytes, requestedRoom) {
     const next = unpack(bytes);
     const room = Object.hasOwn(next.rooms, requestedRoom) ? requestedRoom : next.start;
     const version = ++loadVersion;
     const firstAtlas = await loadAtlas(next.atlases[room]);
-    const loadedRuntime = await createRuntime(bytes, room);
+    const loadedRuntime = await createRuntime(bytes, room, Math.min(connectedPads().length,4),cameraWindow());
     if (version !== loadVersion) { loadedRuntime.free(); return; }
     runtime?.free();
     runtime = loadedRuntime;
@@ -53,9 +62,9 @@
     startingRoom = room;
     atlasImages = {[room]:firstAtlas};
     audio.setCart(next);
+    error = '';
     show(JSON.parse(runtime.snapshot()));
     status = 'Local game';
-    error = '';
   }
   function show(frame,paint=true) {
     if (snapshot?.room!==frame.room || snapshot?.tick>frame.tick) {
@@ -73,13 +82,13 @@
   }
   function paintFrame(frame){
     if (atlasImages[frame.room]) {
-      if (canvas) drawRoom(canvas,cart,frame,atlasImages);
+      if (canvas) shaderStatus=drawRoom(canvas,cart,frame,atlasImages,false,presentation)??'';
     } else if (cart.atlases[frame.room]) {
       const expected=cart;
       loadAtlas(cart.atlases[frame.room]).then(image=>{
         if (cart!==expected) return;
         atlasImages[frame.room]=image;
-        if (canvas && snapshot?.room===frame.room) drawRoom(canvas,cart,snapshot,atlasImages);
+        if (canvas && snapshot?.room===frame.room) shaderStatus=drawRoom(canvas,cart,snapshot,atlasImages,false,presentation)??'';
       }).catch(err=>{error=String(err.message??err);});
     }
   }
@@ -136,10 +145,21 @@
     }
     for (const key of [...fingers.values(),...taps]) if (key) result[0][key] = true;
     const first = Math.min(socket?players-1:3,snapshot?.gameSettings?.firstControllerSlot??0);
-    const pads = [...(navigator.getGamepads?.() ?? [])].filter(pad=>pad?.connected).slice(0,(socket?players:4)-first);
+    const end=socket?players:4, range=first+':'+end;
+    const pads=connectedPads();
+    if(range!==padRange){padSlots.clear();padRange=range;}
+    for(const id of padSlots.keys())if(!pads.some(pad=>pad.index===id))padSlots.delete(id);
+    const occupied=new Set(padSlots.values());
     let connected=1;
-    for (const [index,pad] of pads.entries()) {
-      const slot = first+index;
+    for (const pad of pads) {
+      let slot=padSlots.get(pad.index);
+      if(slot===undefined){
+        slot=first;
+        while(occupied.has(slot))slot++;
+        if(slot>=end)continue;
+        padSlots.set(pad.index,slot);
+        occupied.add(slot);
+      }
       connected|=1<<slot;
       for (const [i,button] of gamepad.entries()) if (pad.buttons[button]?.pressed) result[slot][buttons[i]] = true;
       for (const [i,on] of [pad.axes[1] < -.5,pad.axes[1] > .5,pad.axes[0] < -.5,pad.axes[0] > .5].entries()) {
@@ -154,6 +174,8 @@
       elapsed = Math.min(elapsed + (last ? now - last : 0),100);
       last = now;
       let updated=false;
+      if(elapsed>=1000/60 && runtime && !socket && cart?.runtimeAbi>=15)
+        runtime.set_camera_window(...cameraWindow(),true);
       while (elapsed >= 1000/60) {
         elapsed -= 1000/60;
         const data = inputs();
@@ -283,11 +305,12 @@
     <small>Move with WASD or arrows. Use Z, X, C, and Enter for A, B, X, and Start.</small>
     {#if players>1}<small>Player 2 uses IJKL, N, M, comma, and period.</small>{/if}
   </section>{/if}
-  <div class="feedback" role="status">{status}{#if lanSlots.length} · P{lanSlots.map(n=>n+1).join(', P')}{/if}</div>
+  <div class="feedback" role="status">{shaderStatus||status}{#if lanSlots.length} · P{lanSlots.map(n=>n+1).join(', P')}{/if}</div>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   <div class="playfield">
     <div class="screen">
       <canvas tabindex="-1" aria-label="Game display" bind:this={canvas} width="128" height="128"></canvas>
+      <canvas class="shader-output" aria-hidden="true" hidden bind:this={presentation}></canvas>
     </div>
       {#if touch&&cart}
         <div role="group" aria-label="Touch controls" class="touch" onpointerdown={touchDown} onpointermove={touchMove} onpointerup={touchUp} onpointercancel={touchUp} onlostpointercapture={touchUp}>
@@ -316,6 +339,7 @@
   .playfield{flex:1;min-height:0;position:relative;display:flex;flex-direction:column}
   .screen{flex:1;min-height:0;position:relative;display:grid;place-items:center;overflow:hidden}
   canvas{width:100%;height:100%;position:absolute;inset:0;object-fit:contain}
+  .shader-output{pointer-events:none}
   .touch{position:absolute;inset:0;pointer-events:none;touch-action:none;display:grid;grid-template-columns:1fr auto 1fr;align-items:end;padding:clamp(.35rem,2vw,1rem);}
   .touch button{pointer-events:auto;touch-action:none;user-select:none;background:#292537d9;border-color:#9d819ccc;color:#fff1d6;min-width:34px;min-height:34px;padding:.2rem;}
   @media (orientation:portrait){

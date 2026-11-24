@@ -1,4 +1,6 @@
-import {validateCollections} from './collections.mjs';
+import {prepareAssetUpload} from './asset-upload.mjs';
+import {compileShaderGraph} from './compile-shader-graph.mjs';
+import {propertyAliases,validateCollections} from './collections.mjs';
 import {checkUpdate,update,exportDesktop,nativeTarget} from './desktop.mjs';
 import {parseScript,formatScript,locations} from './wafflescript.mjs';
 import {compileScript} from './script.mjs';
@@ -10,7 +12,7 @@ import {projectStore} from './project-store.mjs';
 import {projectBasename} from './resource-name.mjs';
 import {gameScriptPath,initialGameScript,readGameScript} from './game-script.mjs';
 import {initialTileScript,tileScriptPath,tileStartsAnimated} from './tile-script.mjs';
-import {initialRoomScript,roomScriptPath} from './room-script.mjs';
+import {changeRoomView,initialRoomScript,roomScriptPath,roomSettingKeys} from './room-script.mjs';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { watch } from 'node:fs';
@@ -20,7 +22,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import { compileProject, previewTiles, previewRoomArt, inspectBitfont, discoverAssets, describeArt, projectPath } from './compiler.mjs';
 import { encodeCbor, decodeCbor } from './cartridge.mjs';
-import { initialScript,buttons,Opcodes } from './schema.mjs';
+import { initialScript,buttons,Opcodes,platformGravity } from './schema.mjs';
 import { embedCartridge, playerTemplate } from './web-export.mjs';
 import { Runtime, initSync } from '../web-built/runtime/runtime.js';
 
@@ -154,8 +156,8 @@ const server = createServer(async (req, res) => {
       if (cartFile || !local(req) || !sameSite(req)) return send(res, 403, {error:'The editor is available on the host computer'});
       if(url.pathname==='/api/file-history' && req.method==='POST'){
         const {id,back}=await jsonBody(req);
-        await change(()=>history.restore(id,back===true,recompile));
-        return send(res,200,{ok:true});
+        const manifestChanged=await change(()=>history.restore(id,back===true,recompile));
+        return send(res,200,{ok:true,manifestChanged});
       }
       if(url.pathname.startsWith('/api/recovery/')){
         const key=decodeURIComponent(url.pathname.slice('/api/recovery/'.length));
@@ -185,6 +187,57 @@ const server = createServer(async (req, res) => {
       }
       if (url.pathname === '/api/archive' && req.method === 'GET') {
         await mutation;return send(res,200,await store.exportArchive(),'application/octet-stream');
+      }
+      if(url.pathname==='/api/shaders/preview'&&req.method==='POST'){
+        const graph=await jsonBody(req,65536);
+        const {wgsl,uniformSize,parameters,samplesScreen,fingerprint}=await compileShaderGraph(graph);
+        return send(res,200,{wgsl,uniformSize,parameters,samplesScreen,fingerprint,title:'Shader preview'});
+      }
+      if(url.pathname==='/api/shaders'&&req.method==='POST'){
+        const {id,name,graph}=await jsonBody(req,65536);
+        const title=typeof name==='string'?name.trim():'';
+        if(!title||title.length>100)throw Error('Enter a shader name of up to 100 characters');
+        const {spirv}=await compileShaderGraph(graph);
+        const edited=await change(async()=>{
+          const project=JSON.parse(await store.read('project.json','utf8'));
+          const shaders=project.shaders??={};
+          let path,pending,key=id;
+          if(id!=null){
+            const existing=Object.hasOwn(shaders,id)?shaders[id]:null;
+            if(!existing?.graph||!/^assets\/shaders\/.+\.spv$/i.test(existing.source))
+              throw Error('Choose a shader created in Studio');
+            path=existing.source;
+            pending=new Map([[path,Buffer.from(spirv)]]);
+            project.assetInfo??={};
+            project.assetInfo[path]={...project.assetInfo[path],kind:'shader',name:title};
+          }else{
+            const imported=await prepareAssetUpload(project,store,{kind:'shader',filename:'shader.spv',data:spirv,name:title});
+            ({path,pending}=imported);
+            key=Object.keys(shaders).find(id=>shaders[id].source===path);
+          }
+          shaders[key]={source:path,title,graph};
+          pending.set('project.json',Buffer.from(JSON.stringify(project,null,2)+'\n'));
+          const edit=await history.saveMany(pending,()=>recompile(project,undefined,()=>store.save([...pending])));
+          return {id:key,path,edit,project,assets:await discoverAssets(root,store),art:await describeArt(root,store),
+            shaderDefinitions:cartridge.shaderDefinitions,revision,previewKey};
+        });
+        return send(res,200,edited);
+      }
+      if(url.pathname==='/api/assets'&&req.method==='POST'){
+        const chunks=[];let size=0;
+        for await(const chunk of req){
+          if((size+=chunk.length)>65*1024*1024)throw Error('Asset upload exceeds 65 MiB');
+          chunks.push(chunk);
+        }
+        const upload=decodeCbor(Buffer.concat(chunks));
+        const imported=await change(async()=>{
+          const project=JSON.parse(await store.read('project.json','utf8'));
+          const {path,pending,sourceStore}=await prepareAssetUpload(project,store,upload);
+          const edit=await history.saveMany(pending,()=>recompile(project,undefined,()=>store.save([...pending]),sourceStore));
+          return {path,edit,project,assets:await discoverAssets(root,store),art:await describeArt(root,store),
+            shaderDefinitions:cartridge.shaderDefinitions,revision,previewKey};
+        });
+        return send(res,200,imported);
       }
       if (url.pathname === '/api/import' && req.method === 'POST') {
         const name=url.searchParams.get('name');
@@ -246,7 +299,41 @@ const server = createServer(async (req, res) => {
         explicitBehavior(project);
         const gameScript=await readGameScript(project,store.read);
         return send(res, 200, {path:root,project, gameScript:gameScript&&{declarations:gameScript.declarations,constants:gameScript.constants,collections:gameScript.collections},
-          roomBackgrounds:cartridge?.roomPreviewBackgrounds??{}, assets:await discoverAssets(root,store), art:await describeArt(root,store), revision, previewKey});
+          shaderDefinitions:cartridge?.shaderDefinitions??{}, roomBackgrounds:cartridge?.roomPreviewBackgrounds??{}, assets:await discoverAssets(root,store), art:await describeArt(root,store), revision, previewKey});
+      }
+      const viewEdit=url.pathname.match(/^\/api\/room-view\/([A-Za-z0-9_-]+)$/);
+      if(viewEdit&&req.method==='PUT'){
+        const {view}=await jsonBody(req);
+        if(!['platformer','top_down'].includes(view))throw Error('Choose a room view');
+        const id=viewEdit[1];
+        const result=await change(async()=>{
+          const project=JSON.parse(await store.read('project.json','utf8'));
+          const room=Object.hasOwn(project.rooms,id)&&project.rooms[id];
+          if(!room)throw Error('Unknown room');
+          const previous=room.view??(Math.abs(room.gravity??platformGravity)<.01?'top_down':'platformer');
+          const path=room.script??roomScriptPath(id);
+          const old=await store.read(path).catch(error=>{if(error.code!=='ENOENT')throw error;return null;});
+          const source=old&&path.endsWith('.ws')?old.toString():null;
+          const unit=source!=null?parseScript(source):old?decodeCbor(old):initialRoomScript(room);
+          const replacements=changeRoomView(unit,previous,view);
+          let nextSource=source;
+          for(const [index,block] of [...replacements].sort(([left],[right])=>right-left)){
+            if(source!=null){
+              const loc=locations.get(unit.events.init[index]);
+              const text=formatScript({events:{init:[block]}}).split('\n')[1].trim();
+              nextSource=nextSource.slice(0,loc.from)+text+nextSource.slice(loc.to);
+            }
+            unit.events.init[index]=block;
+          }
+          room.view=view;
+          room.script=path;
+          for(const key of roomSettingKeys)delete room[key];
+          if(unit.source!=null)delete unit.source;
+          const files=new Map([[path,path.endsWith('.ws')?nextSource??formatScript(unit):encodeCbor(unit)],['project.json',JSON.stringify(project,null,2)+'\n']]);
+          const edit=await history.saveMany(files,()=>recompile(project,new Map([['room:'+id,unit]]),()=>store.save([...files])));
+          return {project,edit,revision,previewKey};
+        });
+        return send(res,200,result);
       }
       if (url.pathname === '/api/project' && req.method === 'PUT') {
         const project = await jsonBody(req);
@@ -321,7 +408,7 @@ const server = createServer(async (req, res) => {
           if (!isGame&&!Object.hasOwn(project[collection],id)) return send(res, 404, {error:isRoom?'Unknown room':'Unknown entity type'});
           const file = (isGame?project.gameScript:isTile?null:project[collection][id].script) ?? defaultPath;
           const data = await store.read(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
-          const script=data ? (file.endsWith('.ws') ? {...parseScript(data.toString()),source:data.toString()} : decodeCbor(data)) :
+          const script=data ? (isGame?await readGameScript(project,store.read):file.endsWith('.ws') ? {...parseScript(data.toString()),source:data.toString()} : decodeCbor(data)) :
             isGame?initialGameScript(project):isTile?initialTileScript(project.tiles[id]):isRoom?initialRoomScript(project.rooms[id]):initialScript(project.sprites[id]);
           if(url.searchParams.has('debug')){
             const labels=new WeakMap();
@@ -345,8 +432,10 @@ const server = createServer(async (req, res) => {
             Object.assign(names,{10:'constant',11:'load',12:'store',13:'calculate',14:'branch',15:'jump',16:'wait',17:'real',47:'string',48:'localized text',49:'text command',50:'entity query'});
             const events={};
             const gameUnit=isGame?unit:await readGameScript(project,store.read);
+            const aliases=propertyAliases({...project.variables,...gameUnit?.declarations?.globals},
+              {...project.flags,...gameUnit?.declarations?.flags},project.items);
             compileScript(unit,modules,(event,op,node)=>(events[event]??=[]).push({...labels.get(node),op:names[op]}),
-              {collections:validateCollections(gameUnit?.collections),gameScript:isGame,tileScript:isTile,roomScript:isRoom||isGame});
+              {shaders:cartridge?.shaderDefinitions,tiles:project.tiles??{},collections:validateCollections(gameUnit?.collections),propertyAliases:aliases,gameScript:isGame,tileScript:isTile,roomScript:isRoom||isGame});
             return send(res,200,events);
           }
           return send(res,200,script);
@@ -363,13 +452,17 @@ const server = createServer(async (req, res) => {
             const file = established ?? defaultPath;
             if(isGame)project.gameScript=file;
             else if(!isTile)project[collection][id].script = file;
+            const roomMigrated=isRoom&&roomSettingKeys.some(key=>Object.hasOwn(project.rooms[id],key));
+            if(roomMigrated)for(const key of roomSettingKeys)delete project.rooms[id][key];
             const data=file.endsWith('.ws')?(script.source??formatScript(script)):encodeCbor(script);
             const previous=encodeCbor(isGame?initialGameScript(project):isTile?initialTileScript(project.tiles[id]):{events:{}});
-            if(isGame){delete project.variables;delete project.flags;delete project.events;}
+            if(isGame)for(const key of ['variables','flags','events','controls','menus','camera','minimap'])delete project[key];
             const scriptId=isGame?'game':isTile?'tile:'+id+':'+variant:isRoom?'room:'+id:id;
-            return history.save(file,data,()=>recompile(project,new Map([[scriptId,script]]),async()=>{
-              await store.save([[file,data],...((isGame||migrated||!established) ? [['project.json',JSON.stringify(project,null,2)+'\n']] : [])]);
-            }),file.endsWith('.ws')?Buffer.from(''):previous);
+            const files=[[file,data]];
+            const manifest=isGame||migrated||roomMigrated||!established;
+            if(manifest)files.push(['project.json',JSON.stringify(project,null,2)+'\n']);
+            const commit=()=>recompile(project,new Map([[scriptId,script]]),()=>store.save(files));
+            return manifest?history.saveMany(files,commit):history.save(file,data,commit,file.endsWith('.ws')?Buffer.from(''):previous);
           });
           return send(res, 200, {ok:true,edit});
         }

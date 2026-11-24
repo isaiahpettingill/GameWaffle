@@ -23,14 +23,14 @@ export function pack(cart, { editor = false, locale = cart.localization?.locale 
   const objects=cart.collections&&{...cart.collections,types:Object.fromEntries(Object.entries(cart.collections.types).map(([id,fields])=>[id,
     Object.fromEntries(Object.entries(fields).map(([name,field])=>[name,{type:field.type,
       ...(Object.hasOwn(field,'default')?{default:String(field.type==='real'?field.default.real:field.default)}:{})}]))]))};
-  const metadata = encodeCbor({fonts:Object.keys(cart.fonts??{}),events:cart.events??[],controls:cart.controls??{},items,text,menus,minimap:cart.minimap?.mode??'off',id:cart.saveId??name,start, sprites, rooms, globals:globals??{}, flags:flags??{},
+  const metadata = encodeCbor({fonts:Object.keys(cart.fonts??{}),events:cart.events??[],controls:cart.controls??{},items,text,menus,minimap:cart.minimap?.mode??'off',id:cart.saveId??name,start,camera, sprites, rooms, globals:globals??{}, flags:flags??{},
     ...(cart.gameProgram?{initialGlobals:cart.initialGlobals,collections:objects}:{})});
   if (metadata.length > MAX_METADATA) throw Error('Cartridge simulation data exceeds 32 MiB');
   const compressed = deflateSync(metadata,{level:6});
   const views = Object.fromEntries(Object.entries(rooms).map(([id,room])=>[id,
     Object.fromEntries(['neighbors','seams','ripple','hd','shader','title','width','height','cameraHeight','size','background','baked','ySort','music','ambience'].map(key=>[key,room[key]??null]))]));
   // Keep the library's display metadata before the larger room and atlas data.
-  const media = encodeCbor({name,...(locale?{locale}:{}),...(cart.coverArt?{coverArt:cart.coverArt}:{}),start,runtimeAbi:cart.runtimeAbi??4,rooms:views,atlases,audio,camera,...(cart.minimap?{minimap:cart.minimap}:{}),fontGlyphs:cart.fontGlyphs??{},fonts:cart.fonts??{},...(cart.fontLayout?{fontLayout:cart.fontLayout}:{}),...(cart.fontFallbackGlyphs?{fontFallbackGlyphs:cart.fontFallbackGlyphs}:{}),...(editor ? {tilePreviews,spritePreviews} : {})});
+  const media = encodeCbor({name,...(locale?{locale}:{}),...(cart.coverArt?{coverArt:cart.coverArt}:{}),start,runtimeAbi:cart.runtimeAbi??4,...(Object.keys(cart.shaders??{}).length?{shaders:cart.shaders}:{}),rooms:views,atlases,audio,camera,...(cart.minimap?{minimap:cart.minimap}:{}),fontGlyphs:cart.fontGlyphs??{},fonts:cart.fonts??{},...(cart.fontLayout?{fontLayout:cart.fontLayout}:{}),...(cart.fontFallbackGlyphs?{fontFallbackGlyphs:cart.fontFallbackGlyphs}:{}),...(editor ? {tilePreviews,spritePreviews} : {})});
   const bytes = new Uint8Array(14 + compressed.length + media.length);
   if (bytes.length > limit) throw Error('Cartridge exceeds 256 MiB');
   bytes.set([...prefix,2]);

@@ -1,12 +1,39 @@
 import {drawWeather} from './room-weather.js';
 import {shaderMaskLayers} from '../src/room-shaders.mjs';
 import {postprocess} from './room-postprocess.js';
-import {dialogue_lines,hd_frame} from '../web-built/runtime/runtime.js';
+import {runShaderPipeline} from './shader-pipeline.js';
+import {dialogue_lines,hd_frame,room_gradient_pixels} from '../web-built/runtime/runtime.js';
 import {cameraView,fitFrame} from './camera.js';
 const images = new WeakMap();
 const rippleBuffers = new WeakMap();
 const sceneBuffers = new WeakMap();
 const frameBuffers = new WeakMap();
+const gradients = new WeakMap();
+
+function drawBackground(ctx, owner, width, height, settings, fallback) {
+  const base=settings.background??fallback, gradient=settings.backgroundGradient;
+  if(!gradient){
+    ctx.fillStyle=base;
+    ctx.fillRect(0,0,width,height);
+    return;
+  }
+  const json=JSON.stringify(gradient);
+  let cached=gradients.get(owner);
+  if(!cached){
+    cached={surface:document.createElement('canvas')};
+    gradients.set(owner,cached);
+  }
+  if(cached.base!==base||cached.json!==json||cached.surface.width!==width||cached.surface.height!==height){
+    const pixels=room_gradient_pixels(width,height,json,base);
+    const surface=cached.surface;
+    if(surface.width!==width)surface.width=width;
+    if(surface.height!==height)surface.height=height;
+    surface.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer,pixels.byteOffset,pixels.byteLength),width,height),0,0);
+    cached.base=base;
+    cached.json=json;
+  }
+  ctx.drawImage(cached.surface,0,0);
+}
 
 function bufferFor(cache,canvas,width,height){
   if(!cache.has(canvas))cache.set(canvas,document.createElement('canvas'));
@@ -95,7 +122,7 @@ function drawMinimap(ctx,map,snapshot,width,height){
   }
 }
 
-export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
+export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false, presentation) {
   const room = cart?.rooms[snapshot?.room];
   const atlas = cart?.atlases[snapshot?.room];
   if (!room || !atlas) return;
@@ -103,10 +130,15 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
   const settings=snapshot.roomSettings??{};
   const player=snapshot.actors.find(actor=>actor.player===0);
   const focus=snapshot.focus??(player?[player.x,player.y]:[room.width/2,room.height/2]);
-  const {x,y,width,height,resolution}=cameraView(snapshot.gameSettings?.display??cart.camera??{},room,atlas,[box.width,box.height],focus,settings.zoom,settings.cameraHeight);
-  const shader=settings.shader??room.shader;
-  const hd=shader?(shader.kind==='hd'?shader.strength:0):room.hd;
-  const ripple=shader?(shader.kind==='ripple'&&shader.strength>0?[Math.ceil(shader.strength*.12),32,1]:null):room.ripple;
+  const localView=cameraView(snapshot.gameSettings?.display??cart.camera??{},room,atlas,[box.width,box.height],focus,settings.zoom,settings.cameraHeight);
+  const [x,y,width,height]=presentation&&cart.runtimeAbi>=15&&snapshot.viewport
+    ? snapshot.viewport : [localView.x,localView.y,localView.width,localView.height];
+  const {resolution}=localView;
+  const roomPipeline=settings.shaderPipeline;
+  const displayPipeline=snapshot.gameSettings?.postprocessing;
+  const shader=roomPipeline?null:settings.shader??room.shader;
+  const hd=roomPipeline?0:shader?(shader.kind==='hd'?shader.strength:0):room.hd;
+  const ripple=roomPipeline?null:shader?(shader.kind==='ripple'&&shader.strength>0?[Math.ceil(shader.strength*.12),32,1]:null):room.ripple;
   const scale=hd>0?2:1;
   canvas.dataset.viewWidth=width;canvas.dataset.viewHeight=height;
   const [displayWidth,displayHeight]=resolution??[width*scale,height*scale];
@@ -118,8 +150,7 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
   let ctx=scene.getContext('2d');
   ctx.setTransform(1,0,0,1,0,0);
   ctx.imageSmoothingEnabled = false;
-  ctx.fillStyle = settings.background??room.background;
-  ctx.fillRect(0,0,width,height);
+  drawBackground(ctx,canvas,width,height,settings,room.background);
   ctx.translate(-x,-y);
   const image = atlasImages[snapshot.room];
   if (!image) return;
@@ -221,7 +252,7 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
       }
     }
   }
-  if(!shader||shader.strength>0){
+  if(!roomPipeline&&(!shader||shader.strength>0)){
     const prefix=shader?'shader/'+shader.kind+'/':'post/';
     if(shader)ctx.globalAlpha=shader.strength/100;
     for(const layer of shaderMaskLayers){
@@ -234,6 +265,11 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
     }
   }
   drawShapes(ctx,snapshot.shapes,false,[x,y]);
+  const roomResult=runShaderPipeline(canvas,'room',scene,cart.shaders,roomPipeline,snapshot.tick);
+  if(roomResult.image){
+    ctx.drawImage(roomResult.image,0,0);
+    roomResult.image.close();
+  }
   if(scale===2){
     const gpu=postprocess(scene,width,height,hd);
     const pixels=gpu?null:ctx.getImageData(0,0,width,height).data;
@@ -324,4 +360,24 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
     display.fillRect(0,0,displayWidth,displayHeight);
     display.drawImage(frame,...fitFrame(width,height,displayWidth,displayHeight));
   }
+  const physicalScale=Math.min(box.width/displayWidth,box.height/displayHeight)*(globalThis.devicePixelRatio??1);
+  const outputScale=Math.min(physicalScale,4096/Math.max(displayWidth,displayHeight));
+  const outputSize=presentation?[displayWidth,displayHeight].map(axis=>Math.max(1,Math.round(axis*outputScale))):undefined;
+  const displayResult=runShaderPipeline(canvas,'display',canvas,cart.shaders,displayPipeline,snapshot.tick,outputSize);
+  const bitmap=displayResult.image&&presentation?.getContext('bitmaprenderer');
+  if(presentation)presentation.hidden=!bitmap;
+  if(displayResult.image){
+    const image=displayResult.image;
+    if(bitmap){
+      if(presentation.width!==image.width)presentation.width=image.width;
+      if(presentation.height!==image.height)presentation.height=image.height;
+      bitmap.transferFromImageBitmap(image);
+    }else{
+      const display=canvas.getContext('2d');
+      display.setTransform(1,0,0,1,0,0);
+      display.drawImage(image,0,0,displayWidth,displayHeight);
+      image.close();
+    }
+  }
+  return roomResult.status??displayResult.status??'';
 }

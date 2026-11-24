@@ -7,7 +7,7 @@ if(!prebuilt){
   for(const file of ['src','package.json','demo','LICENSE','packaging/studio.mjs','packaging/gamewaffle.svg','web-built/runtime','web-built/site','web-built/standalone']){
     await cp(file,join(target,file),{recursive:true});
   }
-  const packages=['ws','pngjs','qoa-format','fflate','cbor-x'];
+  const packages=['ws','pngjs','qoa-format','fflate','cbor-x','@webgpu/glslang'];
   const seen=new Set();
   async function dependency(name){
     if(seen.has(name))return;

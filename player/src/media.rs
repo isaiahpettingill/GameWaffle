@@ -12,6 +12,10 @@ type Error = Box<dyn std::error::Error>;
 #[derive(Deserialize)]
 pub struct Media {
     pub name: String,
+    #[serde(default, rename = "runtimeAbi")]
+    pub runtime_abi: u32,
+    #[serde(default)]
+    pub shaders: BTreeMap<String, crate::shaders::Shader>,
     pub minimap: Option<Minimap>,
     pub rooms: BTreeMap<String, Room>,
     pub atlases: BTreeMap<String, Atlas>,

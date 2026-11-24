@@ -674,9 +674,9 @@ on restored
   global.room_restored = global.room_restored + 1
 end`);
 const roomCartridge=await compileProject('demo',{project:roomProject,scripts:new Map([['room:yard',roomScript]])});
-assert.equal(roomCartridge.runtimeAbi,10);
+assert.equal(roomCartridge.runtimeAbi,9);
 const roomRuntime=Runtime.from_cartridge(pack(roomCartridge));
-assert.equal(JSON.parse(roomRuntime.snapshot()).roomSettings.zoom,1.25);
+assert.equal(JSON.parse(roomRuntime.snapshot()).roomSettings?.zoom,undefined);
 const roomFrame=(buttons=0)=>JSON.parse(roomRuntime.step_buttons(buttons));
 let cameraFrame=roomFrame();
 const target=cameraFrame.actors.find(entity=>entity.name==='Camera target');
@@ -692,7 +692,7 @@ const roomSave=roomRuntime.save_game();
 roomRuntime.load_game(roomSave);
 assert.deepEqual(JSON.parse(roomRuntime.snapshot()).roomSettings,cameraFrame.roomSettings);
 cameraFrame=roomFrame(16);
-assert.equal(cameraFrame.roomSettings.zoom,1.25);
+assert.equal(cameraFrame.roomSettings.zoom,undefined);
 assert.deepEqual(cameraFrame.focus,[player(cameraFrame).x,player(cameraFrame).y]);
 assert.equal(JSON.parse(roomRuntime.save_game()).globals.room_starts,'1');
 assert.equal(JSON.parse(roomRuntime.save_game()).globals.room_restored,'1');
@@ -703,6 +703,9 @@ console.log('Passed room scripts, held input, entity and point camera targets, z
 const weatherProject=structuredClone(roomProject);
 weatherProject.rooms.yard.shader={kind:'fog',strength:45};
 const weatherScript=parseScript(`
+on init
+  set_room_shader("fog", 45)
+end
 on start
   set_room_shader("snow", 130)
 end
@@ -728,8 +731,8 @@ on tick
 end`);
 const weatherBytes=pack(await compileProject('demo',{project:weatherProject,scripts:new Map([['room:yard',weatherScript]])}));
 const weatherMedia=unpack(weatherBytes);
-assert.equal(weatherMedia.runtimeAbi,10);
-assert.deepEqual(weatherMedia.rooms.yard.shader,{kind:'fog',strength:45});
+assert.equal(weatherMedia.runtimeAbi,9);
+assert.equal(weatherMedia.rooms.yard.shader,null);
 for(const mask of ['fog','volumetric','lens_flare'])assert.ok(weatherMedia.atlases.yard.entries['shader/'+mask+'/screen']);
 const weatherRuntime=Runtime.from_cartridge(weatherBytes);
 const shaderFrame=bits=>JSON.parse(weatherRuntime.step_buttons(bits)).roomSettings?.shader;

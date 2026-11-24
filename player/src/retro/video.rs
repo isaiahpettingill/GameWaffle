@@ -24,6 +24,7 @@ struct RoomTextures<'a> {
     atlas: Texture<'a>,
     ripple: Option<Texture<'a>>,
     hd: Option<Texture<'a>>,
+    gradient: crate::gradient::Layer<'a>,
 }
 self_cell!(
     struct CachedAtlas {
@@ -79,7 +80,9 @@ impl Video {
                 environment(SET_GEOMETRY, std::ptr::from_mut(&mut geometry).cast());
             }
         }
-        let view = gamewaffle_runtime::viewport_zoom(
+        let view = if game.media.runtime_abi >= 15 {
+            snapshot.viewport.map(|pixel| pixel as u32)
+        } else { gamewaffle_runtime::viewport_zoom(
             cam,
             [
                 w.saturating_mul(cam.zoom.max(1)),
@@ -88,10 +91,10 @@ impl Video {
             [room.width, snapshot.room_settings.camera_height.unwrap_or_else(|| room.camera_height())],
             focus,
             snapshot.room_settings.zoom,
-        );
+        ) };
         let [_, _, w, h] = view;
-        let hd = room.hd_strength(snapshot.room_settings.shader) > 0;
-        let ripple_active = room
+        let hd = snapshot.room_settings.shader_pipeline.is_none() && room.hd_strength(snapshot.room_settings.shader) > 0;
+        let ripple_active = snapshot.room_settings.shader_pipeline.is_none() && room
             .ripple_settings(snapshot.room_settings.shader)
             .is_some();
         let scale = if hd { 2 } else { 1 };
@@ -115,6 +118,7 @@ impl Video {
                 Ok::<_, Error>(RoomTextures {
                     atlas: game.media.atlases[id].texture(creator)?,
                     ripple,
+                    gradient: Default::default(),
                     hd: if hd {
                         Some(creator.create_texture_streaming(PixelFormat::RGBA32, w * 2, h * 2)?)
                     } else {
@@ -128,7 +132,14 @@ impl Video {
             .as_mut()
             .unwrap()
             .3
-            .with_dependent_mut(|_, textures| {
+            .with_dependent_mut(|creator, textures| {
+                let settings = snapshot.room_settings;
+                let gradient = textures.gradient.get(
+                    creator,
+                    settings.background_gradient.as_ref(),
+                    [w, h],
+                    settings.background.as_deref().unwrap_or(&room.background),
+                )?;
                 draw(
                     &mut self.canvas,
                     game,
@@ -138,6 +149,8 @@ impl Video {
                     &mut self.rectangles,
                     textures.ripple.as_mut(),
                     textures.hd.as_mut(),
+                    gradient,
+                    None,
                 )
             })?;
         self.canvas.present();

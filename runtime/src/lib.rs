@@ -2,6 +2,7 @@ mod camera;
 mod collections;
 mod jit;
 pub mod drawing;
+pub mod gradient;
 pub mod hd;
 mod model;
 #[cfg(target_arch = "wasm32")]
@@ -11,11 +12,14 @@ mod path;
 mod physics;
 mod progress;
 mod shader;
+mod sensing;
+#[cfg(target_arch = "wasm32")]
+mod shader_import;
 mod vm;
 
 pub use camera::{Camera, viewport, viewport_zoom};
 pub use model::{ActorView, GameSettings, HudAnchor, HudText, Input, RuntimeEvent, ShadowPlacement, Snapshot};
-pub use shader::{RoomShader, ShaderKind};
+pub use shader::{RoomShader, ShaderKind, ShaderPass};
 
 use model::*;
 use physics::{Body, Contacts, PPM, Vec2, World};
@@ -45,6 +49,7 @@ struct GameProperties {
     globals: vm::Variables,
     flags: vm::Variables,
     collections: collections::Collections,
+    player_items: [BTreeMap<String, u32>; 4],
 }
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
@@ -63,6 +68,7 @@ struct Bullet {
 }
 
 struct Actor {
+    tile_mark: Option<model::TileMark>,
     hidden: bool,
     created_at: u64,
     origin: Option<Spawn>,
@@ -70,12 +76,17 @@ struct Actor {
     tick_gravity: Option<f32>,
     persistence: Option<String>,
     last_spawn: u32,
+    last_clone: u32,
+    clone_source: Option<u32>,
+    clone_pending: bool,
+    clone_deleting: bool,
     answer: i64,
     item_count: u32,
     menu_choice: usize,
     menu_item: String,
     menu_id: String,
     dormant: bool,
+    always_active: Option<bool>,
     emitter: Option<particles::Emitter>,
     id: u32,
     name: Option<String>,
@@ -113,6 +124,10 @@ struct Actor {
 }
 
 impl Actor {
+    fn active(&self) -> bool {
+        !self.dormant && !self.clone_pending
+    }
+
     fn face(&mut self, v: Vec2, top_down: bool) {
         if v.x.abs() > 0.05 {
             self.facing = v.x.signum();
@@ -210,10 +225,14 @@ pub struct Runtime {
     room_settings: RoomSettings,
     game_settings: GameSettings,
     connected_players: u8,
+    reported_players: u8,
+    startup_gamepads: Option<u8>,
     shapes: Vec<drawing::Shape>,
     room_script_id: Option<u32>,
     view_size: [u32; 2],
-    personal: [BTreeMap<String, u32>; 4],
+    camera_window: [u32; 2],
+    camera_seams: bool,
+    tile_entities: std::collections::BTreeSet<u32>,
     checkpoint: Option<String>,
     checkpoint_requested: bool,
     retry: bool,
@@ -227,6 +246,7 @@ pub struct Runtime {
     counters: BTreeMap<String, i32>,
     script_fuel: usize,
     jit_enabled: bool,
+    jit_cache: jit::Cache,
     jit_runs: u32,
     debug: bool,
 }
@@ -241,6 +261,23 @@ impl Runtime {
 
     /// Load a GameWaffle cartridge, optionally starting at a different room.
     pub fn from_cartridge(bytes: &[u8], room: Option<String>) -> Result<Runtime, String> {
+        Self::from_cartridge_with_controllers(bytes, room, 1, None)
+    }
+
+    /// Start with the host's current controller state. Local hosts supply a
+    /// gamepad count. Hosts with fixed ports supply an already assigned mask.
+    pub fn from_cartridge_with_controllers(
+        bytes: &[u8], room: Option<String>, connected: u8, gamepads: Option<u8>,
+    ) -> Result<Runtime, String> {
+        Self::from_cartridge_with_view(bytes, room, connected, gamepads, 640, 480, false)
+    }
+
+    /// Set the initial view before Game startup handlers run. A zero-sized
+    /// window uses the native console size of 320 by 240 logical pixels.
+    pub fn from_cartridge_with_view(
+        bytes: &[u8], room: Option<String>, connected: u8, gamepads: Option<u8>,
+        width: u32, height: u32, seams: bool,
+    ) -> Result<Runtime, String> {
         if bytes.len() < 111 || bytes.len() > 256 * 1024 * 1024 {
             return Err("Invalid cartridge size".into());
         }
@@ -271,7 +308,7 @@ impl Runtime {
         } else {
             return Err("Unsupported cartridge format".into());
         };
-        Self::from_game(game, room)
+        Self::from_game_with_controllers(game, room, connected, gamepads, [width, height], seams)
     }
 
     pub fn enable_debug(&mut self) {
@@ -296,6 +333,10 @@ impl Runtime {
     pub fn set_view_size(&mut self, w: u32, h: u32) {
         self.view_size = [w.clamp(64, 512), h.clamp(64, 512)];
     }
+    pub fn set_camera_window(&mut self, width: u32, height: u32, seams: bool) {
+        self.camera_window = [width.max(1), height.max(1)];
+        self.camera_seams = seams;
+    }
     pub fn step_buttons(&mut self, buttons: u32) -> Result<String, String> {
         self.step_inputs(std::array::from_fn(|index| {
             Input::from_bits((buttons >> (index * 8)) as u8)
@@ -317,7 +358,7 @@ impl Runtime {
         self.inputs = [Input::default(); 4];
         self.tick = 0;
         self.transition = None;
-        self.personal = Default::default();
+        self.game_properties.player_items = Default::default();
         self.checkpoint = None;
         self.checkpoint_requested = false;
         self.retry = false;
@@ -333,13 +374,14 @@ impl Runtime {
         self.entry_removed.clear();
         self.set_seed(self.seed.wrapping_mul(1664525).wrapping_add(1013904223));
         self.game_settings = GameSettings::default();
+        self.reported_players = 1;
         self.reset_variables()?;
         self.load(&self.game.start.clone())?;
         self.game_startup()
     }
 
     pub fn set_jit_enabled(&mut self, enabled: bool) {
-        self.jit_enabled = enabled;
+        self.jit_enabled = enabled && jit::SUPPORTED;
     }
 
     pub fn jit_executions(&self) -> u32 {
@@ -357,6 +399,38 @@ impl Runtime {
 
 impl Runtime {
     pub fn game_settings(&self) -> &GameSettings { &self.game_settings }
+
+    fn next_random_u32(rng: &mut u32) -> u32 {
+        *rng ^= *rng << 13;
+        *rng ^= *rng >> 17;
+        *rng ^= *rng << 5;
+        *rng
+    }
+
+    fn camera_viewport(&self) -> [i32; 4] {
+        let room = &self.game.rooms[&self.room];
+        let full = [(room.cols as f32 * room.size) as u32, room.height as u32];
+        let height = self.room_settings.camera_height.or(room.camera_height).unwrap_or(full[1]);
+        let limits = [full[0].max(1), height.clamp(1, full[1].max(1))];
+        let camera = self.game_settings.display.unwrap_or(self.game.camera);
+        let window = if self.camera_window == [0, 0] {
+            [320 * camera.zoom.max(1), 240 * camera.zoom.max(1)]
+        } else {
+            self.camera_window
+        };
+        let size = camera.view_size(window, self.room_settings.zoom);
+        let [w,h] = [size[0].min(limits[0]), size[1].min(limits[1])];
+        let focus = self.focus().or_else(|| self.actors.values().find(|actor| !actor.hidden && actor.player == Some(0)).map(|actor| [actor.p.x, actor.p.y]))
+            .unwrap_or([full[0] as f32 / 2., full[1] as f32 / 2.]);
+        let margins = if self.camera_seams { room.seam_margins } else { [0; 4] };
+        let axis = |center: f32, size: u32, limit: u32, before: u32, after: u32| {
+            let half = size / 2;
+            ((f64::from(center) + 0.5).floor() as i32).saturating_sub(half as i32)
+                .clamp(-(half.min(before) as i32), (limit - size + (size - half).min(after)) as i32)
+        };
+        [axis(focus[0], w, limits[0], margins[0], margins[1]),
+         axis(focus[1], h, limits[1], margins[2], if limits[1] == full[1] { margins[3] } else { 0 }), w as i32, h as i32]
+    }
 
     fn focus(&self) -> Option<[f32; 2]> {
         if self.group_camera {
@@ -412,6 +486,7 @@ impl Runtime {
                     });
                 ActorView {
                     id: actor.id,
+                    clone_source: actor.clone_source,
                     name: actor.name.as_deref(),
                     x: actor.p.x,
                     y: actor.p.y,
@@ -487,6 +562,7 @@ impl Runtime {
             tick: self.tick,
             actors,
             focus: self.focus(),
+            viewport: self.camera_viewport(),
             dialog: self.dialog.front().map(|d| d.0.as_str()),
             menu: self.menu.as_ref(),
             hud_font: &self.hud_font,
@@ -572,7 +648,14 @@ impl Runtime {
         Ok(())
     }
 
-    fn from_game(mut game: Game, room: Option<String>) -> Result<Self, String> {
+    fn from_game(game: Game, room: Option<String>) -> Result<Self, String> {
+        Self::from_game_with_controllers(game, room, 1, None, [640, 480], false)
+    }
+
+    fn from_game_with_controllers(
+        mut game: Game, room: Option<String>, connected: u8, gamepads: Option<u8>,
+        camera_window: [u32; 2], camera_seams: bool,
+    ) -> Result<Self, String> {
         game.collections.validate()?;
         if !game.rooms.contains_key(&game.start) {
             return Err("Unknown starting room".into());
@@ -678,10 +761,14 @@ impl Runtime {
             room_settings: RoomSettings::default(),
             room_script_id: None,
             game_settings: GameSettings::default(),
-            connected_players: 1,
+            connected_players: (connected & 15) | 1,
+            reported_players: 1,
+            startup_gamepads: gamepads.map(|count| count.min(4)),
             shapes: Vec::new(),
             view_size: [512, 512],
-            personal: Default::default(),
+            camera_window,
+            camera_seams,
+            tile_entities: Default::default(),
             checkpoint: None,
             checkpoint_requested: false,
             retry: false,
@@ -694,22 +781,39 @@ impl Runtime {
             bars: Default::default(),
             counters: Default::default(),
             script_fuel: 0,
-            jit_enabled: true,
+            jit_enabled: jit::SUPPORTED,
+            jit_cache: jit::Cache::default(),
             jit_runs: 0,
             debug: false,
         };
         rt.reset_variables()?;
         rt.load(&start)?;
+        rt.update_startup_controllers();
         rt.game_startup()?;
+        rt.startup_gamepads = None;
         Ok(rt)
     }
 
+    fn update_startup_controllers(&mut self) {
+        if let Some(count) = self.startup_gamepads {
+            let pressed = ((1u8 << count) - 1) << self.first_controller_slot();
+            self.set_connected_players(pressed);
+        }
+    }
+
     fn game_startup(&mut self) -> Result<(), String> {
+        self.jit_cache.begin_tick();
         self.script_fuel = 262144;
         let mut actions = Vec::new();
         let inputs = self.inputs;
+        self.events.clear();
         self.run(0, "init", &inputs, &mut actions);
         self.run(0, "game_startup", &inputs, &mut actions);
+        for failure in &self.events {
+            if let RuntimeEvent::ScriptError {event, message, ..} = failure {
+                return Err(format!("Game script {event}: {message}"));
+            }
+        }
         self.apply(&mut actions, &inputs);
         if let Some(room) = self.transition.take() {
             self.load(&room)?;
@@ -725,6 +829,7 @@ impl Runtime {
             self.memory.insert(self.room.clone(), state);
         }
         self.actors.clear();
+        self.tile_entities.clear();
         self.entity_ids.clear();
         self.animated_colliders.clear();
         self.named_entities.clear();
@@ -762,7 +867,9 @@ impl Runtime {
         self.sounds.clear();
         self.events.clear();
         self.next = 1;
-        if let Some(actor) = game_actor {
+        if let Some(mut actor) = game_actor {
+            actor.last_spawn = 0;
+            actor.last_clone = 0;
             self.actors.insert(0, actor);
         } else if self.game.sprites.contains_key(GAME_SCRIPT) {
             self.next = 0;
@@ -945,6 +1052,10 @@ impl Runtime {
         );
         let actor = self.actors.get_mut(&id).unwrap();
         actor.origin = origin;
+        actor.tile_mark = spawn.tile_mark;
+        if actor.tile_mark.is_some() {
+            self.tile_entities.insert(id);
+        }
         actor.standard_movement = spawn.standard_movement;
         if let Some(name) = &spawn.name {
             self.named_entities.insert(name.clone(), id);
@@ -1004,14 +1115,20 @@ impl Runtime {
         self.actors.insert(
             id,
             Actor {
+                tile_mark: None,
                 hidden: false,
                 created_at: self.tick,
                 origin: None,
                 standard_movement: false,
                 tick_gravity: definition.filter(|s| s.script_gravity).map(|_| 0.0),
                 dormant: false,
+                always_active: None,
                 persistence: None,
                 last_spawn: 0,
+                last_clone: 0,
+                clone_source: None,
+                clone_pending: false,
+                clone_deleting: false,
                 answer: 0,
                 item_count: 0,
                 menu_choice: 0,
@@ -1061,6 +1178,58 @@ impl Runtime {
         id
     }
 
+    fn clone_entity(&mut self, source: u32) -> u32 {
+        if self.actors.len() >= MAX_ACTORS + self.static_ids.len() {
+            return 0;
+        }
+        let Some(actor) = self.entity(source).filter(|actor| actor.health > 0.0) else {
+            return 0;
+        };
+        let Some(sprite) = actor.sprite.as_deref().filter(|sprite| !sprite.starts_with('@')) else {
+            return 0;
+        };
+        let id = self.add(
+            Some(sprite.to_owned()), None, actor.physics.clone(), actor.p,
+            (actor.width, actor.height), (actor.layer, None),
+        );
+        let mut clone = self.actors.remove(&id).unwrap();
+        let actor = &self.actors[&source];
+        clone.clone_source = Some(source);
+        clone.clone_pending = true;
+        clone.hidden = actor.hidden;
+        clone.always_active = actor.always_active;
+        clone.standard_movement = actor.standard_movement;
+        clone.tick_gravity = actor.tick_gravity;
+        clone.facing = actor.facing;
+        clone.aim = actor.aim;
+        clone.visual_flip_x = actor.visual_flip_x;
+        clone.visual_flip_y = actor.visual_flip_y;
+        clone.visual_rotation = actor.visual_rotation;
+        clone.shadow = actor.shadow;
+        clone.health_bar = actor.health_bar;
+        clone.team = actor.team;
+        clone.health = actor.health;
+        clone.animation.clone_from(&actor.animation);
+        clone.animation_start = actor.animation_start;
+        clone.animation_once = actor.animation_once;
+        clone.animation_finished = actor.animation_finished;
+        clone.components.clone_from(&actor.components);
+        clone.variables.clone_from(&actor.variables);
+        clone.emitter = actor.emitter;
+        clone.velocity(&mut self.world, actor.v);
+        if let Some(body) = clone.body {
+            if let Some(source_body) = actor.body {
+                let source_body = self.world.body(source_body);
+                let (angle, speed) = (source_body.rotation().angle(), source_body.angvel());
+                self.world.transform(body, clone.p, angle);
+                self.world.body_mut(body).set_angvel(speed, true);
+            }
+            self.world.set_body_enabled(body, false);
+        }
+        self.actors.insert(id, clone);
+        id
+    }
+
     fn update_activity(&mut self) {
         let room = &self.game.rooms[&self.room];
         let [w, h] = self.view_size.map(|v| v as f32);
@@ -1082,6 +1251,9 @@ impl Runtime {
             .collect();
         for id in &self.entity_ids {
             let actor = self.actors.get_mut(id).unwrap();
+            if actor.clone_pending {
+                continue;
+            }
             let Some(sprite) = actor
                 .sprite
                 .as_ref()
@@ -1089,7 +1261,7 @@ impl Runtime {
             else {
                 continue;
             };
-            let dormant = !self.game.sprites[sprite].always_active
+            let dormant = !actor.always_active.unwrap_or(self.game.sprites[sprite].always_active)
                 && !views.is_empty()
                 && views.iter().all(|p| {
                     (actor.p.x - p[0]).abs() > w / 2. + 64. + actor.width / 2.
@@ -1184,6 +1356,7 @@ impl Runtime {
             return Ok(());
         }
         self.tick += 1;
+        self.jit_cache.begin_tick();
         self.shapes.clear();
         self.script_fuel = 262144;
         self.update_activity();
@@ -1223,8 +1396,26 @@ impl Runtime {
             }
         }
         for id in std::mem::take(&mut self.pending_start) {
-            self.run(id, "init", &inputs, &mut actions);
-            self.run(id, "start", &inputs, &mut actions);
+            let Some(actor) = self.actors.get_mut(&id) else { continue };
+            if actor.clone_pending {
+                actor.clone_pending = false;
+                if let Some(body) = actor.body {
+                    self.world.set_body_enabled(body, true);
+                }
+                self.run(id, "clone_start", &inputs, &mut actions);
+            } else if actor.clone_source.is_none() {
+                self.run(id, "init", &inputs, &mut actions);
+                self.run(id, "start", &inputs, &mut actions);
+            }
+        }
+        let changed = self.reported_players ^ self.connected_players;
+        self.reported_players = self.connected_players;
+        if changed != 0 {
+            for slot in 1..4 {
+                if changed & (1 << slot) == 0 { continue; }
+                let event = if self.connected_players & (1 << slot) == 0 {"disconnected"} else {"connected"};
+                self.run(0, &format!("controller_{event}.{}", slot + 1), &inputs, &mut actions);
+            }
         }
         self.deliver_broadcasts(&inputs, &mut actions);
         self.run_timers(&inputs, &mut actions);
@@ -1232,7 +1423,7 @@ impl Runtime {
             .entity_ids
             .iter()
             .filter_map(|id| self.actors.get(id))
-            .filter(|actor| actor.sprite.is_some() && actor.bullet.is_none() && !actor.dormant)
+            .filter(|actor| actor.sprite.is_some() && actor.bullet.is_none() && actor.active())
             .map(|actor| (actor.id, actor.player))
             .chain(self.room_script_id.map(|id| (id, Some(0))))
             .chain(self.actors.contains_key(&0).then_some((0, Some(0))))
@@ -1295,7 +1486,7 @@ impl Runtime {
                 actor.animation_finished = true;
                 self.run(id, "animation_finished", &inputs, &mut actions);
             }
-            let actor = &self.actors[&id];
+            let Some(actor) = self.actors.get(&id) else { continue };
             let script_jump = actor
                 .sprite
                 .as_ref()
@@ -1338,7 +1529,7 @@ impl Runtime {
         self.contacts.previous.clear();
         let top_down = self.game.rooms[&self.room].is_top_down();
         for actor in self.actors.values() {
-            if !actor.dormant
+            if actor.active()
                 && matches!(actor.physics.mode, Mode::Dynamic | Mode::Kinematic)
                 && let Some(body) = actor.body
             {
@@ -1354,7 +1545,7 @@ impl Runtime {
         }
         self.world.step(&mut self.contacts);
         let height = self.game.rooms[&self.room].height;
-        for actor in self.actors.values_mut().filter(|a| !a.dormant) {
+        for actor in self.actors.values_mut().filter(|a| a.active()) {
             if let Some(body) = actor.body {
                 let body = self.world.body(body);
                 actor.p = PPM * body.translation();
@@ -1363,7 +1554,7 @@ impl Runtime {
                 actor.p += (PPM * STEP) * actor.v;
             }
             if actor.p.y > height + PPM * 4.0 {
-                if actor.player.is_some()
+                if actor.clone_source.is_none() && actor.player.is_some()
                     && actor
                         .origin
                         .as_ref()
@@ -1445,7 +1636,7 @@ impl Runtime {
     fn run_timers(&mut self, inputs: &[Input; 4], actions: &mut Vec<Action>) {
         if self.timer_schedules.is_empty() { return; }
         let mut due = Vec::new();
-        for actor in self.actors.values().filter(|actor| !actor.dormant && actor.bullet.is_none()) {
+        for actor in self.actors.values().filter(|actor| actor.active() && actor.bullet.is_none()) {
             let elapsed = self.tick.saturating_sub(actor.created_at);
             if elapsed == 0 { continue; }
             if let Some(timers) = actor.sprite.as_ref().and_then(|name| self.timer_schedules.get(name)) {
@@ -1536,6 +1727,9 @@ impl Runtime {
         let Some(actor) = self.actors.get_mut(&id) else {
             return false;
         };
+        if actor.clone_pending {
+            return false;
+        }
         let Some(program) = actor
             .sprite
             .as_ref()
@@ -1567,7 +1761,14 @@ impl Runtime {
             .player
             .or((id == 0 || self.room_script_id == Some(id)).then_some(0));
         let input = slot.map_or(Input::default(), |slot| inputs[slot]);
-        match machine.run(self, id, event, input, actions) {
+        let result = machine.run(self, id, event, input, actions);
+        if self.actors.get(&id).is_some_and(|actor| actor.clone_deleting) {
+            if let Some(body) = self.remove_entity_record(id).and_then(|actor| actor.body) {
+                self.world.remove(body);
+            }
+            return true;
+        }
+        match result {
             Ok(finished) if event == "tick" => {
                 if finished {
                     machine.restart();
@@ -1596,7 +1797,12 @@ impl Runtime {
 
     fn remove_entity_record(&mut self, id: u32) -> Option<Actor> {
         let actor = self.actors.remove(&id)?;
+        if self.menu.as_ref().is_some_and(|menu| menu.owner == id) {
+            self.menu = None;
+        }
+        self.dialog.retain(|(_, owner)| *owner != Some(id));
         self.entity_ids.remove(&id);
+        self.tile_entities.remove(&id);
         if Some(id) == self.room_script_id {
             self.room_script_id = None;
         }
@@ -1701,7 +1907,7 @@ impl Runtime {
                 let player = self.actors[&id].player;
                 let mut inventory = self.inventory.clone();
                 if let Some(slot) = player {
-                    for (item, count) in &self.personal[slot] {
+                    for (item, count) in &self.game_properties.player_items[slot] {
                         let total = inventory.entry(item.clone()).or_default();
                         *total = total.saturating_add(*count);
                     }
@@ -1757,8 +1963,8 @@ impl Runtime {
                 };
                 let bag = actor
                     .player
-                    .filter(|slot| self.personal[*slot].contains_key(name))
-                    .map_or(&mut self.inventory, |slot| &mut self.personal[slot]);
+                    .filter(|slot| self.game_properties.player_items[*slot].contains_key(name))
+                    .map_or(&mut self.inventory, |slot| &mut self.game_properties.player_items[slot]);
                 let Some(count) = bag.get_mut(name).filter(|count| **count > 0) else {
                     return;
                 };
@@ -1824,7 +2030,7 @@ impl Runtime {
                     self.actors.get_mut(&id).unwrap().item_count = 0;
                     return;
                 }
-                let bag = &mut self.personal[(slot - 1) as usize];
+                let bag = &mut self.game_properties.player_items[(slot - 1) as usize];
                 let old = bag.get(name).copied().unwrap_or(0);
                 let n = args[2].max(0.) as u32;
                 let count = match opcode {
@@ -1905,7 +2111,7 @@ impl Runtime {
                 let slot = args[1] as usize;
                 if let Some(item) = self.game.items.get(name)
                     && (1..=4).contains(&slot)
-                    && let Some(count) = self.personal[slot - 1].get_mut(name)
+                    && let Some(count) = self.game_properties.player_items[slot - 1].get_mut(name)
                     && *count > 0
                 {
                     if item.consumable {
@@ -2186,7 +2392,7 @@ impl Runtime {
     }
 
     fn hittable(&self, owner: &Actor, target: &Actor) -> bool {
-        !target.dormant
+        target.active()
             && self.room_script_id != Some(target.id)
             && owner.id != target.id
             && !self.static_ids.contains(&target.id)
@@ -2269,7 +2475,7 @@ impl Runtime {
                     }
                     self.run(id, "destroy", inputs, actions);
                     if self.actors.get(&id).is_some_and(|actor| {
-                        actor.player.is_some()
+                        actor.clone_source.is_none() && actor.player.is_some()
                             && actor
                                 .origin
                                 .as_ref()
@@ -2350,13 +2556,13 @@ impl Runtime {
         let zones: Vec<_> = self
             .actors
             .values()
-            .filter(|a| matches!(a.physics.mode, Mode::Fluid | Mode::Ladder))
+            .filter(|a| a.active() && matches!(a.physics.mode, Mode::Fluid | Mode::Ladder))
             .map(|a| (a.id, a.p, a.width, a.height, a.physics.clone()))
             .collect();
         for actor in self
             .actors
             .values_mut()
-            .filter(|a| !a.dormant && a.physics.mode == Mode::Dynamic)
+            .filter(|a| a.active() && a.physics.mode == Mode::Dynamic)
         {
             let base_gravity = actor.physics.gravity * actor.tick_gravity.unwrap_or(1.0);
             if let Some(scale) = actor.tick_gravity.as_mut() {

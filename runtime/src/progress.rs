@@ -2,6 +2,8 @@ use super::*;
 use serde::{Deserialize, Serialize};
 
 const MAX_SAVE_BYTES: usize = 4 * 1024 * 1024;
+fn keyboard_player() -> u8 { 1 }
+fn is_zero(value: &u32) -> bool { *value == 0 }
 
 pub(super) type WorldMemory = BTreeMap<String, BTreeMap<String, Record>>;
 #[derive(Clone, Deserialize, Serialize)]
@@ -83,6 +85,8 @@ struct Scene {
     tick: u64,
     next: u32,
     inputs: [u8; 4],
+    #[serde(default = "keyboard_player")]
+    reported_players: u8,
     actors: Vec<SavedActor>,
     gates: Vec<Option<u32>>,
     starts: Vec<u32>,
@@ -119,6 +123,8 @@ struct Scene {
 
 #[derive(Deserialize, Serialize)]
 struct SavedActor {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tile_mark: Option<model::TileMark>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     hidden: bool,
     #[serde(default)]
@@ -160,12 +166,18 @@ struct SavedActor {
     tick_gravity: Option<f32>,
     persistence: Option<String>,
     last_spawn: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    last_clone: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    clone_source: Option<u32>,
     answer: i64,
     item_count: u32,
     menu_choice: usize,
     menu_item: String,
     menu_id: String,
     dormant: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    always_active: Option<bool>,
     emitter: Option<particles::Emitter>,
     bullet: Option<Bullet>,
     locals: BTreeMap<String, String>,
@@ -177,6 +189,7 @@ impl SavedActor {
     fn capture(actor: &Actor, world: &World) -> Self {
         Self {
             id: actor.id,
+            tile_mark: actor.tile_mark.clone(),
             hidden: actor.hidden,
             created_at: actor.created_at,
             origin: actor.origin.clone(),
@@ -212,12 +225,15 @@ impl SavedActor {
             tick_gravity: actor.tick_gravity,
             persistence: actor.persistence.clone(),
             last_spawn: actor.last_spawn,
+            last_clone: actor.last_clone,
+            clone_source: actor.clone_source,
             answer: actor.answer,
             item_count: actor.item_count,
             menu_choice: actor.menu_choice,
             menu_item: actor.menu_item.clone(),
             menu_id: actor.menu_id.clone(),
             dormant: actor.dormant,
+            always_active: actor.always_active,
             emitter: actor.emitter,
             bullet: actor.bullet.clone(),
             locals: actor
@@ -246,6 +262,10 @@ impl SavedActor {
             (self.layer, self.player),
         );
         let actor = runtime.actors.get_mut(&id).unwrap();
+        actor.tile_mark = self.tile_mark;
+        if actor.tile_mark.is_some() {
+            runtime.tile_entities.insert(id);
+        }
         actor.hidden = self.hidden;
         actor.created_at = self.created_at;
         if let Some(name) = &self.name {
@@ -285,12 +305,15 @@ impl SavedActor {
         actor.tick_gravity = self.tick_gravity;
         actor.persistence = self.persistence;
         actor.last_spawn = self.last_spawn;
+        actor.last_clone = self.last_clone;
+        actor.clone_source = self.clone_source;
         actor.answer = self.answer;
         actor.item_count = self.item_count;
         actor.menu_choice = self.menu_choice;
         actor.menu_item = self.menu_item;
         actor.menu_id = self.menu_id;
         actor.dormant = self.dormant;
+        actor.always_active = self.always_active;
         actor.emitter = self.emitter;
         actor.bullet = self.bullet;
         actor.variables = variables(&self.locals)?;
@@ -322,6 +345,7 @@ impl Scene {
             tick: runtime.tick,
             next: runtime.next,
             inputs: runtime.inputs.map(Input::bits),
+            reported_players: runtime.reported_players,
             actors: runtime
                 .actors
                 .values()
@@ -329,7 +353,7 @@ impl Scene {
                 .map(|actor| SavedActor::capture(actor, &runtime.world))
                 .collect(),
             gates: runtime.gates.iter().map(|(_, id)| *id).collect(),
-            starts: runtime.pending_start.clone(),
+            starts: runtime.pending_start.iter().copied().filter(|id| runtime.actors.contains_key(id)).collect(),
             broadcasts: runtime.broadcasts.clone(),
             event_deliveries: runtime.event_deliveries.clone(),
             entry_removed: runtime.entry_removed.iter().cloned().collect(),
@@ -417,6 +441,9 @@ impl Scene {
         }
         for actor in &self.actors {
             if actor.animation_start > self.tick || actor.created_at > self.tick
+                || actor.clone_source.is_some_and(|source| source == 0 || source >= actor.id
+                    || actor.origin.is_some() || actor.name.is_some() || actor.persistence.is_some()
+                    || actor.bullet.is_some() || actor.sprite.as_deref().is_none_or(|sprite| sprite.starts_with('@')))
                 || actor.player.is_some_and(|p| p > 3)
                 || actor
                     .xy
@@ -480,7 +507,16 @@ impl Scene {
         }
         runtime.next = self.next;
         runtime.inputs = self.inputs.map(Input::from_bits);
+        runtime.reported_players = self.reported_players & 15 | 1;
         runtime.pending_start = self.starts;
+        for id in &runtime.pending_start {
+            if let Some(actor) = runtime.actors.get_mut(id) && actor.clone_source.is_some() {
+                actor.clone_pending = true;
+                if let Some(body) = actor.body {
+                    runtime.world.set_body_enabled(body, false);
+                }
+            }
+        }
         runtime.broadcasts = self.broadcasts;
         runtime.event_deliveries = self.event_deliveries;
         runtime.entry_removed = self.entry_removed.into_iter().collect();
@@ -495,9 +531,7 @@ impl Scene {
         runtime.room_settings = self.room_settings;
         runtime.apply_room_border();
         runtime.shapes = self.shapes;
-        if !self.game_settings.is_default() {
-            runtime.game_settings = self.game_settings;
-        }
+        runtime.game_settings = self.game_settings;
         if runtime.room_settings.gravity.is_some() {
             runtime.apply_room_gravity();
         }
@@ -573,7 +607,7 @@ impl Runtime {
                 .collect(),
             collections: self.game_properties.collections.clone(),
             flags: self.game_properties.flags.keys().map(ToString::to_string).collect(),
-            personal: self.personal.clone(),
+            personal: self.game_properties.player_items.clone(),
             inventory: self.inventory.clone(),
             removed: self.removed.clone(),
             counters: self.counters.clone(),
@@ -603,8 +637,15 @@ impl Runtime {
             return Err("Invalid save for this game".into());
         }
         let globals = variables(&state.globals)?;
-        if !state.collections.valid(&self.game.collections) {return Err("Invalid saved collections".into());}
-        let collections=if state.collections.is_empty(){collections::Collections::new(&self.game.collections)?}else{state.collections};
+        let collections = if state.collections.is_empty() {
+            collections::Collections::new(&self.game.collections)?
+        } else {
+            if !state.collections.valid(&self.game.collections) {
+                return Err("Invalid saved collections".into());
+            }
+            state.collections.measure();
+            state.collections
+        };
         for room in state.memory.values() {
             for record in room.values() {
                 if record
@@ -659,7 +700,7 @@ impl Runtime {
             .into_iter()
             .map(|n| (n.into(), 1.into()))
             .collect();
-        self.personal = state.personal;
+        self.game_properties.player_items = state.personal;
         self.inventory = state.inventory;
         self.removed = state.removed;
         self.seed = state.seed.max(1);
@@ -736,12 +777,7 @@ impl Runtime {
                         .bytes()
                         .chain(edge.bytes())
                         .fold(self.seed, |h, b| (h ^ b as u32).wrapping_mul(16777619)),
-                    "crossing" => {
-                        self.rng ^= self.rng << 13;
-                        self.rng ^= self.rng >> 17;
-                        self.rng ^= self.rng << 5;
-                        self.rng
-                    }
+                    "crossing" => Self::next_random_u32(&mut self.rng),
                     _ => 0,
                 };
                 let target = exit.targets[key as usize % exit.targets.len()].clone();

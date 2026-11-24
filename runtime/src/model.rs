@@ -202,6 +202,8 @@ pub struct PendingRespawn {
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 pub struct Spawn {
+    #[serde(default, rename = "tileMark", skip_serializing_if = "Option::is_none")]
+    pub tile_mark: Option<TileMark>,
     #[serde(default, rename = "standardRespawn")]
     pub standard_respawn: bool,
     pub respawn: Option<Respawn>,
@@ -233,6 +235,12 @@ pub struct Spawn {
     pub flip_x: Option<bool>,
     pub clip: Option<Vec<Frame>>,
     pub physics: Option<Physics>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct TileMark {
+    pub tile: String,
+    pub mode: Mode,
 }
 
 #[derive(Clone, Deserialize)]
@@ -279,6 +287,12 @@ pub struct Room {
     pub group_camera_override: Option<bool>,
     #[serde(default, rename = "cameraZoom")]
     pub camera_zoom: Option<f32>,
+    #[serde(default, rename = "cameraHeight")]
+    pub camera_height: Option<u32>,
+    #[serde(default, rename = "seamMargins")]
+    pub seam_margins: [u32; 4],
+    #[serde(default, rename = "tileCells")]
+    pub tile_cells: BTreeMap<usize, Vec<TileMark>>,
     #[serde(default)]
     pub seams: BTreeMap<String, bool>,
     #[serde(default)]
@@ -328,6 +342,8 @@ pub struct Menu {
 }
 #[derive(Deserialize)]
 pub struct Game {
+    #[serde(default)]
+    pub camera: crate::Camera,
     #[serde(default)]
     pub collections: crate::collections::Schema,
     #[serde(default)]
@@ -399,6 +415,8 @@ impl Input {
 #[derive(Serialize)]
 pub struct ActorView<'a> {
     pub id: u32,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "cloneOf")]
+    pub clone_source: Option<u32>,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -478,11 +496,15 @@ pub struct RoomSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shader: Option<crate::RoomShader>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub shader_pipeline: Option<Vec<crate::ShaderPass>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub zoom: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gravity: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_gradient: Option<crate::gradient::Gradient>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_image: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -502,6 +524,8 @@ pub struct RoomSettings {
 #[derive(Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct GameSettings {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub postprocessing: Vec<crate::ShaderPass>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display: Option<crate::Camera>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -518,7 +542,8 @@ impl GameSettings {
     }
 
     pub(crate) fn valid(&self) -> bool {
-        self.display.is_none_or(crate::Camera::valid)
+        crate::shader::valid_pipeline(&self.postprocessing)
+            && self.display.is_none_or(crate::Camera::valid)
             && self.minimap.as_deref().is_none_or(|mode| matches!(mode, "off" | "world" | "explored"))
             && self.first_controller_slot.is_none_or(|slot| slot < 2)
     }
@@ -532,12 +557,14 @@ impl RoomSettings {
     }
 
     pub(crate) fn valid(&self) -> bool {
-        self.shader.is_none_or(|shader| shader.strength <= 100)
+        self.shader_pipeline.as_deref().is_none_or(crate::shader::valid_pipeline)
+            && self.shader.is_none_or(|shader| shader.strength <= 100)
             && self.zoom.is_none_or(|zoom| (0.25..=4.0).contains(&zoom))
             && self
                 .gravity
                 .is_none_or(|gravity| (-100.0..=100.0).contains(&gravity))
             && self.background.as_deref().is_none_or(Self::valid_color)
+            && self.background_gradient.as_ref().is_none_or(crate::gradient::Gradient::valid)
             && self.background_image.as_ref().is_none_or(|path| path.len() <= 256)
             && self.background_scroll.is_none_or(|scroll| (0.0..=1.0).contains(&scroll))
             && self.camera_height.is_none_or(|height| (1..=4096).contains(&height))
@@ -632,6 +659,7 @@ pub struct Snapshot<'a> {
     pub actors: Vec<ActorView<'a>>,
     pub particles: &'a [crate::particles::Batch],
     pub focus: Option<[f32; 2]>,
+    pub viewport: [i32; 4],
     pub dialog: Option<&'a str>,
     pub menu: Option<&'a Menu>,
     #[serde(rename = "hudFont", skip_serializing_if = "str::is_empty")]

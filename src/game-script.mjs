@@ -1,5 +1,5 @@
 import {decodeCbor} from './cartridge.mjs';
-import {parseScript} from './wafflescript.mjs';
+import {formatScript,parseScript} from './wafflescript.mjs';
 
 export const gameScriptPath='scripts/game.cbor';
 
@@ -15,7 +15,8 @@ export function initialGameScript(project,{examples=false}={}){
     events:{init:[],game_startup:startup},
     declarations:{globals:{...(examples?{score:0}:{}),...project.variables},
       flags:{...(examples?{level_complete:false}:{}),...project.flags},
-      events:{...(examples?{level_finished:'Level finished'}:{}),...project.events}},
+      events:{...(examples?{level_finished:'Level finished'}:{}),...project.events},
+      controls:{...project.controls},menus:{...project.menus}},
     ...(examples?{
       constants:{starting_lives:3},
       collections:{types:{item:{amount:{type:'integer',default:1}}},inventories:{backpack:['item']},arrays:{scores:'integer'}},
@@ -27,7 +28,13 @@ export async function readGameScript(project,read){
   const path=project.gameScript??gameScriptPath;
   const data=await read(path).catch(error=>{if(error.code!=='ENOENT')throw error;});
   if(!data)return null;
-  if(!path.endsWith('.ws'))return decodeCbor(data);
-  const source=data.toString();
-  return {...parseScript(source),source};
+  const source=path.endsWith('.ws')?data.toString():null;
+  const unit=source!=null?{...parseScript(source),source}:decodeCbor(data);
+  const inherited=Object.fromEntries(['controls','menus']
+    .filter(key=>unit.declarations?.[key]==null&&Object.keys(project[key]??{}).length)
+    .map(key=>[key,project[key]]));
+  if(!Object.keys(inherited).length)return unit;
+  unit.declarations={...unit.declarations,...inherited};
+  if(unit.source!=null)unit.source=formatScript({declarations:inherited})+'\n'+unit.source;
+  return unit;
 }

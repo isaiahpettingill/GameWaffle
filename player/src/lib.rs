@@ -1,6 +1,8 @@
+mod gradient;
 mod lan;
 mod mapping;
 mod media;
+mod shaders;
 #[cfg(feature = "libretro")]
 mod retro;
 mod sound;
@@ -38,18 +40,18 @@ struct Game {
     media: Media,
 }
 impl Game {
-    fn open(path: &Path) -> Result<Self, Error> {
+    fn open(path: &Path, gamepads: usize, window: [u32; 2]) -> Result<Self, Error> {
         let mut bytes = Vec::new();
         sdl3::iostream::IOStream::from_file(path, "rb")?
             .take(256 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)?;
-        Self::from_cartridge(&bytes)
+        Self::from_cartridge(&bytes, 1, Some(gamepads.min(4) as u8), window)
     }
-    fn from_cartridge(bytes: &[u8]) -> Result<Self, Error> {
+    fn from_cartridge(bytes: &[u8], connected: u8, gamepads: Option<u8>, window: [u32; 2]) -> Result<Self, Error> {
         std::hint::black_box(
-            b"GAMEWAFFLE_RUNTIME_ABI_3\0GAMEWAFFLE_RUNTIME_ABI_4\0GAMEWAFFLE_RUNTIME_ABI_5\0GAMEWAFFLE_RUNTIME_ABI_6\0GAMEWAFFLE_RUNTIME_ABI_7\0GAMEWAFFLE_RUNTIME_ABI_8\0GAMEWAFFLE_RUNTIME_ABI_9\0GAMEWAFFLE_RUNTIME_ABI_10\0GAMEWAFFLE_RUNTIME_ABI_11\0GAMEWAFFLE_RUNTIME_ABI_12\0",
+            b"GAMEWAFFLE_RUNTIME_ABI_3\0GAMEWAFFLE_RUNTIME_ABI_4\0GAMEWAFFLE_RUNTIME_ABI_5\0GAMEWAFFLE_RUNTIME_ABI_6\0GAMEWAFFLE_RUNTIME_ABI_7\0GAMEWAFFLE_RUNTIME_ABI_8\0GAMEWAFFLE_RUNTIME_ABI_9\0GAMEWAFFLE_RUNTIME_ABI_10\0GAMEWAFFLE_RUNTIME_ABI_11\0GAMEWAFFLE_RUNTIME_ABI_12\0GAMEWAFFLE_RUNTIME_ABI_13\0GAMEWAFFLE_RUNTIME_ABI_14\0GAMEWAFFLE_RUNTIME_ABI_15\0GAMEWAFFLE_RUNTIME_ABI_16\0",
         );
-        let mut runtime = Runtime::from_cartridge(bytes, None)?;
+        let mut runtime = Runtime::from_cartridge_with_view(bytes, None, connected, gamepads, window[0], window[1], false)?;
         runtime.set_seed(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)?
@@ -177,6 +179,7 @@ fn draw_world<T: sdl3::render::RenderTarget>(
     atlas: &mut Texture<'_>,
     view: [u32; 4],
     rectangles: &mut Vec<FRect>,
+    gradient: Option<&Texture<'_>>,
 ) -> Result<(), Error> {
     let room = &game.media.rooms[snapshot.room];
     let source = &game.media.atlases[snapshot.room];
@@ -223,20 +226,14 @@ fn draw_world<T: sdl3::render::RenderTarget>(
             0
         },
     );
-    let color = snapshot
-        .room_settings
-        .background
-        .as_deref()
-        .unwrap_or(&room.background)
-        .strip_prefix('#')
-        .and_then(|s| u32::from_str_radix(s, 16).ok())
-        .unwrap_or(0x171829);
-    canvas.set_draw_color(Color::RGB(
-        (color >> 16) as u8,
-        (color >> 8) as u8,
-        color as u8,
-    ));
-    canvas.clear();
+    if let Some(gradient) = gradient {
+        canvas.copy(gradient, None, FRect::new(0., 0., w as f32, h as f32))?;
+    } else {
+        let background = snapshot.room_settings.background.as_deref().unwrap_or(&room.background);
+        let [r, g, b] = gamewaffle_runtime::gradient::rgb(background).unwrap_or([23, 24, 41]);
+        canvas.set_draw_color(Color::RGB(r, g, b));
+        canvas.clear();
+    }
     use gamewaffle_runtime::ShadowPlacement;
     let background = snapshot.room_settings.background_image.as_deref().filter(|path| !path.is_empty()).map(|path| media::Layer {
         image: format!("room/background/{path}"),
@@ -688,85 +685,106 @@ fn draw<T: sdl3::render::RenderTarget>(
     rectangles: &mut Vec<FRect>,
     ripple_target: Option<&mut Texture<'_>>,
     hd_target: Option<&mut Texture<'_>>,
+    gradient: Option<&Texture<'_>>,
+    room_effects: Option<(&shaders::Pipeline, &mut shaders::Targets<'_>)>,
 ) -> Result<(), Error> {
     let [_, _, w, h] = view;
     let room = &game.media.rooms[snapshot.room];
     let source = &game.media.atlases[snapshot.room];
     let override_shader = snapshot.room_settings.shader;
-    let shader = override_shader.or(room.shader);
-    let hd = room.hd_strength(override_shader);
-    if let (Some([amplitude, wavelength, speed]), Some(scene)) =
-        (room.ripple_settings(override_shader), ripple_target)
-    {
-        let mut result = Ok(());
-        canvas.with_texture_canvas(scene, |target| {
-            result = draw_world(target, game, snapshot, atlas, view, rectangles);
-        })?;
-        result?;
-        for row in (0..h).step_by(2) {
-            let phase = row as f64 / wavelength.max(1) as f64
-                + (snapshot.tick % 60) as f64 * speed as f64 / 60.;
-            let shift = (amplitude as f64 * (phase * std::f64::consts::TAU).sin()).round() as i32;
-            let band = 2.min(h - row);
-            let copy = |canvas: &mut Canvas<T>, sx, sw, dx, dw| {
-                canvas.copy(
-                    scene,
-                    sdl3::rect::Rect::new(sx, row as i32, sw, band),
-                    FRect::new(dx as f32, row as f32, dw as f32, band as f32),
-                )
-            };
-            copy(canvas, 0, w, shift, w)?;
-            if shift > 0 {
-                copy(canvas, 0, 1, 0, shift as u32)?;
-            }
-            if shift < 0 {
-                copy(
-                    canvas,
-                    w as i32 - 1,
-                    1,
-                    w as i32 + shift,
-                    shift.unsigned_abs(),
-                )?;
-            }
-        }
+    let stack = snapshot.room_settings.shader_pipeline.as_deref();
+    let shader = stack.is_none().then(|| override_shader.or(room.shader)).flatten();
+    let hd = if stack.is_some() { 0 } else { room.hd_strength(override_shader) };
+    let scene_origin = [view[0] as f32, view[1] as f32];
+    let rasterized = if let (Some(passes), Some((pipeline, targets))) = (stack, room_effects) {
+        canvas.set_draw_color(Color::BLACK);
+        canvas.clear();
+        pipeline.draw(
+            canvas, targets, &game.media.shaders, passes, snapshot.tick,
+            FRect::new(0., 0., w as f32, h as f32),
+            |target| {
+                draw_world(target, game, snapshot, atlas, view, rectangles, gradient)?;
+                draw_shapes(target, snapshot.shapes, false, scene_origin)
+            },
+        )?;
+        true
     } else {
-        draw_world(canvas, game, snapshot, atlas, view, rectangles)?;
-    }
-    let layers = shader.map_or(
-        &[
-            ("post/screen", "screen"),
-            ("post/rows", "rows"),
-            ("post/columns", "columns"),
-        ][..],
-        |shader| shader.kind.masks(),
-    );
-    if !layers.is_empty() && shader.is_none_or(|shader| shader.strength > 0) {
-        if let Some(shader) = shader {
-            atlas.set_alpha_mod((u16::from(shader.strength) * 255 / 100) as u8);
-        }
-        let overlays = (|| -> Result<(), Error> {
-            for (key, layer) in layers {
-                if let Some(mut rect) = source.rect(key) {
-                    if *layer == "rows" {
-                        rect.set_height(h);
-                    }
-                    if *layer == "columns" {
-                        rect.set_width(w);
-                    }
-                    canvas.copy(atlas, rect, FRect::new(0., 0., w as f32, h as f32))?;
+        false
+    };
+    if !rasterized {
+        if let (Some([amplitude, wavelength, speed]), Some(scene)) =
+            (room.ripple_settings(override_shader), ripple_target)
+        {
+            let mut result = Ok(());
+            canvas.with_texture_canvas(scene, |target| {
+                result = draw_world(target, game, snapshot, atlas, view, rectangles, gradient);
+            })?;
+            result?;
+            for row in (0..h).step_by(2) {
+                let phase = row as f64 / wavelength.max(1) as f64
+                    + (snapshot.tick % 60) as f64 * speed as f64 / 60.;
+                let shift = (amplitude as f64 * (phase * std::f64::consts::TAU).sin()).round() as i32;
+                let band = 2.min(h - row);
+                let copy = |canvas: &mut Canvas<T>, sx, sw, dx, dw| {
+                    canvas.copy(
+                        scene,
+                        sdl3::rect::Rect::new(sx, row as i32, sw, band),
+                        FRect::new(dx as f32, row as f32, dw as f32, band as f32),
+                    )
+                };
+                copy(canvas, 0, w, shift, w)?;
+                if shift > 0 {
+                    copy(canvas, 0, 1, 0, shift as u32)?;
+                }
+                if shift < 0 {
+                    copy(
+                        canvas,
+                        w as i32 - 1,
+                        1,
+                        w as i32 + shift,
+                        shift.unsigned_abs(),
+                    )?;
                 }
             }
-            Ok(())
-        })();
-        if shader.is_some() {
-            atlas.set_alpha_mod(255);
+        } else {
+            draw_world(canvas, game, snapshot, atlas, view, rectangles, gradient)?;
         }
-        overlays?;
+        let layers = shader.map_or(
+            &[
+                ("post/screen", "screen"),
+                ("post/rows", "rows"),
+                ("post/columns", "columns"),
+            ][..],
+            |shader| shader.kind.masks(),
+        );
+        if stack.is_none() && !layers.is_empty() && shader.is_none_or(|shader| shader.strength > 0) {
+            if let Some(shader) = shader {
+                atlas.set_alpha_mod((u16::from(shader.strength) * 255 / 100) as u8);
+            }
+            let overlays = (|| -> Result<(), Error> {
+                for (key, layer) in layers {
+                    if let Some(mut rect) = source.rect(key) {
+                        if *layer == "rows" {
+                            rect.set_height(h);
+                        }
+                        if *layer == "columns" {
+                            rect.set_width(w);
+                        }
+                        canvas.copy(atlas, rect, FRect::new(0., 0., w as f32, h as f32))?;
+                    }
+                }
+                Ok(())
+            })();
+            if shader.is_some() {
+                atlas.set_alpha_mod(255);
+            }
+            overlays?;
+        }
+        if let Some(shader) = shader {
+            draw_weather(canvas, shader, [w, h], snapshot.tick, rectangles)?;
+        }
+        draw_shapes(canvas, snapshot.shapes, false, scene_origin)?;
     }
-    if let Some(shader) = shader {
-        draw_weather(canvas, shader, [w, h], snapshot.tick, rectangles)?;
-    }
-    draw_shapes(canvas,snapshot.shapes,false,[view[0] as f32,view[1] as f32])?;
     if let Some(texture) = hd_target {
         let raw = canvas.read_pixels(sdl3::rect::Rect::new(0, 0, w, h))?;
         let surface = if raw.pixel_format() == PixelFormat::RGBA32 {
@@ -794,7 +812,7 @@ fn draw<T: sdl3::render::RenderTarget>(
         )?;
         canvas.set_scale(2., 2.)?;
     }
-    draw_shapes(canvas,snapshot.shapes,true,[0.0;2])?;
+    draw_shapes(canvas, snapshot.shapes, true, [0.0; 2])?;
     if snapshot.menu.is_none()
         && snapshot.dialog.is_none()
         && let Some(map) = &game.media.minimap
@@ -964,7 +982,7 @@ pub fn run_network(
         PixelFormat::RGBA32,
     )?;
     window.set_icon(surface);
-    let mut canvas = window.into_canvas();
+    let mut canvas = shaders::canvas(window);
     let creator = canvas.texture_creator();
     let pads = sdl.gamepad()?;
     let mut status = mapping::load(&pads)
@@ -984,13 +1002,22 @@ pub fn run_network(
     let mut pump = sdl.event_pump()?;
     let (sender, files) = mpsc::channel();
     let mut mixer = sound::Mixer::new(sdl.audio().ok());
-    let mut game = path.as_deref().map(Game::open).transpose()?;
+    let (width, height) = canvas.output_size()?;
+    let initial_view = if network.is_some() { [640, 480] } else { [width, height] };
+    let mut game = path.as_deref().map(|path| Game::open(path, controllers.len(), initial_view)).transpose()?;
+    let mut controller_slots = [None; 4];
+    let mut first_controller_slot = None;
     if let (Some((_, seed)), Some(game)) = (&network, &mut game) {
         game.runtime.set_seed(*seed);
     }
     let mut texture = None;
     let mut frame_texture = None;
     let mut ripple_texture = None;
+    let mut shader_pipeline = shaders::Pipeline::new(&canvas);
+    let mut room_shader_targets: Option<shaders::Targets<'_>> = None;
+    let mut gradient_layer = gradient::Layer::default();
+    let mut display_shader_targets: Option<shaders::Targets<'_>> = None;
+    let mut shader_game=None;
     let mut hd_texture = None;
     let mut frame_dimensions = [0, 0];
     let mut atlas_id = String::new();
@@ -1223,7 +1250,8 @@ pub fn run_network(
             if network.is_some() {
                 continue;
             }
-            match Game::open(&path) {
+            let (width, height) = canvas.output_size()?;
+            match Game::open(&path, controllers.iter().filter(|pad| pad.connected()).count(), [width, height]) {
                 Ok(new) => {
                     let title = format!("GameWaffle — {}", new.media.name.replace('\0', ""));
                     canvas.window_mut().set_title(&title)?;
@@ -1244,6 +1272,8 @@ pub fn run_network(
         lag = (lag + now.duration_since(previous)).min(TICK * 5);
         previous = now;
         if let Some(game) = &mut game {
+            let [width, height] = if network.is_some() { [640, 480] } else { [output.0, output.1] };
+            game.runtime.set_camera_window(width, height, false);
             if setup.is_some() {
                 lag = Duration::ZERO;
             }
@@ -1260,9 +1290,21 @@ pub fn run_network(
                 states[0][4] |= mouse[0];
                 states[0][5] |= mouse[1];
                 let first_pad = game.runtime.first_controller_slot();
+                if first_controller_slot != Some(first_pad) {
+                    first_controller_slot = Some(first_pad);
+                    controller_slots.fill(None);
+                }
+                for slot in &mut controller_slots {
+                    if slot.is_some_and(|id| !controllers.iter().any(|pad| pad.connected() && pad.id().ok() == Some(id))) {
+                        *slot = None;
+                    }
+                }
                 let mut connected = 1;
-                for (index, pad) in controllers.iter().filter(|pad| pad.connected()).take(4 - first_pad).enumerate() {
-                    let player = first_pad + index;
+                for pad in controllers.iter().filter(|pad| pad.connected()) {
+                    let Ok(id) = pad.id() else { continue };
+                    let Some(player) = controller_slots.iter().position(|slot| *slot == Some(id))
+                        .or_else(|| (first_pad..4).find(|&slot| controller_slots[slot].is_none())) else { continue };
+                    controller_slots[player] = Some(id);
                     connected |= 1 << player;
                     let slot = &mut states[player];
                     for (index, button) in BUTTONS.iter().enumerate() {
@@ -1340,13 +1382,15 @@ pub fn run_network(
                 .map_or([room.width as f32 / 2., room.height as f32 / 2.], |a| {
                     [a.x, a.y]
                 });
-            view = viewport_zoom(
+            view = if game.media.runtime_abi >= 15 {
+                snapshot.viewport.map(|pixel| pixel as u32)
+            } else { viewport_zoom(
                 snapshot.game_settings.display.unwrap_or(game.media.camera),
                 [output.0, output.1],
                 [room.width, snapshot.room_settings.camera_height.unwrap_or_else(|| room.camera_height())],
                 snapshot.focus.unwrap_or(focus),
                 snapshot.room_settings.zoom,
-            );
+            ) };
         } else {
             lag = Duration::ZERO;
             view = viewport(
@@ -1357,7 +1401,8 @@ pub fn run_network(
             );
         }
         let hd = game.as_ref().is_some_and(|g| {
-            g.media.rooms[g.runtime.room()].hd_strength(g.runtime.room_settings().shader) > 0
+            g.runtime.room_settings().shader_pipeline.is_none()
+                && g.media.rooms[g.runtime.room()].hd_strength(g.runtime.room_settings().shader) > 0
         });
         let scale = if hd { 2 } else { 1 };
         let dimensions = [view[2] * scale, view[3] * scale];
@@ -1380,9 +1425,8 @@ pub fn run_network(
         }
         let snapshot = game.as_ref().map(|game| game.runtime.view());
         let ripple = game.as_ref().zip(snapshot.as_ref()).is_some_and(|(g, s)| {
-            g.media.rooms[s.room]
-                .ripple_settings(s.room_settings.shader)
-                .is_some()
+            s.room_settings.shader_pipeline.is_none()
+                && g.media.rooms[s.room].ripple_settings(s.room_settings.shader).is_some()
         });
         if ripple && ripple_texture.is_none() {
             ripple_texture =
@@ -1390,11 +1434,34 @@ pub fn run_network(
         } else if !ripple {
             ripple_texture = None;
         }
+        let shader_owner = game.as_ref().map(|g| g.media.name.as_ptr());
+        if shader_owner != shader_game {
+            shader_pipeline.reset(&canvas);
+            shader_game = shader_owner;
+        }
+        shader_pipeline.error = None;
+        let enabled_room = game.as_ref().zip(snapshot.as_ref()).is_some_and(|(g, s)| {
+            s.room_settings.shader_pipeline.as_deref().is_some_and(|passes| {
+                !passes.is_empty() && shader_pipeline.prepare(&canvas, &g.media.shaders, passes)
+            })
+        });
+        let room_size = [view[2], view[3]];
+        if enabled_room && room_shader_targets.as_ref().is_none_or(|targets| targets.dimensions != room_size) {
+            room_shader_targets = Some(shaders::Targets::new(&creator, room_size)?);
+        }
         let frame = frame_texture.as_mut().unwrap();
         let mut rendered = Ok(());
         canvas.with_texture_canvas(frame, |canvas| {
             rendered = (|| -> Result<(), Error> {
                 if let (Some(game), Some(snapshot)) = (&game, &snapshot) {
+                    let settings = snapshot.room_settings;
+                    let room = &game.media.rooms[snapshot.room];
+                    let gradient = gradient_layer.get(
+                        &creator,
+                        settings.background_gradient.as_ref(),
+                        room_size,
+                        settings.background.as_deref().unwrap_or(&room.background),
+                    )?;
                     draw(
                         canvas,
                         game,
@@ -1404,6 +1471,12 @@ pub fn run_network(
                         &mut particle_rects,
                         ripple_texture.as_mut(),
                         hd_texture.as_mut(),
+                        gradient,
+                        if enabled_room {
+                            room_shader_targets.as_mut().map(|targets| (&shader_pipeline, targets))
+                        } else {
+                            None
+                        },
                     )?;
                 } else {
                     canvas.set_draw_color(Color::RGB(24, 24, 34));
@@ -1434,7 +1507,32 @@ pub fn run_network(
         canvas.set_draw_color(Color::RGB(14, 14, 22));
         canvas.clear();
         let [x, y, w, h] = fit_frame([view[2], view[3]], display).map(|axis| axis as f32);
-        canvas.copy(frame, None, FRect::new(x, y, w, h))?;
+        let game_passes = game.as_ref().zip(snapshot.as_ref()).and_then(|(g, s)| {
+            let passes = &s.game_settings.postprocessing;
+            (!passes.is_empty() && shader_pipeline.prepare(&canvas, &g.media.shaders, passes))
+                .then_some((g, s, passes))
+        });
+        if let Some((game, snapshot, passes)) = game_passes {
+            let scale = (output.0 as f32 / display[0] as f32)
+                .min(output.1 as f32 / display[1] as f32);
+            let dimensions = display.map(|size| ((size as f32 * scale).round() as u32).clamp(1, 4096));
+            if display_shader_targets.as_ref().is_none_or(|targets| targets.dimensions != dimensions) {
+                display_shader_targets = Some(shaders::Targets::new(&creator, dimensions)?);
+            }
+            shader_pipeline.draw(
+                &mut canvas, display_shader_targets.as_mut().unwrap(), &game.media.shaders, passes,
+                snapshot.tick, FRect::new(0., 0., display[0] as f32, display[1] as f32),
+                |target| {
+                    target.set_draw_color(Color::RGB(14, 14, 22));
+                    target.clear();
+                    let [x, y, w, h] = fit_frame([view[2], view[3]], dimensions).map(|v| v as f32);
+                    target.copy(frame, None, FRect::new(x, y, w, h))?;
+                    Ok(())
+                },
+            )?;
+        } else {
+            canvas.copy(frame, None, FRect::new(x, y, w, h))?;
+        }
         if touch {
             canvas.set_blend_mode(BlendMode::Blend);
             for (index, rect) in overlay(display[0], display[1]).into_iter().enumerate() {
@@ -1454,9 +1552,10 @@ pub fn run_network(
             }
             canvas.set_blend_mode(BlendMode::None);
         }
-        if !status.is_empty() {
+        let visible_status = shader_pipeline.error.as_deref().unwrap_or(&status);
+        if !visible_status.is_empty() {
             canvas.set_draw_color(Color::RGB(255, 163, 153));
-            let text: String = status
+            let text: String = visible_status
                 .chars()
                 .take(view[2].saturating_sub(16) as usize / 8)
                 .collect();

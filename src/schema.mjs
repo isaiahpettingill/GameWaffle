@@ -2,9 +2,10 @@ import {shaderPresets} from './room-shaders.mjs';
 export const effects=['sparks','dust','smoke','flame','bubbles','rain','snow'];
 export const platformGravity = 16;
 export const roomBorder = (room, topDown) => room.border ?? (room.closedEdges == null ? (topDown ? 'closed' : 'sides') : room.closedEdges ? 'closed' : 'open');
-export const Events = ['init','start','game_startup','use_item', 'restored', 'tick', 'a', 'b', 'x', 'menu', 'begin_contact', 'end_contact', 'damage', 'destroy', 'animation_finished', 'menu_selected'];
+export const Events = ['init','start','clone_start','game_startup','use_item', 'restored', 'tick', 'a', 'b', 'x', 'menu', 'begin_contact', 'end_contact', 'damage', 'destroy', 'animation_finished', 'menu_selected'];
 export const receivedEvent=name=>/^received\.[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name);
 export const inputEvent=name=>/^(pressed|released)\.[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name);
+export const controllerEvent=name=>/^controller_(connected|disconnected)\.[2-4]$/.test(name);
 export const timerEvent=name=>/^(after|every)\.[1-9][0-9]{0,6}$/.test(name)&&Number(name.split('.')[1])<=1296000;
 export function initialScript(actor){
   const init=[], self={actor:'id'}, events={};
@@ -27,6 +28,10 @@ export const Blocks = {
   set_first_controller:['First gamepad controls player %1',[['player','integer',2]]],
   set_entity_visible:['Show entity %1 %2',[['entity','integer',0],['visible','boolean',true]]],
   assign_entity_player:['Assign entity %1 to player %2',[['entity','integer',0],['player','integer',1]]],
+  clone_entity:['Clone entity %1',[['entity','integer',{actor:'id'}]]],
+  delete_clone:['Delete this clone',[]],
+  set_entity_persistence:['Remember state of entity %1 between room visits %2',[['entity','integer',0],['enabled','boolean',true]]],
+  set_entity_always_active:['Run entity %1 off camera %2',[['entity','integer',0],['enabled','boolean',true]]],
   set_tile_playback:['Play this tile %1',[['mode',['still','loop','once'],'loop']]],
   set_tile_frame:['Set this tile frame to %1',[['frame','integer',1]]],
   advance_tile_frame:['Advance this tile frame by %1',[['steps','integer',1]]],
@@ -117,6 +122,12 @@ export const Blocks = {
   set_room_border: ['Set room borders to %1', [['border',['open','sides','closed'],'sides']]],
   set_camera_bottom_inset: ['Set camera bottom inset to %1 tiles', [['tiles','integer',0]]],
   set_room_background: ['Set room background color to %1', [['color','string','#101a23']]],
+  set_background_gradient:['Background gradient %1 · %2', [['kind',['none','linear','radial'],'linear'],['colors',['smooth','dithered'],'smooth']]],
+  set_gradient_axis:['Gradient from X %1 Y %2 to X %3 Y %4', [['x','number',0],['y','number',0],['end_x','number',0],['end_y','number',1]]],
+  set_gradient_stop:['Linear stop %1 at %2 · %3', [['index','integer',1],['offset','number',0],['color','string','#101a23']]],
+  set_gradient_focus:['Radial focus %1 at X %2 Y %3\nradius %4 · %5', [['index','integer',1],['x','number',{real:.5}],['y','number',{real:.5}],['radius','number',{real:.7}],['color','string','#f9e2af']]],
+  set_gradient_palette_color:['Gradient palette color %1 · %2', [['index','integer',1],['color','string','#313244']]],
+  clear_gradient_slot:['Remove gradient %1 %2', [['kind',['stop','focus','palette'],'focus'],['index','integer',1]]],
   set_room_depth_sort: ['Sort entities by depth %1', [['enabled','boolean',true]]],
   set_room_music: ['Set room music to %1', [['sound','text','']]],
   set_room_ambience: ['Set room ambience to %1', [['sound','text','']]],
@@ -163,6 +174,12 @@ export const Opcodes = Object.freeze({
   inventory_append:118,inventory_remove:119,inventory_set:120,inventory_create_child:121,inventory_remove_child:122,
   array_append:123,array_set:124,array_remove:125,
   set_room_background_image:127,set_camera_bottom_inset:128,set_room_border:129,
+  shader_begin:135,shader_add:136,shader_parameter:137,shader_commit:138,
+  set_entity_persistence:139,set_entity_always_active:140,
+  clone_entity:141,delete_clone:142,
+  reporter:143,
+  set_background_gradient:144,set_gradient_axis:145,set_gradient_stop:146,set_gradient_focus:147,
+  set_gradient_palette_color:148,clear_gradient_slot:149,
   set_entity_layer:130,set_entity_team:131,set_entity_max_health:132,set_entity_friction:133,set_emitter:134,
 });
 export const collectionCommands=['inventory_append','inventory_remove','inventory_set','inventory_create_child','inventory_remove_child','array_append','array_set','array_remove'];
@@ -170,8 +187,25 @@ export const collectionQueries=['inventory.length','inventory.type','inventory.h
 export const drawingCommands=['draw_space','fill','no_fill','stroke','no_stroke','stroke_width','rect','ellipse','circle','line','triangle','point'];
 export const tileCommands=['set_tile_playback','set_tile_frame','advance_tile_frame','set_tile_friction','set_tile_body'];
 export const gameCommands=['set_display_resolution','set_adaptive_display','set_default_camera','set_minimap','set_first_controller'];
+export const gradientCommands=['set_background_gradient','set_gradient_axis','set_gradient_stop','set_gradient_focus','set_gradient_palette_color','clear_gradient_slot'];
 export const roomCommands = ['camera_follow_entity','camera_zoom','reset_room_camera','set_room_gravity',
-  'set_room_background','set_room_background_image','set_camera_bottom_inset','set_room_border','set_room_depth_sort','set_room_music','set_room_ambience','set_room_shader','reset_room_shader'];
+  'set_room_background','set_room_background_image','set_camera_bottom_inset','set_room_border','set_room_depth_sort','set_room_music','set_room_ambience','set_room_shader','reset_room_shader',...gradientCommands];
+const instanceCommands=new Set([
+  'walk','jump','jump_force','chase','move_by','set_position','velocity','force','impulse','apply_gravity',
+  'animate','animate_once','flip_sprite_x','flip_sprite_y','set_sprite_rotation','rotate_sprite',
+  'damage','fire','fire_projectile','follow','remove_self','set_sprite_shadow','set_health_bar',
+]);
+export function commandScopeError(op,{gameScript,roomScript,tileScript}){
+  if(gameCommands.includes(op)&&!gameScript)return 'Use '+op+' in the Game script';
+  if(tileCommands.includes(op)&&!tileScript)return 'Use '+op+' in a tile script';
+  if(roomCommands.includes(op)&&roomScript===false)return 'Use '+op+' in a room script';
+  if(gameScript&&gradientCommands.includes(op))return 'Use '+op+' in a Room script';
+  if(['set_room_shader','reset_room_shader'].includes(op)&&gameScript)
+    return 'Room shader commands belong in the Room script. Use Apply display shaders in order for Game postprocessing.';
+  if(roomScript&&instanceCommands.has(op))return 'Use '+op+' in an entity or tile script';
+  if(op==='delete_clone'&&(roomScript||tileScript))return 'Use Delete this clone in an entity script';
+  if(op==='clone_entity'&&tileScript)return 'Create clones in Game, Room, or entity scripts';
+}
 export const buttons = ['up','down','left','right','a','b','x','menu'];
 
 export const actorReadings = {
@@ -180,6 +214,7 @@ export const actorReadings = {
   last_spawn:'integer',answer:'integer',item_count:'integer',moving:'boolean',is_player:'boolean',facing:'integer',
   x_real:'real',y_real:'real',vx_real:'real',vy_real:'real',health_real:'real',
   menu_choice:'integer',menu_item:'string',menu_id:'string',used_item:'string',event_sender:'integer',event_entity:'integer',
+  last_clone:'integer',clone_source:'integer',is_clone:'boolean',
 };
 const readingNames=Object.keys(actorReadings);
 export const readings=readingNames.filter(name=>['integer','boolean'].includes(actorReadings[name]));
@@ -205,7 +240,45 @@ export const entityQueries = {
   player: ['Player controlling entity %1','integer',[['integer',0]]],
   has_property: ['Entity %1 has property %2?','boolean',[['integer',0],['string','ready']]],
   on_tile_top: ['Entity %1 touches the top of this tile?','boolean',[['integer',0]]],
+  is_clone: ['Entity %1 is a clone?','boolean',[['integer',0]]],
+  clone_source: ['Source of clone %1','integer',[['integer',0]]],
 };
 
 
 export const valueInput=type=>['value','number','integer','real','boolean','string'].includes(type);
+
+const sides=['any','left','right','top','bottom'];
+const tileKinds=['any','solid','static','dynamic','kinematic','one_way','breakable','fluid','ladder','sensor','decorative'];
+const target=['entity',{actor:'id'}];
+// Order is the opcode's selector. Blockly and WaffleScript use the same types and choices.
+export const reporters={
+  'camera.touching_edge':['sensing','%1 reaches %2 edge of viewport?','boolean',[target,[sides,'any']]],
+  'camera.on_screen':['sensing','%1 overlaps the viewport?','boolean',[target]],
+  'camera.touching_room_edge':['sensing','%1 reaches %2 edge of room?','boolean',[target,[sides,'any']]],
+  'camera.left':['sensing','Viewport left X','integer',[]],
+  'camera.top':['sensing','Viewport top Y','integer',[]],
+  'camera.right':['sensing','Viewport right X','integer',[]],
+  'camera.bottom':['sensing','Viewport bottom Y','integer',[]],
+  'camera.width':['sensing','Viewport width','integer',[]],
+  'camera.height':['sensing','Viewport height','integer',[]],
+  'tile.touching':['sensing','%1 touches tile %2 · %3 side?','boolean',[target,['tile',''],[sides,'any']]],
+  'tile.touching_kind':['sensing','%1 touches %2 tile · %3 side?','boolean',[target,[tileKinds,'solid'],[sides,'any']]],
+  'string.join':['text','Join %1 and %2','string',[['string','Hello '],['string','world']]],
+  'string.length':['text','Length of %1','integer',[['string','Hello']]],
+  'string.letter':['text','Letter %2 of %1','string',[['string','Hello'],['integer',1]]],
+  'string.slice':['text','Letters %2 through %3 of %1','string',[['string','Hello'],['integer',1],['integer',3]]],
+  'string.contains':['text','%1 contains %2?','boolean',[['string','Hello'],['string','ell']]],
+  'string.index_of':['text','Position of %2 in %1','integer',[['string','Hello'],['string','lo']]],
+  'string.upper':['text','Uppercase %1','string',[['string','Hello']]],
+  'string.lower':['text','Lowercase %1','string',[['string','Hello']]],
+  'string.trim':['text','Trim spaces from %1','string',[['string',' Hello ']]],
+  'string.replace':['text','In %1 replace %2 with %3','string',[['string','Hello'],['string','ell'],['string','i']]],
+  'string.from_integer':['text','Integer %1 as text','string',[['integer',42]]],
+  'string.from_real':['text','Real %1 as text','string',[['real',{real:0.5}]]],
+  'math.mod':['operators','%1 modulo %2','numeric',[['numeric',-5],['numeric',3]]],
+  'math.clamp':['operators','Clamp %1 from %2 to %3','numeric',[['numeric',7],['numeric',0],['numeric',10]]],
+  'math.lerp':['operators','Interpolate %1 to %2 by %3','real',[['real',{real:0}],['real',{real:10}],['real',{real:.5}]]],
+  'math.hypot':['operators','Hypotenuse of %1 and %2','real',[['real',{real:3}],['real',{real:4}]]],
+  'math.random_integer':['operators','Random integer from %1 to %2','integer',[['integer',1],['integer',10]]],
+  'math.random_real':['operators','Random real from %1 to %2','real',[['real',{real:0}],['real',{real:1}]]],
+};

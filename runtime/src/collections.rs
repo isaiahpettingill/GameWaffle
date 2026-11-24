@@ -1,4 +1,5 @@
 use crate::vm::Value;
+use num_bigint::BigInt;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -6,6 +7,7 @@ use std::{
 };
 
 const MAX_ENTRIES: usize = 4096;
+const MAX_COLLECTION_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
@@ -27,11 +29,26 @@ struct Property {
 #[derive(Clone, Deserialize, Serialize)]
 enum Member {
     Integer(i64),
-    Large(String),
+    Large(#[serde(with = "decimal_integer")] Rc<BigInt>),
     Real(f64),
     Boolean(bool),
     Text(Rc<str>),
     Object(Option<Rc<Object>>),
+}
+
+mod decimal_integer {
+    use super::*;
+
+    pub fn serialize<S: serde::Serializer>(value: &Rc<BigInt>, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(value)
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Rc<BigInt>, D::Error> {
+        let text=String::deserialize(deserializer)?;
+        let value=(text.len()<=2468).then(|| text.parse::<BigInt>().ok()).flatten()
+            .filter(|value| value.bits() <= 8192).ok_or_else(|| serde::de::Error::custom("Invalid collection integer"))?;
+        Ok(Rc::new(value))
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -45,6 +62,8 @@ struct Object {
 pub struct Collections {
     inventories: BTreeMap<String, Vec<Rc<Object>>>,
     arrays: BTreeMap<String, Vec<Member>>,
+    #[serde(skip)]
+    bytes: usize,
 }
 
 fn scalar(kind: &str) -> bool {
@@ -57,19 +76,19 @@ impl Schema {
             schema: &'a Schema,
             kind: &'a str,
             active: &mut BTreeSet<&'a str>,
-            done: &mut BTreeSet<&'a str>,
-            depth: usize,
-        ) -> Result<(), String> {
-            if done.contains(kind) {
-                return Ok(());
+            heights: &mut BTreeMap<&'a str, usize>,
+        ) -> Result<usize, String> {
+            if let Some(&height) = heights.get(kind) {
+                return Ok(height);
             }
-            if !active.insert(kind) || depth > 16 {
+            if !active.insert(kind) {
                 return Err("Circular or excessively nested object types".into());
             }
             let properties = schema.types.get(kind).ok_or("Unknown object type")?;
             if properties.len() > 32 {
                 return Err("Too many properties on an object".into());
             }
+            let mut height = 1;
             for (name, field) in properties {
                 if name.is_empty() || name.len() > 64 || name.contains('.') {
                     return Err("Invalid property name".into());
@@ -77,19 +96,22 @@ impl Schema {
                 if scalar(&field.kind) {
                     field.initial().map_err(str::to_owned)?;
                 } else {
-                    visit(schema, &field.kind, active, done, depth + 1)?;
+                    height = height.max(1 + visit(schema, &field.kind, active, heights)?);
                 }
             }
+            if height > 16 {
+                return Err("Object types can be nested up to 16 levels".into());
+            }
             active.remove(kind);
-            done.insert(kind);
-            Ok(())
+            heights.insert(kind, height);
+            Ok(height)
         }
         if self.types.len() > 64 || self.inventories.len() > 64 || self.arrays.len() > 64 {
             return Err("Too many collection definitions".into());
         }
-        let mut done = BTreeSet::new();
+        let mut heights = BTreeMap::new();
         for kind in self.types.keys() {
-            visit(self, kind, &mut BTreeSet::new(), &mut done, 1)?;
+            visit(self, kind, &mut BTreeSet::new(), &mut heights)?;
         }
         if self.inventories.iter().any(|(id, types)| {
             matches!(id.as_str(), "game" | "players")
@@ -166,10 +188,20 @@ impl Property {
 }
 
 impl Member {
+    // Upper bound for this member's compact JSON representation, including its tag.
+    fn saved_bytes(&self) -> usize {
+        20 + match self {
+            Self::Integer(_) | Self::Real(_) => 32,
+            Self::Boolean(_) | Self::Object(None) => 5,
+            Self::Large(value) => (value.bits() as usize * 30_103) / 100_000 + 3,
+            Self::Text(value) => string_bytes(value),
+            Self::Object(Some(value)) => value.saved_bytes(),
+        }
+    }
     fn from_value(kind: &str, value: &Value) -> Result<Self, &'static str> {
         match (kind, value) {
             ("integer", Value::Small(n)) => Ok(Self::Integer(*n)),
-            ("integer", Value::Large(n)) => Ok(Self::Large(n.to_string())),
+            ("integer", Value::Large(n)) if n.bits() <= 8192 => Ok(Self::Large(n.clone())),
             ("real", Value::Real(n)) => Ok(Self::Real(*n)),
             ("boolean", Value::Small(0 | 1)) => Ok(Self::Boolean(matches!(value, Value::Small(1)))),
             ("string", Value::Text(text)) => Ok(Self::Text(text.clone())),
@@ -179,15 +211,7 @@ impl Member {
     fn value(&self) -> Result<Value, &'static str> {
         match self {
             Self::Integer(n) => Ok(Value::Small(*n)),
-            Self::Large(n) if n.len() <= 2468 => {
-                let value = n
-                    .parse::<num_bigint::BigInt>()
-                    .map_err(|_| "Invalid collection integer")?;
-                if value.bits() > 8192 {
-                    return Err("Collection integer exceeds its limit");
-                }
-                Ok(Value::Large(Rc::new(value)))
-            }
+            Self::Large(value) => Ok(Value::Large(value.clone())),
             Self::Real(n) if n.is_finite() => Ok(Value::Real(*n)),
             Self::Boolean(b) => Ok(Value::Small(i64::from(*b))),
             Self::Text(text) if text.len() <= 4096 => Ok(Value::Text(text.clone())),
@@ -199,7 +223,28 @@ impl Member {
     }
 }
 
+fn string_bytes(value: &str) -> usize {
+    value.len() + value.bytes().map(|byte| match byte {
+        b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 8 | 12 => 1,
+        0..=31 => 5,
+        _ => 0,
+    }).sum::<usize>()
+}
+
+fn update_bytes(total: &mut usize, before: usize, after: usize) -> Result<(), &'static str> {
+    let next = *total - before + after;
+    if next > MAX_COLLECTION_BYTES && next > *total {
+        return Err("Saved collections are full. Remove objects or shorten their text.");
+    }
+    *total = next;
+    Ok(())
+}
+
 impl Object {
+    fn saved_bytes(&self) -> usize {
+        32 + string_bytes(&self.kind) + self.properties.iter()
+            .map(|(name, value)| 5 + string_bytes(name) + value.saved_bytes()).sum::<usize>()
+    }
     fn member(&self, path: &str) -> Option<&Member> {
         let (name, rest) = path.split_once('.').unwrap_or((path, ""));
         let field = self.properties.get(name)?;
@@ -241,14 +286,25 @@ impl Collections {
                 );
             }
         }
-        Ok(Self {
+        let mut collections = Self {
             inventories,
             arrays: schema
                 .arrays
                 .keys()
                 .map(|name| (name.clone(), Vec::new()))
                 .collect(),
-        })
+            bytes: 0,
+        };
+        collections.measure();
+        if collections.bytes > MAX_COLLECTION_BYTES {
+            return Err("Default collection objects exceed the save budget".into());
+        }
+        Ok(collections)
+    }
+
+    pub fn measure(&mut self) {
+        self.bytes = self.inventories.values().flatten().map(|object| object.saved_bytes() + 1).sum::<usize>()
+            + self.arrays.values().flatten().map(|value| value.saved_bytes() + 1).sum::<usize>();
     }
     pub fn command(
         &mut self,
@@ -265,13 +321,17 @@ impl Collections {
                 if numbers.len() >= MAX_ENTRIES {
                     return Err("Number array is full");
                 }
-                numbers.push(Member::from_value(&schema.arrays[id], value)?);
+                let value = Member::from_value(&schema.arrays[id], value)?;
+                update_bytes(&mut self.bytes, 0, value.saved_bytes() + 1)?;
+                numbers.push(value);
             } else if index >= numbers.len() {
                 return Err("Number array index outside the array");
             } else if op == 124 {
-                numbers[index] = Member::from_value(&schema.arrays[id], value)?;
+                let value = Member::from_value(&schema.arrays[id], value)?;
+                update_bytes(&mut self.bytes, numbers[index].saved_bytes(), value.saved_bytes())?;
+                numbers[index] = value;
             } else {
-                numbers.remove(index);
+                self.bytes -= numbers.remove(index).saved_bytes() + 1;
             }
             return Ok(());
         }
@@ -285,7 +345,9 @@ impl Collections {
                 if objects.len() >= MAX_ENTRIES {
                     return Err("Inventory is full");
                 }
-                objects.push(schema.object(path)?);
+                let object = schema.object(path)?;
+                update_bytes(&mut self.bytes, 0, object.saved_bytes() + 1)?;
+                objects.push(object);
             }
             118 => return Err("Object type is not allowed in this inventory"),
             119 if matches!(id, "game" | "players") => {
@@ -295,7 +357,7 @@ impl Collections {
                 if index >= objects.len() {
                     return Err("Inventory index outside the array");
                 }
-                objects.remove(index);
+                self.bytes -= objects.remove(index).saved_bytes() + 1;
             }
             120..=122 => {
                 let object = objects
@@ -312,9 +374,9 @@ impl Collections {
                     122 if !scalar(&property.kind) => Member::Object(None),
                     _ => return Err("Expected an object property"),
                 };
-                *Rc::make_mut(object)
-                    .member_mut(path)
-                    .ok_or("Create the parent object first")? = next;
+                let member = Rc::make_mut(object).member_mut(path).ok_or("Create the parent object first")?;
+                update_bytes(&mut self.bytes, member.saved_bytes(), next.saved_bytes())?;
+                *member = next;
             }
             _ => return Err("Unknown collection command"),
         }
@@ -339,7 +401,18 @@ impl Collections {
                     .value()
             };
         }
-        let objects = self.inventories.get(id).ok_or("Unknown inventory")?;
+        let Some(objects) = self.inventories.get(id) else {
+            let (count, kind) = match id {
+                "game" => (1, "game"),
+                "players" => (4, "player"),
+                _ => return Err("Unknown inventory"),
+            };
+            return match op {
+                0 => Ok(Value::Small(count as i64)),
+                1 => Ok(Value::Text(Rc::from(if index < count { kind } else { "" }))),
+                _ => Err("Unknown property"),
+            };
+        };
         let object = objects.get(index);
         match op {
             0 => Ok(Value::Small(objects.len() as i64)),

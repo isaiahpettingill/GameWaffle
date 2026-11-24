@@ -89,8 +89,9 @@ struct Core {
     signature: [u8; 32],
 }
 impl Core {
-    fn load(bytes: &[u8]) -> Result<Self, Error> {
-        let mut game = Game::from_cartridge(bytes)?;
+    fn load(bytes: &[u8], ports: [bool; 4]) -> Result<Self, Error> {
+        let connected = ports.iter().enumerate().fold(1, |mask, (slot, enabled)| mask | (u8::from(*enabled) << slot));
+        let mut game = Game::from_cartridge(bytes, connected, None, [0, 0])?;
         // The same cartridge starts from the same seed on every peer.
         let signature: [u8; 32] = bytes[bytes.len() - 32..].try_into().unwrap();
         game.runtime
@@ -352,7 +353,7 @@ unsafe extern "C" fn retro_load_game(info: *const GameInfo) -> bool {
         return false;
     }
     let bytes = unsafe { slice::from_raw_parts(info.data.cast(), info.size) };
-    match Core::load(bytes) {
+    match Core::load(bytes, PORTS.with_borrow(|ports| *ports)) {
         Ok(core) => {
             CORE.with_borrow_mut(|c| *c = Some(core));
             true

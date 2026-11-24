@@ -78,3 +78,19 @@ impl RoomShader {
         ])
     }
 }
+
+pub const MAX_SHADER_PASSES: usize = 8;
+pub const MAX_SHADER_WORDS: usize = 64;
+
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ShaderPass {
+    pub shader: String,
+    pub uniforms: Vec<u32>,
+}
+
+pub(crate) fn valid_pipeline(passes: &[ShaderPass]) -> bool {
+    passes.len() <= MAX_SHADER_PASSES
+        && passes.iter().all(|pass| {
+            !pass.shader.is_empty() && pass.shader.len() <= 96 && pass.uniforms.len() <= MAX_SHADER_WORDS
+        })
+}

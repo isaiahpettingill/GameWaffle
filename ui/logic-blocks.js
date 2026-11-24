@@ -1,26 +1,26 @@
-import { buttons, readings, realReadings, stringReadings, entityQueries } from '../src/schema.mjs';
+import { buttons, readings, realReadings, stringReadings, entityQueries, reporters } from '../src/schema.mjs';
 import { binaryMath, scopes, unaryMath } from '../src/script.mjs';
 
 const prefix = 'waffle_';
 export const argumentInput=index=>'arg'+index;
 const operatorLabels = {
-  add: '+', subtract: '−', multiply: '×', divide: '÷', remainder: 'mod',
+  add: '+', subtract: '−', multiply: '×', divide: '÷', remainder: 'remainder',
   equal: '=', not_equal: '≠', less: '<', less_equal: '≤', greater: '>', greater_equal: '≥', and: 'and', or: 'or',
   sqrt: 'square root', abs: 'absolute value', sin: 'sin (°)', cos: 'cos (°)', tan: 'tan (°)',
   asin: 'asin → °', acos: 'acos → °', atan: 'atan → °', atan2: 'atan2 → °',
   pow: 'power', log: 'natural log', exp: 'exponential', min: 'minimum', max: 'maximum',
-  to_real: 'integer → real', to_integer: 'boolean → integer',
+  to_real: 'integer → real', to_integer: 'to integer',
   floor: 'floor → integer', ceil: 'ceiling → integer', round: 'round → integer', trunc: 'truncate → integer',
 };
 const arithmetic = ['add', 'subtract', 'multiply', 'divide', 'remainder'];
 const comparisons = ['equal', 'not_equal', 'less', 'less_equal', 'greater', 'greater_equal'];
 const booleanOperators = ['and', 'or'];
-const conditions = ['grounded','moving','is_player'];
+const conditions = ['grounded','moving','is_player','is_clone'];
 const conversions = ['to_real','to_integer','floor','ceil','round','trunc'];
 const readingLabels = {
   id: 'ID', x: 'X position', y: 'Y position', vx: 'X velocity', vy: 'Y velocity',
   grounded: 'touching ground', other: 'other entity', other_player: 'other player',
-  damage: 'damage received', last_spawn: 'last spawned entity', answer: 'dialogue answer',
+  damage: 'damage received', last_spawn: 'last spawned entity', last_clone:'last clone', clone_source:'clone source', is_clone:'a clone', answer: 'dialogue answer',
   menu_choice:'menu choice', menu_item:'selected inventory item', menu_id:'last menu ID', used_item:'item just used', item_count: 'item count result', moving: 'moving', is_player: 'player-controlled',
   x_real:'X position', y_real:'Y position', vx_real:'X velocity', vy_real:'Y velocity', health_real:'health',
 };
@@ -72,6 +72,7 @@ const definitions = {
   none:['operators','default',[],'optional','Use the command’s default value.'],
   event_sender:['sensing','Event sender',[],'value','The entity that emitted the event.'],
   grounded:['sensing','Touching ground?',[],'condition','True when this entity is standing on a surface.'],
+  last_clone:['entities','Last clone',[],'value'],
   pressed:['sensing','%1 just pressed?',[text('pressed','x')],'condition','True on the first tick of a press.'],
   released:['sensing','%1 just released?',[text('released','x')],'condition','True on the first tick after a release.'],
   action:['sensing','%1 is down?', [text('action','jump')],'condition','True every tick while the input action is held.'],
@@ -117,6 +118,20 @@ export const collectionReporters={
   'array.at':['Number %2 in %1',['array','index']],
 };
 export const collectionReporterType=name=>'waffle_'+name.replace('.','_');
+export const reporterBlockType=name=>'waffle_reporter_'+name.replace('.','_');
+export const reporterIsField=type=>Array.isArray(type)||type==='tile';
+const reporterNames=Object.fromEntries(Object.keys(reporters).map(name=>[reporterBlockType(name),name]));
+
+export function reporterBlock(name,args,inputSlot=(_,value,fallback)=>slot(value,fallback)){
+  const fields={},inputs={};
+  reporters[name][3].forEach(([type,fallback],index)=>{
+    const key=argumentInput(index),value=args[index];
+    if(reporterIsField(type)){
+      if(value!==undefined)fields[key]=value;
+    }else inputs[key]=inputSlot(type,value??fallback,fallback);
+  });
+  return {type:reporterBlockType(name),fields,inputs};
+}
 
 export function logicDefinitions(conditionShape) {
   return Object.entries(definitions).map(([id,[style,message0,args0,output,tooltip]])=>({
@@ -132,6 +147,11 @@ export function readValue(block) {
   const field = name=>block.getFieldValue(name);
   const child = name=>readValue(block.getInputTargetBlock(name));
   const id=block.type.slice(prefix.length);
+  const reporter=reporterNames[block.type];
+  if(reporter)return {call:reporter,args:reporters[reporter][3].map(([type,fallback],index)=>{
+    const key=argumentInput(index);
+    return reporterIsField(type)?field(key):block.getInputTargetBlock(key)?child(key):fallback;
+  })};
   if(id.startsWith('entity_') && Object.hasOwn(entityQueries,id.slice(7))) {
     const query=id.slice(7);
     return {call:'entity.'+query,args:entityQueries[query][2].map(([,fallback],index)=>{
@@ -150,6 +170,7 @@ export function readValue(block) {
     case 'player': return Number(field('value'));
     case 'none':return null;
     case 'grounded': return {actor:'grounded'};
+    case 'last_clone': return {actor:'last_clone'};
     case 'event_sender': return {actor:'event_sender'};
     case 'pressed': return {pressed:field('pressed')};
     case 'released': return {released:field('released')};
@@ -186,7 +207,8 @@ export function readValue(block) {
   }
 }
 
-export function writeValue(value) {
+export function writeValue(value,imports) {
+  const input=(value,fallback)=>slot(value,fallback,imports);
   if(value===null)return {type:prefix+'none'};
   if (typeof value === 'boolean') return {type:prefix+'bool',fields:{value:String(value)}};
   if (typeof value === 'string') return {type:prefix+'string',fields:{value}};
@@ -195,34 +217,38 @@ export function writeValue(value) {
   if (value.text!==undefined) return {type:prefix+'localized',fields:{key:value.text}};
   if(value.actor==='event_sender')return {type:prefix+'event_sender'};
   if(value.actor==='grounded')return {type:prefix+'grounded'};
+  if(value.actor==='last_clone')return {type:prefix+'last_clone'};
   if(value.pressed)return {type:prefix+'pressed',fields:{pressed:value.pressed}};
   if(value.released)return {type:prefix+'released',fields:{released:value.released}};
   if(value.action)return {type:prefix+'action',fields:{action:value.action}};
   if(value.param)return {type:prefix+'param',fields:{name:value.param}};
   if(value.constant!=null)return {type:prefix+'constant',fields:{name:value.constant}};
   if(value.call){
+    const imported=imports?.has(value.call.split('.')[0]);
+    if(!imported&&Object.hasOwn(reporters,value.call) && value.args.length===reporters[value.call][3].length)
+      return reporterBlock(value.call,value.args,(_,value,fallback)=>input(value,fallback));
     if(Object.hasOwn(collectionReporters,value.call)){
       const fields={},inputs={};
       collectionReporters[value.call][1].forEach((key,i)=>{
-        if(key==='index')inputs[key]=slot(value.args[i],1);else fields[key]=value.args[i];
+        if(key==='index')inputs[key]=input(value.args[i],1);else fields[key]=value.args[i];
       });
       return {type:collectionReporterType(value.call),fields,inputs};
     }
     if(value.call==='item_key'&&typeof value.args[0]==='string')return {type:prefix+'item_key',fields:{item:value.args[0]}};
-    const query=value.call.startsWith('entity.')?value.call.slice(7):'';
+    const query=!imported&&value.call.startsWith('entity.')?value.call.slice(7):'';
     if(Object.hasOwn(entityQueries,query) && value.args.length===entityQueries[query][2].length)
       return {type:prefix+'entity_'+query,inputs:Object.fromEntries(value.args.map((arg,i)=>{
         const picker=queryPicker(query,i);
-        return ['arg'+i,picker&&typeof arg==='string'?referenceSlot(picker,arg):slot(arg,entityQueries[query][2][i][1])];
+        return ['arg'+i,picker&&typeof arg==='string'?referenceSlot(picker,arg):input(arg,entityQueries[query][2][i][1])];
       }))};
-    const op=value.call.startsWith('math.')?value.call.slice(5):'';
+    const op=!imported&&value.call.startsWith('math.')?value.call.slice(5):'';
     if(unaryMath.includes(op) && value.args.length===1)
-      return {type:prefix+(conversions.includes(op)?'conversion':'math_unary'),fields:{operation:op},inputs:{left:slot(value.args[0])}};
+      return {type:prefix+(conversions.includes(op)?'conversion':'math_unary'),fields:{operation:op},inputs:{left:input(value.args[0])}};
     if(binaryMath.includes(op) && value.args.length===2)
-      return {type:prefix+'math_binary',fields:{operation:op},inputs:{left:slot(value.args[0]),right:slot(value.args[1])}};
+      return {type:prefix+'math_binary',fields:{operation:op},inputs:{left:input(value.args[0]),right:input(value.args[1])}};
     return {type:prefix+'function_call',fields:{name:value.call},extraState:{name:value.call,
       parameters:value.args.map((_,i)=>({name:'Argument '+(i+1),type:'integer'}))},
-      inputs:Object.fromEntries(value.args.map((arg,i)=>[argumentInput(i),slot(arg)]))};
+      inputs:Object.fromEntries(value.args.map((arg,i)=>[argumentInput(i),input(arg)]))};
   }
   if (value.item != null) return {type:prefix+'item',fields:{item:value.item}};
   if (value.get != null) return {type:prefix+'get',fields:{scope:value.scope,name:value.get}};
@@ -231,10 +257,10 @@ export function writeValue(value) {
     return {type:prefix+type,fields:{actor:value.actor}};
   }
   if (value.button != null) return {type:prefix+'button',fields:{button:value.button}};
-  if(unaryMath.includes(value.calc))return writeValue({call:'math.'+value.calc,args:[value.left]});
-  if(binaryMath.includes(value.calc))return writeValue({call:'math.'+value.calc,args:[value.left,value.right]});
+  if(unaryMath.includes(value.calc))return writeValue({call:'math.'+value.calc,args:[value.left]},imports);
+  if(binaryMath.includes(value.calc))return writeValue({call:'math.'+value.calc,args:[value.left,value.right]},imports);
   const logical = value.calc==='not' || booleanOperators.includes(value.calc);
-  const child = val=>slot(val===undefined?(logical?false:0):val);
+  const child = val=>input(val===undefined?(logical?false:0):val);
   if(value.calc==='add' && [value.left,value.right].some(operand=>typeof operand==='string'||operand?.text!==undefined||operand?.scope?.endsWith('_string')))
     return {type:prefix+'join',inputs:{left:child(value.left),right:child(value.right)}};
   if (value.calc === 'not') return {type:prefix+'not',inputs:{left:child(value.left)}};
@@ -243,10 +269,10 @@ export function writeValue(value) {
   return {type:prefix+type,fields:{operation:value.calc},inputs:{left:child(value.left),right:child(value.right)}};
 }
 
-export function slot(value, fallback) {
-  const block = writeValue(value);
+export function slot(value, fallback, imports) {
+  const block = writeValue(value,imports);
   if (value===null || typeof value!=='object' || value.real!==undefined) return {shadow:block};
-  return {...(fallback!==undefined?{shadow:writeValue(fallback)}:{}),block};
+  return {...(fallback!==undefined?{shadow:writeValue(fallback,imports)}:{}),block};
 }
 
 export const logicStatements = new Set(['if','while','repeat','set','change','wait','call']);

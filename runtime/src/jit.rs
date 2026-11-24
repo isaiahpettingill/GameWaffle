@@ -1,4 +1,10 @@
-use std::cell::{Cell, OnceCell};
+use std::{cell::{Cell, OnceCell}, collections::HashMap, rc::Rc};
+
+pub const SUPPORTED: bool = cfg!(any(
+    target_arch = "wasm32",
+    all(any(target_arch = "x86_64", target_arch = "aarch64"),
+        any(target_os = "linux", target_os = "macos", target_os = "windows")),
+));
 
 #[derive(Clone, Copy)]
 pub enum Op {
@@ -39,30 +45,58 @@ pub struct Region {
     pub inputs: Box<[u16]>,
     pub outputs: Box<[u16]>,
     hits: Cell<u8>,
-    compiled: OnceCell<Option<backend::Code>>,
+    signature: Vec<[u64; 2]>,
+    compiled: OnceCell<Option<Rc<backend::Code>>>,
+}
+
+#[derive(Default)]
+pub struct Cache {
+    kernels: HashMap<Vec<[u64; 2]>, Rc<backend::Code>>,
+    compile_available: bool,
+}
+
+impl Cache {
+    pub fn begin_tick(&mut self) {
+        self.compile_available = true;
+    }
 }
 
 impl Region {
     pub fn new(steps: Vec<Step>, inputs: Vec<u16>, outputs: Vec<u16>) -> Self {
+        let signature = steps.iter().map(|step| match *step {
+            Step::Real { dst, value } => [u64::from(dst), value.to_bits()],
+            Step::Math { dst, lhs, rhs, op } => [u64::from(dst) | 1 << 16,
+                u64::from(lhs) | u64::from(rhs) << 16 | (op as u64) << 32],
+        }).collect();
         Self {
             steps: steps.into_boxed_slice(),
             inputs: inputs.into_boxed_slice(),
             outputs: outputs.into_boxed_slice(),
             hits: Cell::new(0),
+            signature,
             compiled: OnceCell::new(),
         }
     }
 
-    pub fn run(&self, registers: &mut [f64; 64]) -> bool {
+    pub fn run(&self, registers: &mut [f64; 64], cache: &mut Cache) -> bool {
         const HOT: u8 = 24;
         let hits = self.hits.get();
         if hits < HOT {
             self.hits.set(hits + 1);
             return false;
         }
-        self.compiled
-            .get_or_init(|| backend::Code::compile(&self.steps))
-            .as_ref()
+        if self.compiled.get().is_none() {
+            if let Some(code) = cache.kernels.get(&self.signature) {
+                let _ = self.compiled.set(Some(Rc::clone(code)));
+            } else if std::mem::take(&mut cache.compile_available) {
+                let compiled = backend::Code::compile(&self.steps).map(Rc::new);
+                if let Some(code) = &compiled && cache.kernels.len() < 256 {
+                    cache.kernels.insert(self.signature.clone(), Rc::clone(code));
+                }
+                let _ = self.compiled.set(compiled);
+            }
+        }
+        self.compiled.get().and_then(Option::as_ref)
             .is_some_and(|code| code.run(registers))
     }
 }

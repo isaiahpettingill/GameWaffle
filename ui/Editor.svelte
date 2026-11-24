@@ -3,10 +3,13 @@
   import {Network,Blocks,Images,Settings2,Play,DoorOpen as RoomIcon,Layers3,Search,SquareUserRound,Plus} from '@lucide/svelte';
   import {roomShaders} from '../src/room-shaders.mjs';
   const viewIcons={world:Network,room:RoomIcon,actors:SquareUserRound,blocks:Blocks,assets:Images,game:Settings2};
-  import { buttons, platformGravity, roomBorder } from '../src/schema.mjs';
+  import { buttons, platformGravity } from '../src/schema.mjs';
+  import {roomSettingKeys} from '../src/room-script.mjs';
+  import {propertyAliases} from '../src/collections.mjs';
   import PagedList from './PagedList.svelte';
+  import AssetLibrary from './AssetLibrary.svelte';
+  import {tileAssetTitle} from '../src/asset-types.mjs';
   let projectPath=$state(''),filter=$state(''),instanceFilter=$state('');
-  import InputMap from './InputMap.svelte';
   import Sections from './Sections.svelte';
   import World from './World.svelte';
   import {draftFile} from './recovery.js';
@@ -19,8 +22,8 @@
   }
   import ScriptPanel from './ScriptPanel.svelte';
   import Localization from './Localization.svelte';
-  import GameMenus from './GameMenus.svelte';
   import ComponentPicker from './ComponentPicker.svelte';
+  let bitfontsPanel=$state();
   import Bitfonts from './Bitfonts.svelte';
   import Modal from './Modal.svelte';
   import SearchSelect from './SearchSelect.svelte';
@@ -30,7 +33,7 @@
   import ExportDialog from './ExportDialog.svelte';
   import Physics from './Physics.svelte';
   import { tileSizes } from '../src/script.mjs';
-  import { unpack, decodeCbor } from '../src/cartridge.mjs';
+  import { unpack, decodeCbor, encodeCbor } from '../src/cartridge.mjs';
   import {growSeamNeighbors} from '../src/room-geometry.mjs';
   import RoomMap from './RoomMap.svelte';
   import { instanceNames, newInstanceName, spriteDragType } from '../src/instances.mjs';
@@ -40,15 +43,12 @@
     dirty=$state(false), busy=$state(false), error=$state(''), status=$state('Opening project…'), newId=$state(''),
     newSource=$state('');
   let importFile=$state.raw(null), filePicker=$state(), assetError=$state('');
-  let createKind=$state('sprite'), roomOperation=$state(''), newRoomName=$state(''), newRoomView=$state('platformer');
+  let roomOperation=$state(''), newRoomName=$state(''), newRoomView=$state('platformer');
   let pendingTileSize=$state(null), collisionLayer=$state(0);
-  const createLabel=$derived(createKind==='sprite'?'entity':createKind==='tile'?'tile set':'sound');
-  const assetLabel=$derived(assetKind==='audio'?'sound':assetKind==='sprite'?'entity':'tile set');
   const tileSets=$derived(groupTiles(project?.tiles??{}));
-  const sources=$derived(createKind==='audio'?audioFiles:artFiles);
   let tileArt=$state.raw({}), spriteArt=$state.raw({}), previewModes=$state.raw({});
   let historyVersion=$state(0), selectedEntity=$state(-1), roomPanel=$state('layers');
-  let scriptPanel=$state(),projectTimer,projectWrite;
+  let scriptPanel=$state(),assetLibrary=$state(),projectTimer,projectWrite;
   let savedProject=$state(''), currentProject='';
   let previewEntries=new Map(), previewImages=new Map(), previewKey;
   const previewImage=url=>previewImages.get(url);
@@ -65,11 +65,7 @@
   let sprite=$derived(project?.sprites?.[spriteId]), tile=$derived(project?.tiles?.[tileId]);
   let inspector=$derived(assetKind==='tile' ? tile : sprite);
   let artFiles=$derived(assets.filter(file=>/\.(ase|aseprite|png)$/i.test(file)));
-  let audioFiles=$derived(assets.filter(file=>/\.(wav|ogg|oga|opus|qoa|mid|midi)$/i.test(file)));
-  let soundFonts=$derived(assets.filter(file=>/\.sf2$/i.test(file)));
-  let newSoundFont=$state(''), soundFontFile=$state.raw(null), soundFontPicker=$state();
-  const midiSource=$derived(createKind==='audio'&&/\.midi?$/i.test(newSource));
-  let stageFilter=$state(''), sourceFilter=$state(''),placeAs=$state(''),sourcePicker=$state();
+  let stageFilter=$state(''),placeAs=$state('');
   let nameDialog=$state.raw(null),newName=$state('');
   let gameSection=$state('Game script'),instanceSection=$state('Placement'),mobilePane=$state('Editor');
   const tabs=[['world','World'],['room','Room'],['actors','Entities'],['blocks','Code'],['assets','Assets'],['game','Game']];
@@ -88,6 +84,8 @@
   let exportDialog, fileMenu;
   const textEntries=$derived(project?.localization?.tables?.[project?.localization?.locale]??{});
   const textKeys=$derived(Object.keys(textEntries).sort());
+  const gameControls=$derived(gameScript?.declarations?.controls??project?.controls??{});
+  const gameMenus=$derived(gameScript?.declarations?.menus??project?.menus??{});
   const componentLabels=$derived({
     ...Object.fromEntries([...Object.values(project?.sprites??{}).flatMap(type=>type.components??[]),
       ...Object.values(project?.rooms??{}).flatMap(room=>(room.entities??[]).flatMap(entity=>entity.components??[]))].map(id=>[id,id])),
@@ -101,6 +99,7 @@
     (project.components??={})[id]=label;
     return id;
   }
+  let shaderDefinitions=$state.raw({});
   let gameScript=$state.raw(null), gameCode=$state(false), codeTile=$state(''), codeVariant=$state(0);
   let editTileVariant=$state('0');
   const activeTileCode=$derived(Boolean(codeTile));
@@ -116,10 +115,14 @@
     fields:[...new Set(['health','label','ready','score','speed',...Object.keys(gameGlobals),...Object.keys(project?.entityFields??{})])],
     fieldsLabels:project?.entityFields??{},variableLabels:project?.variableLabels??{},
     rooms:Object.keys(project?.rooms??{}),
+    tiles:Object.keys(project?.tiles??{}),
+    tileLabels:Object.fromEntries(Object.entries(project?.tiles??{}).map(([id,tile])=>[id,tile.title??tile.tag??id])),
     sounds:Object.keys(project?.audio??{}),
+    shaders:shaderDefinitions,
     backgrounds:artFiles.filter(file=>!art[file]?.error),
     backgroundsLabels:Object.fromEntries(artFiles.map(file=>[file,file.split('/').at(-1)])),
     collections:gameScript?.collections,
+    propertyAliases:propertyAliases(gameGlobals,gameFlags,project?.items),
     events:Object.keys(gameEvents),eventsLabels:gameEvents,gameConstants:gameScript?.constants??{},
     fonts:['builtin',...Object.keys(project?.bitfonts??{})],
     fontsLabels:{builtin:'Built-in',...Object.fromEntries(Object.entries(project?.bitfonts??{}).map(([id,font])=>[id,font.name??id]))},
@@ -277,7 +280,7 @@
         const names=instanceNames(map.entities);
         map.entities.forEach((entity,index)=>{entity.name=names[index];});
       }
-      projectPath=value.path;project=value.project;gameScript=value.gameScript; roomBackgrounds=value.roomBackgrounds; assets=value.assets; art=value.art; revision=value.revision;
+      projectPath=value.path;project=value.project;gameScript=value.gameScript; shaderDefinitions=value.shaderDefinitions??{}; roomBackgrounds=value.roomBackgrounds; assets=value.assets; art=value.art; revision=value.revision;
       currentProject=savedProject=JSON.stringify(value.project);
       recovery=await draft.read();
       if(recovery===savedProject){recovery=null;await draft.write(null);}
@@ -314,6 +317,7 @@
           art=current.art;
           if(!recovery)importNewTags(previousArt);
         }
+        if(JSON.stringify(shaderDefinitions)!==JSON.stringify(current.shaderDefinitions))shaderDefinitions=current.shaderDefinitions??{};
         if(JSON.stringify(roomBackgrounds)!==JSON.stringify(current.roomBackgrounds))roomBackgrounds=current.roomBackgrounds;
         if(current.previewKey!==previewKey)await updatePreviews(current.previewKey);
         revision=current.revision;
@@ -371,11 +375,19 @@
     if(!active.length)return;
     const entry=active.at(-1);
     if(entry.id){
+      if(!await saveProject())return;
       busy=true;error='';
       try{
-        await request('./api/file-history','POST',{id:entry.id,back});
+        const restored=await request('./api/file-history','POST',{id:entry.id,back});
         active.pop();(back?redo:undo).push(entry);historyVersion++;scriptVersion++;
         const latest=await request('./api/project');
+        if(restored.manifestChanged){
+          savedProject=JSON.stringify(latest.project);
+          applyProject(savedProject,false);
+          gameScript=latest.gameScript;
+          roomBackgrounds=latest.roomBackgrounds??{};
+        }
+        shaderDefinitions=latest.shaderDefinitions??{};
         assets=latest.assets;art=latest.art;revision=latest.revision;await updatePreviews(latest.previewKey);
       }catch(e){error=e.message;}finally{busy=false;}
       return;
@@ -460,14 +472,19 @@
       set(project,'coverImage',result.path);
     }catch(err){error=err.message;}finally{importingCover=false;}
   }
-  function setView(view){
-    if(view===roomView)return;
-    // Store the current settings before changing defaults associated with the view.
-    editRoom(next=>{
-      next.ySort??=roomView==='top_down';
-      next.border??=roomBorder(room,roomView==='top_down');
-      next.view=view;
-    },'room view');
+  async function setView(view){
+    if(view===roomView||!await saveEdits())return;
+    busy=true;
+    try{
+      const result=await request('./api/room-view/'+encodeURIComponent(roomId),'PUT',{view});
+      project=result.project;
+      savedProject=JSON.stringify(project);
+      revision=result.revision;
+      updateDirty(undefined,false);
+      recordFile(result.edit,'room view');
+      scriptVersion++;
+      await updatePreviews(result.previewKey);
+    }catch(err){error=err.message;}finally{busy=false;}
   }
   function openResize(){
     dimensions={cols:room.cols,rows:room.rows};
@@ -617,16 +634,26 @@
   async function openDefinition(id,view='actors'){
     if(await selectSprite(id))openTab(view);
   }
-  function openAssets(kind,adding=false){
+  function openEntityForm(){
     if(busy)return;
-
-    if(adding){
-      createKind=kind;
-      newId='';newSource='';importFile=null;newSoundFont='';soundFontFile=null;assetError='';addForm=true;
-    }else{
-      assetKind=kind;
-      openTab(kind==='sprite'?'actors':'assets');
-    }
+    newId='';newSource='';importFile=null;assetError='';addForm=true;
+  }
+  function openTiles(){
+    assetKind='tile';
+    openTab('assets');
+  }
+  async function uploadTiles(){
+    if(busy)return;
+    openTiles();
+    await tick();
+    assetLibrary?.pick('tile');
+  }
+  async function selectTileset(path,id){
+    openTiles();
+    tileId=id;
+    editTileVariant='0';
+    await tick();
+    assetLibrary?.select(path);
   }
   function chooseInitialLayer(map){
     const layers=(map?.layers??[]).map((item,index)=>({item,index}));
@@ -669,11 +696,15 @@
     if(isRoom){
       const background=data.events?.init?.findLast(row=>row.op==='set_room_background_image')?.image;
       if(background==null)delete roomBackgrounds[id];else roomBackgrounds[id]=background;
+      const baseline=JSON.parse(savedProject);
+      for(const key of roomSettingKeys){delete project.rooms[id][key];if(baseline.rooms[id])delete baseline.rooms[id][key];}
+      savedProject=JSON.stringify(baseline);
+      updateDirty(undefined,false);
     }
     if(isGame){
       gameScript={declarations:data.declarations,constants:data.constants,collections:data.collections};
       const baseline=JSON.parse(savedProject);
-      for(const key of ['flags','events','variables']){delete project[key];delete baseline[key];}
+      for(const key of ['flags','events','variables','controls','menus','camera','minimap']){delete project[key];delete baseline[key];}
       project.gameScript??='scripts/game.cbor';
       baseline.gameScript=project.gameScript;
       savedProject=JSON.stringify(baseline);
@@ -821,51 +852,30 @@
     for(const [id,tile] of Object.entries(tiles))(sets[tile.source]??=[]).push(id);
     return sets;
   }
-  function setName(path){return path.split('/').pop().replace(/\.[^.]+$/,'');}
-  function assetCollection(){
-    return createKind==='tile'?project.tiles:createKind==='sprite'?project.sprites:project.audio;
-  }
+  function setName(path){return project.assetInfo?.[path]?.name??path.split('/').pop().replace(/\.[^.]+$/,'');}
   function selectSource(path,file=null){
     importFile=file;newSource=path;assetError='';
     if(!newId)newId=path.split('/').at(-1).replace(/\.[^.]+$/,'');
   }
-  async function createAsset(){
+  async function createEntity(){
     if(busy)return;
     const label=newId.trim();
-    if(!newSource||!label||midiSource&&!newSoundFont)return;
-    const kind=createKind;
-    const id=resourceName(label,kind==='sprite'?'entity':kind==='tile'?'tiles':'sound',[assetCollection()??{}]);
+    if(!newSource||!label)return;
+    const id=resourceName(label,'entity',[project.sprites??{}]);
     busy=true;assetError='';
     try{
       if(importFile){
-        const response=await fetch('./api/import?name='+encodeURIComponent(importFile.name)+'&kind='+kind,{method:'POST',body:importFile});
+        const response=await fetch('./api/import?name='+encodeURIComponent(importFile.name)+'&kind=sprite',{method:'POST',body:importFile});
         const result=await response.json();
         if(!response.ok)throw Error(result.error);
         recordFile(result.edit);newSource=result.path;importFile=null;
         const current=await request('./api/project');assets=current.assets;art=current.art;
       }
-      if(midiSource&&soundFontFile){
-        const response=await fetch('./api/import?name='+encodeURIComponent(soundFontFile.name)+'&kind=audio',{method:'POST',body:soundFontFile});
-        const result=await response.json();
-        if(!response.ok)throw Error(result.error);
-        recordFile(result.edit);newSoundFont=result.path;soundFontFile=null;
-        assets=(await request('./api/project')).assets;
-      }
       if(art[newSource]?.error)throw Error(art[newSource].error);
-      if(kind==='tile'){
-        const source=art[newSource],size=project.tileSize??24;
-        if(source?.width!==size||source?.height!==size)throw Error(`Tile art must be ${size}×${size} pixels.`);
-        tileId=addTags(newSource,id).first;
-      }else if(kind==='audio'){
-        (project.audio??={})[id]={source:newSource,title:label,...(midiSource?{soundFont:newSoundFont}:{})};
-      }else{
-        (project.sprites??={})[id]={source:newSource,title:label,physics:{},gravityMode:'room'};
-        await selectSprite(id);
-      }
+      (project.sprites??={})[id]={source:newSource,title:label,physics:{},gravityMode:'room'};
+      await selectSprite(id);
       mark('creation of '+label);
-      if(kind==='tile')await updatePreviews();
       addForm=false;
-      openAssets(kind);
     }catch(err){assetError=String(err.message??err);}
     finally{busy=false;}
   }
@@ -907,16 +917,60 @@
       const base=tag?stem+'-'+(slug||String(index+1)):stem;
       let id=base,n=2;
       while(Object.hasOwn(collection,id))id=base+'-'+n++;
-      collection[id]={source:path,setPrefix:stem,tag,physics:{}};
+      const name=project.assetInfo?.[path]?.name;
+      collection[id]={source:path,setPrefix:stem,tag,physics:{},...(name?{title:tileAssetTitle(name,tag)}:{})};
       added=true;
       first??=id;
     }
     return {first,added};
   }
-  function toggleCompression(id,enabled){
-    const item=project.audio[id];
-    project.audio[id]=typeof item==='string'?{source:item,compress:enabled}:{...item,compress:enabled};
-    mark();
+  async function uploadLibraryAsset(data){
+    if(!await saveEdits())throw Error('Save the current project or script before loading assets');
+    busy=true;
+    try{
+      const response=await fetch('./api/assets',{method:'POST',body:encodeCbor(data)});
+      return await applyLibraryAsset(response,'import of '+data.name,'Asset loaded');
+    }finally{busy=false;}
+  }
+  async function saveLibraryShader(data){
+    if(!await saveEdits())throw Error('Save the current project or script before saving the shader');
+    busy=true;
+    try{
+      const response=await fetch('./api/shaders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      return await applyLibraryAsset(response,'shader edit in '+data.name,'Shader saved');
+    }finally{busy=false;}
+  }
+  async function applyLibraryAsset(response,label,message){
+    const result=await response.json();
+    if(!response.ok)throw Error(result.error);
+    project=result.project;
+    assets=result.assets;art=result.art;revision=result.revision;
+    shaderDefinitions=result.shaderDefinitions??{};
+    savedProject=JSON.stringify(project);
+    updateDirty(undefined,false);
+    recordFile(result.edit,label);
+    await updatePreviews(result.previewKey);
+    status=message;
+    return result.path;
+  }
+  function editLibraryAsset(asset,field,value){
+    const info=(project.assetInfo??={})[asset.path]??={kind:asset.kind,name:asset.name,tags:asset.tags};
+    info[field]=value;
+    if(field==='name')for(const link of asset.linked){
+      const collection={shader:'shaders',sprite:'sprites',tile:'tiles',font:'bitfonts',sound:'audio'}[link.kind];
+      if(!collection)continue;
+      const object=project[collection]?.[link.id];
+      if(typeof object==='string')project[collection][link.id]={source:object,title:value};
+      else if(object)object[link.kind==='font'?'name':'title']=link.kind==='tile'?tileAssetTitle(value,object.tag):value;
+    }
+    mark(field==='name'?'asset rename':'asset tags');
+  }
+  async function openLibraryAsset(link){
+    if(link.kind==='sprite')openDefinition(link.id);
+    else if(link.kind==='tile'){
+      tileId=link.id;editTileVariant='0';assetKind='tile';
+      if(innerWidth<=700)mobilePane='Settings';
+    }else if(link.kind==='font'){gameSection='Bitfonts';openTab('game');await tick();bitfontsPanel?.open(link.id);}
   }
   function set(target,key,value){
     if(value===''||value===undefined)delete target[key];else target[key]=value;
@@ -951,7 +1005,6 @@
       <button disabled={scriptDirty||!historyStatus.redo} onclick={()=>restoreEdit(false)}>{historyStatus.redo?'Redo '+historyStatus.redo:'Redo'}</button>
     </div></details>
     <details name="studio-menu" class="export-menu"><summary>Tools</summary><div class="card">
-      <button onclick={()=>{gameSection='Controls';openTab('game');}}>Input map</button>
       <button onclick={debugRoom} disabled={busy||!project}>Debug room</button>
       <button onclick={rebuild} disabled={busy||!project}>Rebuild assets</button>
         <button onclick={()=>{updatesOpen=!updatesOpen;if(updatesOpen)checkReleases();}}>Updates</button>
@@ -1004,7 +1057,7 @@
         {/snippet}</PagedList>
       </div>
       <div class="category">
-        <div class="heading row"><h3>Entities</h3><button class="small-button icon-button" title="Create entity" aria-label="Create entity" onclick={()=>openAssets('sprite',true)}><Plus size={14}/></button></div>
+        <div class="heading row"><h3>Entities</h3><button class="small-button icon-button" title="Create entity" aria-label="Create entity" onclick={openEntityForm}><Plus size={14}/></button></div>
         <PagedList items={Object.keys(project.sprites??{})} label="entities" query={filter} text={id=>project.sprites[id].title??id}>{#snippet children(id)}
           <div class="actor-entry"><button class="item" class:selected={tab==='room' ? mapTool==='spawn' && placementSprite===id : spriteId===id && (tab==='actors'||(tab==='blocks'&&!activeRoomCode))}
             aria-pressed={tab==='blocks'?!activeRoomCode&&spriteId===id:undefined}
@@ -1016,10 +1069,10 @@
         {/snippet}</PagedList>
       </div>
       {#if tab!=='room'}<div class="category compact">
-        <div class="heading row"><h3>Tile sets</h3><button class="small-button icon-button" title="Add tile set" aria-label="Add tile set" onclick={()=>openAssets('tile',true)}><Plus size={14}/></button></div>
-        <PagedList items={Object.keys(tileSets)} label="tile sets" query={filter}>{#snippet children(path)}
+        <div class="heading row"><h3>Tile sets</h3><button class="small-button icon-button" title="Add tile set" aria-label="Add tile set" onclick={uploadTiles}><Plus size={14}/></button></div>
+        <PagedList items={Object.keys(tileSets)} label="tile sets" query={filter} text={path=>setName(path)+' '+path}>{#snippet children(path)}
           {@const first=tileSets[path][0]}
-          <button class="item" title={path} class:selected={tab==='assets' && assetKind==='tile' && tile?.source===path} onclick={()=>{openAssets('tile');tileId=first;}}>
+          <button class="item" title={path} class:selected={tab==='assets' && assetKind==='tile' && tile?.source===path} onclick={()=>selectTileset(path,first)}>
             {#if tileArt[first]?.[0]}<img src={tileArt[first][0]} alt="">{:else}<Layers3 size={14}/>{/if}<span>{setName(path)}</span>
           </button>
         {/snippet}</PagedList>
@@ -1051,13 +1104,13 @@
             {tileArt} {spriteArt} {previewModes} {previewImage} backgroundUrl={roomBackground?'./api/room-art?path='+encodeURIComponent(roomBackground)+'&revision='+(art[roomBackground]?.revision??''):undefined} {layerIndex} bind:selectedEntity bind:tileId bind:spriteId={placementSprite} bind:tool={mapTool} bind:placeAs {busy}
             undoLabel={historyStatus.undo} redoLabel={historyStatus.redo}
             onUndo={()=>restoreEdit(true)} onRedo={()=>restoreEdit(false)} onEdit={replaceRoom}
-            onLayer={chooseLayer} onSprites={inspect=>{roomPanel='instances';if(inspect)mobilePane='Settings';if(actor)selectSprite(actor.sprite);}} onAssets={()=>openAssets('tile')}
+            onLayer={chooseLayer} onSprites={inspect=>{roomPanel='instances';if(inspect)mobilePane='Settings';if(actor)selectSprite(actor.sprite);}} onAssets={openTiles}
             onPlay={playtest} previewOnly={tab==='blocks'} />
         {/key}
         {/if}
         {#if tab==='blocks'}
           <section class="stage-actors card" aria-label="Entities on the stage">
-            <div class="heading row"><h2>Entities</h2><button class="small-button icon-button" aria-label="Create entity" title="Create entity" onclick={()=>openAssets('sprite',true)}><Plus size={14}/></button></div>
+            <div class="heading row"><h2>Entities</h2><button class="small-button icon-button" aria-label="Create entity" title="Create entity" onclick={openEntityForm}><Plus size={14}/></button></div>
             {#if Object.keys(project.sprites??{}).length>8}
               <input type="search" bind:value={stageFilter} aria-label="Find an entity type" placeholder="Find an entity type…">
             {/if}
@@ -1085,7 +1138,7 @@
                 for(const entity of map.entities)if(entity.sprite===spriteId)delete entity.standardMovement;
               }
               updateDirty('movement settings for '+(sprite.title??spriteId));
-            }} sprite={gameCode?'game':activeTileCode?codeTile:activeRoomCode?codeRoomId:spriteId} sprites={Object.keys(project.sprites??{})} animations={[...new Set(['default',...(art[sprite?.source]?.tags??[])])]} items={Object.keys(project.items??{})} {textKeys} menus={Object.keys(project.menus??{})} references={activeRoomCode?{...blockReferences,names:instanceNames(codeRoom.entities??[])}:blockReferences} actions={[...buttons,...Object.keys(project.controls??{})]} bind:dirty={scriptDirty} bind:status={scriptStatus} onSave={saveScript} />{/key}
+            }} sprite={gameCode?'game':activeTileCode?codeTile:activeRoomCode?codeRoomId:spriteId} sprites={Object.keys(project.sprites??{})} animations={[...new Set(['default',...(art[sprite?.source]?.tags??[])])]} items={Object.keys(project.items??{})} {textKeys} menus={Object.keys(gameMenus)} references={activeRoomCode?{...blockReferences,names:instanceNames(codeRoom.entities??[])}:blockReferences} actions={[...buttons,...Object.keys(gameControls)]} bind:dirty={scriptDirty} bind:status={scriptStatus} onSave={saveScript} />{/key}
         {:else}<p class="empty card">Create an entity to edit its script.</p>{/if}
         </section>
       </div>
@@ -1095,15 +1148,11 @@
       {:else if tab==='game'}
         <section class="card asseteditor">
           <h2>Game</h2>
-          <Sections labels={['Game script','Room defaults','Controls','Text','Menus','Bitfonts','Project assets']} bind:value={gameSection}/>
+          <Sections labels={['Game script','Room defaults','Text','Bitfonts','Project assets']} bind:value={gameSection}/>
           {#if gameSection==='Game script'}
             <button class="primary" onclick={openGameScript}><Blocks size={15}/>Open Game script</button>
-          {:else if gameSection==='Controls'}
-            <InputMap controls={project.controls??{}} onChange={controls=>set(project,'controls',controls)}/>
-          {:else if gameSection==='Menus'}
-            <GameMenus menus={project.menus??{}} entries={textEntries} onChange={value=>set(project,'menus',value)}/>
           {:else if gameSection==='Bitfonts'}
-            <Bitfonts fonts={project.bitfonts??{}} active={project.activeBitfont??(project.font?'legacy':'builtin')}
+            <Bitfonts bind:this={bitfontsPanel} fonts={project.bitfonts??{}} active={project.activeBitfont??(project.font?'legacy':'builtin')}
               legacy={project.font} sources={assets} onImport={data=>{recordFile(data.edit,'font source import');if(!assets.includes(data.path))assets=[...assets,data.path].sort();}}
               onSelect={value=>set(project,'activeBitfont',value)}
               onSave={(id,config,activate)=>{
@@ -1164,64 +1213,18 @@
             </div>
           {/if}
         </section>
-      {:else if tab==='actors'||tab==='assets'}
+      {:else if tab==='assets'}
+        <AssetLibrary bind:this={assetLibrary} {project} files={assets} {shaderDefinitions} room={roomId} initialKind={assetKind==='tile'?'tile':''}
+          onUpload={uploadLibraryAsset} onEdit={editLibraryAsset} onOpen={openLibraryAsset} onSaveShader={saveLibraryShader}/>
+      {:else if tab==='actors'}
         <section class="card asseteditor">
-          <div class="row heading">
-            <h2>{tab==='actors'?'Entities':'Assets'}</h2>
-            {#if tab==='assets'}<div class="row">
-              {#each [['source','Source files'],['tile','Tiles'],['audio','Sounds']] as [id,label]}
-                <button class:selected={assetKind===id} aria-pressed={assetKind===id} onclick={()=>openAssets(id)}>{label}</button>
-              {/each}
-            </div>{/if}
-          </div>
-          {#if assetKind==='source'}
-            <div class="field-row"><label>Find source files<input type="search" bind:value={sourceFilter}></label>
-              <button onclick={()=>sourcePicker.click()}>Import file…</button>
-              <input hidden type="file" bind:this={sourcePicker} accept=".ase,.aseprite,.png,.wav,.qoa,.ogg,.oga,.opus,.mid,.midi,.sf2" onchange={async e=>{
-                const input=e.currentTarget,file=input.files[0];if(!file)return;
-                try{const r=await fetch('./api/import?name='+encodeURIComponent(file.name),{method:'POST',body:file});const result=await r.json();if(!r.ok)throw Error(result.error);recordFile(result.edit);await checkAssets();}
-                catch(err){error=err.message;}finally{input.value='';}
-              }}></div>
-            <PagedList items={assets} query={sourceFilter} label="source files">{#snippet children(file)}<p>{file}</p>{/snippet}</PagedList>
-          {:else}
-          <div class="row asset-bar">
-            <h3>{assetKind==='audio'?'Sounds':assetKind==='tile'?'Tiles':'Entities'}</h3>
-            <button onclick={()=>openAssets(assetKind,true)}><Plus size={16}/>New {assetLabel}…</button>
-          </div>
-          {#if assetKind==='tile'&&tileId&&tileArt[tileId]?.length}
-            {@const variant=Math.min(Number(editTileVariant),tileArt[tileId].length-1)}
-            <div class="row">
-              <SearchSelect label="Tile script variant" value={String(variant)}
-                options={tileArt[tileId].map((_,index)=>({value:String(index),label:'Variant '+(index+1)}))}
-                onChange={value=>editTileVariant=value}/>
-              <button onclick={()=>openTileScript(tileId,variant)}>Edit tile script</button>
-            </div>
-          {/if}
-          {#if assetKind==='audio'}
-            {#each Object.entries(project.audio??{}) as [id,file]}
-              {@const source=typeof file==='string'?file:file.source}
-              <div class="audio-line row"><strong>{file.title??id}</strong> <small>{source}</small>
-                {#if file.soundFont}<small>{file.soundFont.split('/').at(-1)}</small>{/if}
-                {#if /\.wav$/i.test(source)}<label class="check"><input type="checkbox" checked={typeof file==='string'||file.compress!==false}
-                  onchange={e=>toggleCompression(id,e.currentTarget.checked)}> QOA</label>{/if}
-              </div>
-            {:else}<p class="muted">Add an audio file to use it in the game.</p>{/each}
-          {:else}
-            {#if assetKind==='sprite'}
-              <div class="field-row"><label>Entity type<select value={spriteId} onchange={e=>selectSprite(e.currentTarget.value)}>{#each Object.keys(project.sprites??{}) as id}<option value={id}>{id}</option>{/each}</select></label>
-                {#if spriteId}<button onclick={()=>openDefinition(spriteId,'blocks')}><Blocks size={15}/>Open script</button>{/if}</div>
-            {:else}
-              <label class="stack">Tile set<select value={tile?.source??''} onchange={e=>tileId=tileSets[e.currentTarget.value][0]}>{#each Object.keys(tileSets) as path}<option value={path}>{setName(path)}</option>{/each}</select></label>
-              <label class="stack">Tile<select bind:value={tileId} aria-label="Tile definition">{#each tileSets[tile?.source]??[] as id}<option value={id}>{project.tiles[id].tag??id}</option>{/each}</select></label>
-            {/if}
-            {#if inspector}
-              {#if assetKind==='tile'}
-              <label class="stack">Active flag<select value={inspector.flag??''} onchange={e=>set(inspector,'flag',e.currentTarget.value)}>
-                <option value="">Always active</option>{#each Object.keys(gameFlags) as flag}<option>{flag}</option>{/each}
-              </select></label>
-              {#if inspector.flag}<label class="check"><input type="checkbox" checked={inspector.when??true} onchange={e=>set(inspector,'when',e.currentTarget.checked)}> Flag must be on</label>{/if}
-              {/if}
-              {#if assetKind==='sprite'}<label class="stack">Source <select value={inspector.source} onchange={e=>{
+          <div class="row heading"><h2>Entities</h2><button onclick={openEntityForm}><Plus size={16}/>New entity…</button></div>
+          <div class="field-row"><label>Entity type<select value={spriteId} onchange={e=>selectSprite(e.currentTarget.value)}>
+            {#each Object.keys(project.sprites??{}) as id}<option value={id}>{project.sprites[id].title??id}</option>{/each}
+          </select></label>
+          {#if spriteId}<button onclick={()=>openDefinition(spriteId,'blocks')}><Blocks size={15}/>Open script</button>{/if}</div>
+          {#if inspector}
+              <label class="stack">Source <select value={inspector.source} onchange={e=>{
                 const previous=inspector.source;
                 if(previous!==e.currentTarget.value){
                   delete inspector.animation;
@@ -1230,11 +1233,6 @@
               }}>
                 {#each artFiles as file}<option value={file}>{file}</option>{/each}
               </select></label>
-              {/if}
-              {#if assetKind==='tile'}
-                <label class="check"><input type="checkbox" checked={tile.persistRemoval??false} onchange={e=>set(tile,'persistRemoval',e.currentTarget.checked)}> Remember destroyed tiles</label>
-                <p class="muted">{tile.source}{tile.tag?' · '+tile.tag:''}</p>
-              {:else}
                 <div class="record-form"><label>Player<select bind:value={placeAs}><option value="">Choose a player</option>{#each [0,1,2,3] as slot}<option disabled={room?.entities.some(e=>e.player===slot)} value={String(slot)}>Player {slot+1}</option>{/each}</select></label>
                 <button disabled={placeAs===''||!room||room.entities.some(e=>e.player===Number(placeAs))} onclick={()=>{placementSprite=spriteId;mapTool='spawn';openTab('room');}}>Place player in room</button></div>
                 <SearchSelect label="Spawn when flag" value={sprite.flag??''}
@@ -1247,9 +1245,6 @@
                 <label class="check"><input type="checkbox" checked={sprite.alwaysActive??false}
                   onchange={e=>set(sprite,'alwaysActive',e.currentTarget.checked)}> Run scripts off camera</label>
                 <ComponentPicker components={componentLabels} selected={sprite.components??[]} onCreate={createComponent} onChange={value=>set(sprite,'components',value)}/>
-              {/if}
-            {/if}
-          {/if}
           {/if}
         </section>
       {/if}
@@ -1269,7 +1264,7 @@
             {:else}<button class="small-button" onclick={()=>set(project,'start',roomId)}>Set as starting room</button>{/if}
           </div>
           <label class="stack">Room name <input value={room.title??roomId} onchange={e=>setRoom('title',e.currentTarget.value)}></label>
-          <label class="stack">Room view <select aria-label="Room view" value={roomView} onchange={e=>setView(e.currentTarget.value)}>
+          <label class="stack">Room view <select aria-label="Room view" value={roomView} disabled={busy} onchange={e=>setView(e.currentTarget.value)}>
             <option value="platformer">Platformer</option><option value="top_down">Top-down</option>
           </select></label>
           <div class="row"><span>{room.cols} × {room.rows} tiles</span><button onclick={openResize}>Resize room…</button></div>
@@ -1380,6 +1375,23 @@
         <div class="heading row"><h2>Physics settings</h2></div>
         {#if target}
           <p class="asset-name">{tab==='blocks'||assetKind==='sprite' ? spriteId : tileId}</p>
+          {#if tab==='assets' && assetKind==='tile' && tile}
+            {#if tileArt[tileId]?.length}
+              {@const variant=Math.min(Number(editTileVariant),tileArt[tileId].length-1)}
+              <div class="row">
+                <SearchSelect label="Tile script variant" value={String(variant)}
+                  options={tileArt[tileId].map((_,index)=>({value:String(index),label:'Variant '+(index+1)}))}
+                  onChange={value=>editTileVariant=value}/>
+                <button onclick={()=>openTileScript(tileId,variant)}>Edit tile script</button>
+              </div>
+            {/if}
+            <SearchSelect label="Active flag" value={tile.flag??''}
+              options={[{value:'',label:'Always active'},...Object.keys(gameFlags).map(value=>({value,label:value}))]}
+              onChange={value=>set(tile,'flag',value)}/>
+            {#if tile.flag}<label class="check"><input type="checkbox" checked={tile.when??true} onchange={e=>set(tile,'when',e.currentTarget.checked)}> Flag must be on</label>{/if}
+            <label class="check"><input type="checkbox" checked={tile.persistRemoval??false}
+              onchange={e=>set(tile,'persistRemoval',e.currentTarget.checked)}> Remember destroyed tiles</label>
+          {/if}
           <Physics physics={target.physics} {collisionLayers} entity={assetKind==='sprite'?target:null} art={art[target.source]}
             onEntityChange={(key,value)=>set(target,key,value)} fallback={tab==='assets' && assetKind==='tile'
             ? (tile.tag??art[tile.source]?.tags?.[0]??'').includes(':fluid:') ? 'fluid' : 'static'
@@ -1390,31 +1402,21 @@
     </aside>{/if}
   </main>
   {#if addForm}
-    <Modal title={'New '+createLabel} {busy} onClose={()=>addForm=false}>
-      <form onsubmit={event=>{event.preventDefault();createAsset();}}>
+    <Modal title="New entity" {busy} onClose={()=>addForm=false}>
+      <form onsubmit={event=>{event.preventDefault();createEntity();}}>
         <label>Name<input bind:value={newId} required maxlength="100" disabled={busy}></label>
         <div class="row asset-source">
           <SearchSelect label="Source file" value={newSource}
-            options={[...new Set([...(importFile?[importFile.name]:[]),...sources])].map(value=>({value,label:value.split('/').at(-1)}))}
+            options={[...new Set([...(importFile?[importFile.name]:[]),...artFiles])].map(value=>({value,label:project.assetInfo?.[value]?.name??value.split('/').at(-1)}))}
             onChange={value=>{if(value!==importFile?.name)selectSource(value);}} disabled={busy}/>
           <button type="button" disabled={busy} onclick={()=>filePicker.click()}>Browse device…</button>
-          <input hidden type="file" bind:this={filePicker} accept={createKind==='audio'?'.wav,.qoa,.ogg,.oga,.opus,.mid,.midi':'.ase,.aseprite,.png'}
+          <input hidden type="file" bind:this={filePicker} accept=".ase,.aseprite,.png"
             onchange={event=>{const file=event.currentTarget.files[0];if(file)selectSource(file.name,file);event.currentTarget.value='';}}>
         </div>
-        {#if midiSource}
-          <div class="row asset-source">
-            <SearchSelect label="SoundFont" value={newSoundFont}
-              options={[...new Set([...(soundFontFile?[soundFontFile.name]:[]),...soundFonts])].map(value=>({value,label:value.split('/').at(-1)}))}
-              onChange={value=>{if(value!==soundFontFile?.name){newSoundFont=value;soundFontFile=null;}}} disabled={busy}/>
-            <button type="button" disabled={busy} onclick={()=>soundFontPicker.click()}>Browse SoundFonts…</button>
-            <input hidden type="file" accept=".sf2" bind:this={soundFontPicker}
-              onchange={event=>{const file=event.currentTarget.files[0];if(file){soundFontFile=file;newSoundFont=file.name;}event.currentTarget.value='';}}>
-          </div>
-        {/if}
         {#if assetError}<p class="error" role="alert">{assetError}</p>{/if}
         <div class="dialog-actions">
           <button type="button" disabled={busy} onclick={()=>addForm=false}>Cancel</button>
-          <button class="primary" disabled={busy||!newSource||midiSource&&!newSoundFont}>{busy?'Creating…':'Create'}</button>
+          <button class="primary" disabled={busy||!newSource}>{busy?'Creating…':'Create'}</button>
         </div>
       </form>
     </Modal>
@@ -1496,15 +1498,12 @@
   .check{display:flex;align-items:center;gap:.3rem;font-size:.75rem;color:var(--muted);margin-top:.4rem;}
   .asseteditor,.empty{padding:.8rem;}
   .asseteditor .stack{max-width:34rem;}
-  .asseteditor h3{margin-top:1rem;margin-bottom:.38rem;}
   .asseteditor p{font-size:.78rem;margin-top:.45rem;}
-  .audio-line{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.32rem;font-size:.78rem;}
   .start-room{margin-bottom:.15rem;}
   .asset-name{font-size:.85rem;color:var(--accent);margin-bottom:.6rem;}
   .asset-source{align-items:end;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.45rem;}
   .cover-setting{margin-bottom:.65rem}
   .cover-preview{width:4rem;height:4rem;object-fit:contain;background:var(--well);border:1px solid var(--line)}
-  .asset-bar{justify-content:space-between;margin-top:.65rem;}
   .instance-list{display:grid;gap:1px;}
   .instance-source{margin-top:.55rem;}
   .instance-source small{flex-basis:100%;font-size:.72rem;}

@@ -1,4 +1,4 @@
-import {Blocks,Events,inputEvent,receivedEvent,timerEvent} from './schema.mjs';
+import {Blocks,Events,inputEvent,receivedEvent,timerEvent,controllerEvent} from './schema.mjs';
 import {binaryMath, conditionalBranches, constantType, formatParameters, maxParameters, parseParameters, scopes, unaryMath} from './script.mjs';
 
 const symbols = {or:'or',and:'and','==':'equal','!=':'not_equal','<':'less','<=':'less_equal','>':'greater','>=':'greater_equal','+':'add','-':'subtract','*':'multiply','/':'divide','%':'remainder'};
@@ -81,7 +81,30 @@ export function parseScript(source){
     }
     while(peek()!==undefined && !['end','else','elif'].includes(peek())){
       const start=tokens[i].at;let row;
-      if(eat('if')){
+      if(eat('apply_shaders')){
+        eol();
+        const passes=[];
+        while(!eat('end')){
+          const at=tokens[i]?.at??source.length;
+          need('shader');need('(');
+          const shader=expr(),parameters=Object.create(null);
+          if(typeof shader!=='string')fail('Choose a shader asset name');
+          while(eat(',')){
+            const name=peek()?.startsWith('"')?expr():id();
+            if(typeof name!=='string'||Object.hasOwn(parameters,name))fail('Use each shader parameter once');
+            need(':');
+            if(eat('[')){
+              const values=[expr()];
+              while(eat(','))values.push(expr());
+              need(']');parameters[name]=values;
+            }else parameters[name]=[expr()];
+          }
+          need(')');eol();
+          passes.push(mark({shader,parameters},at));
+          if(passes.length>8)fail('Use up to eight passes in a pipeline');
+        }
+        row={op:'apply_shaders',passes};
+      }else if(eat('if')){
         row=branch(start);
         let tail=row;
         while(eat('elif')){
@@ -123,7 +146,7 @@ export function parseScript(source){
     return rows;
   }
   const events=Object.create(null), routines=Object.create(null),constants=Object.create(null),imports=[],declarations=[];
-  const game={globals:Object.create(null),flags:Object.create(null),events:Object.create(null)};
+  const game=Object.fromEntries(['globals','flags','events','controls','menus'].map(kind=>[kind,Object.create(null)]));
   const collections={types:Object.create(null),inventories:Object.create(null),arrays:Object.create(null)};
   while(eat('\n')){}
   while(peek()!==undefined){
@@ -152,6 +175,17 @@ export function parseScript(source){
       else group[name]=id();
       eol();continue;
     }
+    if(['input','menu'].includes(peek())){
+      const kind=tokens[i++].s,name=id(),group=kind==='input'?game.controls:game.menus;
+      if(Object.hasOwn(group,name))fail('Use a unique '+kind+' name');
+      need('=');
+      const read=kind==='input'?id:expr;
+      const entries=[read()];while(eat(','))entries.push(read());
+      if(kind==='menu'&&(entries.length<2||entries.some(label=>typeof label!=='string')))
+        fail('Give the menu a title and one or more text options');
+      group[name]=kind==='input'?entries:{title:entries[0],options:entries.slice(1)};
+      eol();continue;
+    }
     if(['global','flag','event'].includes(peek())){
       const kind=tokens[i++].s,name=id();
       const values=game[{global:'globals',flag:'flags',event:'events'}[kind]];
@@ -175,8 +209,12 @@ export function parseScript(source){
         const mode=id(),seconds=Number(tokens[i++].s);
         need('seconds');name=mode+'.'+Math.round(seconds*60);
         if(!timerEvent(name))fail('Use a timer between one tick and six hours');
-      }else name=eat('game')?(need('startup'),'game_startup'):eat('collide')?'begin_contact':qualified();
-      if(!Events.includes(name)&&!inputEvent(name)&&!receivedEvent(name)&&!timerEvent(name)||Object.hasOwn(events,name))error('Unknown or duplicate event '+name,start,tokens[i-1].at+name.length);
+      }else if(eat('controller')){
+        const edge=id(),player=peek();
+        if(!/^[2-4]$/.test(player??''))fail('Choose player 2 to 4. Player 1 includes the keyboard.');
+        i++;name='controller_'+edge+'.'+player;
+      }else name=eat('game')?(need('startup'),'game_startup'):eat('collide')?'begin_contact':eat('clone')?'clone_start':qualified();
+      if(!Events.includes(name)&&!inputEvent(name)&&!receivedEvent(name)&&!timerEvent(name)&&!controllerEvent(name)||Object.hasOwn(events,name))error('Unknown or duplicate event '+name,start,tokens[i-1].at+name.length);
       eol();events[name]=body();
     }else if(eat('def') || eat('proc')){
       const kind=tokens[i-1].s,name=id(),params=[];need('(');
@@ -247,6 +285,15 @@ export function formatScript(script){
   function body(rows,n){
     const pad='  '.repeat(n);
     for(const b of rows){
+      if(b.op==='apply_shaders'){
+        lines.push(pad+'apply_shaders');
+        for(const pass of b.passes){
+          const args=[JSON.stringify(pass.shader),...Object.entries(pass.parameters??{}).map(([key,values])=>
+            (identifier.test(key)?key:JSON.stringify(key))+': '+(values.length===1?value(values[0]):'['+values.map(value).join(', ')+']'))];
+          lines.push(pad+'  shader('+args.join(', ')+')');
+        }
+        lines.push(pad+'end');continue;
+      }
       if(b.op==='if'){
         const {branches,otherwise}=conditionalBranches(b);
         for(const [index,branch] of branches.entries()){
@@ -273,6 +320,9 @@ export function formatScript(script){
   for(const [kind,collection] of [['global','globals'],['flag','flags'],['event','events']]){
     for(const [name,literal] of Object.entries(script.declarations?.[collection]??{}))lines.push(kind+' '+name+' = '+value(literal));
   }
+  for(const [name,keys] of Object.entries(script.declarations?.controls??{}))lines.push('input '+name+' = '+keys.join(', '));
+  for(const [name,menu] of Object.entries(script.declarations?.menus??{}))
+    lines.push('menu '+name+' = '+[menu.title,...menu.options].map(value).join(', '));
   for(const [name,fields] of Object.entries(script.collections?.types??{})){
     lines.push('object '+name);
     for(const [field,config] of Object.entries(fields))lines.push('  '+field+': '+config.type+(Object.hasOwn(config,'default')?' = '+value(config.default):''));
@@ -291,7 +341,8 @@ export function formatScript(script){
   }
   for(const [name,rows] of Object.entries(script.events??{})){
     const [kind,ticks]=name.split('.');
-    const label=name==='game_startup'?'game startup':timerEvent(name)?kind+' '+Number((Number(ticks)/60).toFixed(6))+' seconds':name;
+    const label=name==='game_startup'?'game startup':name==='clone_start'?'clone':controllerEvent(name)?kind.replace('_',' ')+' '+ticks:
+      timerEvent(name)?kind+' '+Number((Number(ticks)/60).toFixed(6))+' seconds':name;
     lines.push('on '+label);body(rows,1);lines.push('end','');
   }
   for(const block of script.detached??[])lines.push(detachedComment+JSON.stringify(block));

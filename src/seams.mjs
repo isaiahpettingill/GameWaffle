@@ -17,7 +17,7 @@ export function addSeams(rooms,atlases,sprites,packAtlas){
   };
   const updates={};
   for(const [id,room] of Object.entries(rooms)){
-    room.seams={};room.neighbors=[];
+    room.seams={};room.neighbors=[];room.seamMargins=[0,0,0,0];
     const images=new Map();
     for(const edge of Object.keys(room.exits)){
       const neighborId=seamlessNeighbor(rooms,id,edge);
@@ -28,6 +28,7 @@ export function addSeams(rooms,atlases,sprites,packAtlas){
       room.seams[edge]=true;
       if(!room.neighbors.includes(neighborId))room.neighbors.push(neighborId);
       const w=horizontal?Math.min(256,other.width):other.width,h=horizontal?other.height:Math.min(256,other.height);
+      room.seamMargins[['left','right','up','down'].indexOf(edge)]=horizontal?w:h;
       const sx=edge==='left'?other.width-w:0,sy=edge==='up'?other.height-h:0;
       const rgba=Buffer.alloc(w*h*4);
       const color=parseInt(other.background.slice(1),16);

@@ -10,6 +10,7 @@ const sample=JSON.parse(await readFile('demo/project.json','utf8'));
 const project={name:'Script surfaces',tileSize:24,start:'yard',
   sprites:{hero:{...sample.sprites.maker,script:undefined,projectile:undefined,physics:{mode:'dynamic',health:20,fixed:true}}},
   tiles:{stone:sample.tiles.stone},
+  items:{token:{}},
   rooms:{yard:{title:'Script surfaces',cols:12,rows:8,view:'platformer',
     entities:[{sprite:'hero',x:60,y:76,player:0,name:'Hero'},{sprite:'hero',x:147,y:76,player:1,name:'Spare'}],
     layers:[{collidable:true,cells:[[2,5,'stone',0],...Array.from({length:8},(_,i)=>[i+3,5,'stone',1])]}]}},
@@ -30,13 +31,18 @@ array ranks: integer
 game_properties: item
 player_properties: player
 global energy = 1.0
-global score = 2
+global score = 0
 global last_x = 0.0
 global spike_hits = 0
 global timers = 0
+global connected_at_start = false
+global connections = 0
+global disconnections = 0
 flag touched_top = false
 const damage = 3
 event spike = "Spike"
+input pause_game = menu
+menu pause = "Pause", "Resume"
 
 on init
   inventory_append("backpack", "item")
@@ -44,14 +50,29 @@ on init
   inventory_set("backpack", 1, "enchantment.strength", 2.0)
   inventory_set("game", 1, "amount", 8)
   inventory_set("players", 2, "ready", true)
+  inventory_set("game", 1, "globals.score", 2)
+  inventory_set("players", 2, "items.token", 3)
+  give_player("token", 2, 1)
+  set_entity_persistence(entity.find("Spare"), true)
+  set_entity_always_active(entity.find("Spare"), true)
   array_append("ranks", inventory.get("backpack", 1, "amount"))
   array_append("ranks", inventory.get("game", 1, "amount"))
+  array_append("ranks", inventory.get("players", 2, "items.token"))
 end
 
 on game startup
   set_display_resolution(320, 180)
   set_minimap("explored")
   set_first_controller(2)
+  inventory_set("game", 1, "globals.connected_at_start", controller_connected(2))
+end
+
+on controller connected 2
+  change global.connections by 1
+end
+
+on controller disconnected 2
+  change global.disconnections by 1
 end
 
 on after 1 seconds
@@ -105,10 +126,38 @@ const mismatch=parseScript('array ranks: boolean');
 await assert.rejects(compileProject('demo',{project,scripts:new Map([['game',mismatch]])}),/must contain integers or reals/);
 const cyclic=parseScript('object box\n  inside: box\nend\ninventory backpack: box');
 await assert.rejects(compileProject('demo',{project,scripts:new Map([['game',cyclic]])}),/Circular object types/);
+const nested=Array.from({length:17},(_,i)=>{
+  const name=index=>'box_'+String(index).padStart(2,'0');
+  return 'object '+name(i)+'\n  child: '+(i?name(i-1):'integer')+'\nend';
+}).join('\n');
+await assert.rejects(compileProject('demo',{project,scripts:new Map([['game',parseScript(nested)]])}),/16 levels/);
 const cartridge=await compileProject('demo',{project,scripts});
-assert.equal(cartridge.runtimeAbi,12);
+assert.equal(cartridge.runtimeAbi,13);
+assert.equal(cartridge.controls.pause_game,cartridge.controls.menu);
+assert.deepEqual(cartridge.menus.pause,{title:'Pause',options:['Resume']});
 initSync({module:await readFile('web-built/runtime/runtime_bg.wasm')});
+const oversized=parseScript('object page\n'+Array.from({length:32},(_,i)=>
+  '  field_'+i+': string = "'+'a'.repeat(3072)+'"').join('\n')+'\nend\ninventory pages: page\non tick\n'+
+  '  inventory_append("pages", "page")\nend');
+const big=Runtime.from_cartridge(pack(await compileProject('demo',{project,scripts:new Map([['game',oversized]])})));
+let budgetError=false;
+for(let i=0;i<30&&!budgetError;i++)budgetError=JSON.parse(big.step_buttons(0)).events.some(event=>/collections are full/.test(event.message??''));
+assert.ok(budgetError);
+const boundedSave=big.save_game();
+big.load_game(boundedSave);
+assert.ok(JSON.parse(big.save_game()).collections.inventories.pages.length<30);
+big.free();
+const brokenStartup=parseScript('on game startup\n set_display_resolution(1, 1)\nend');
+const broken=pack(await compileProject('demo',{project,scripts:new Map([['game',brokenStartup]])}));
+assert.throws(()=>Runtime.from_cartridge(broken),/Game script game_startup/);
 const runtime=Runtime.from_cartridge(pack(cartridge));
+const withGamepad=Runtime.from_cartridge_with_controllers(pack(cartridge),undefined,1,1);
+assert.equal(JSON.parse(withGamepad.save_game()).globals['bool.connected_at_start'],'1');
+withGamepad.step_buttons(0);
+withGamepad.set_connected_players(1);
+withGamepad.step_buttons(0);
+assert.equal(JSON.parse(withGamepad.save_game()).globals.disconnections,'1');
+withGamepad.free();
 const frame=buttons=>{
   const snapshot=JSON.parse(runtime.step_buttons(buttons));
   assert.deepEqual(snapshot.events.filter(event=>event.kind==='script_error'),[]);
@@ -131,6 +180,7 @@ assert.equal(current.actors.find(actor=>actor.name==='Spare').player,1);
 for(let i=0;i<85;i++)current=frame(0);
 const saved=JSON.parse(runtime.save_game());
 assert.equal(saved.globals.score,'3');
+assert.equal(saved.globals.connections,'1');
 assert.ok(runtime.jit_executions()>0,'WebAssembly ran a generated numeric kernel');
 const interpreted=Runtime.from_cartridge(pack(cartridge));
 interpreted.set_jit_enabled(false);
@@ -140,7 +190,9 @@ for(let i=0;i<86;i++)interpreted.step_buttons(0);
 assert.equal(JSON.parse(interpreted.save_game()).globals['real.energy'],saved.globals['real.energy']);
 assert.equal(interpreted.jit_executions(),0);
 interpreted.free();
-assert.deepEqual(saved.collections.arrays.ranks,[{Integer:1},{Integer:8}]);
+assert.deepEqual(saved.collections.arrays.ranks,[{Integer:1},{Integer:8},{Integer:4}]);
+assert.equal(saved.scene.actors.find(actor=>actor.name==='Spare').persistence,'sprite/Spare');
+assert.equal(saved.scene.actors.find(actor=>actor.name==='Spare').always_active,true);
 assert.ok(saved.collections.inventories.backpack[0].properties.enchantment);
 assert.ok(saved.collections.inventories.players[1].properties.ready);
 assert.ok(Number(saved.globals.timers)>4);

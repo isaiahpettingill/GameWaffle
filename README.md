@@ -59,11 +59,71 @@ The top-down view uses zero gravity. **Move with D-pad** moves the sprite on bot
 
 Use a collidable layer for walls. Top-down enemies use four-direction A* on the tile grid. Platform enemies search for supported landing cells and use gravity to estimate jumps and falls.
 
-## Set a room shader
+## Shader pipelines
 
-Open the room script. Add **Set shader** under **On init**, then choose a preset and set its strength. Select **Play room** to see the result. You can also change shaders on tick or in an event handler.
+Use **Assets → New shader…** to build a fragment shader from nodes. Start with moving scanlines, drifting mist, a day/night cycle, or a screen sample. Connect node inputs using their menus and choose a color node as the fragment output. Number, vector, and color parameter nodes expose defaults that can be overridden from a Shader pass block.
 
-Presets include color wash, scanlines, LCD grid, vignette, water ripple, HD pixel smoothing, fog, volumetric lighting, lens flare, snow, rain, and wind.
+The preview runs the selected room. Choose Room or Display to test the effect before or after the HUD, pause the preview, or toggle the effect to compare it with the scene. On a WebGPU-capable device, Studio compiles graph changes in the background and keeps the last working preview while you edit. Saving creates a shader asset you can reopen and use in either script pipeline.
+
+Load a `.spv` or `.spirv` fragment shader in **Assets → Load asset**. The asset view lists the uniforms that Studio found. You can also use the bundled shader presets.
+
+Open a **Room script**, add **Apply room shaders in order** under **On init**, and put **Shader pass** blocks inside it. The first pass receives the room scene, and each later pass receives the last pass's output. The HUD is drawn over the finished room. Use **Apply display shaders in order** in the **Game script** to process the composited, scaled display, including the HUD. A pipeline replaces the previous one in its scope. An empty pipeline clears it. You can set a pipeline from initialization, timers, or other events. Each pipeline supports up to eight passes.
+
+Each **Shader pass** block shows the numeric inputs for the selected shader. You can connect expressions to them. Missing custom uniform values start at zero. Stock passes provide their own defaults.
+
+```wafflescript
+on init
+  apply_shaders
+    shader("preset:fog", strength: 28)
+    shader("my_shader", strength: 0.7, tint: [1.0, 0.85, 0.6])
+  end
+end
+```
+
+### Custom shader interface
+
+Use a single SPIR-V fragment entry point. The player supplies normalized UV coordinates at location 1 and white vertex color at location 0. Output a `vec4` at location 0. A combined `sampler2D` at set 2, binding 0 samples the previous pass. An optional `std140` uniform block at set 3, binding 0 can contain up to 256 bytes of 32-bit floats, signed or unsigned integers, and vectors of those types. Keep uniform member names when compiling if you want the block editor to show them. Use `vec2 resolution`, `float time`, or `float delta_time` to receive the current pass size and the simulation clock automatically.
+
+```glsl
+#version 450
+layout(location = 1) in vec2 uv;
+layout(location = 0) out vec4 color;
+layout(set = 2, binding = 0) uniform sampler2D screen;
+layout(std140, set = 3, binding = 0) uniform Parameters {
+  vec2 resolution;
+  float strength;
+} params;
+void main() {
+  vec4 sampleColor = texture(screen, uv);
+  color = vec4(mix(sampleColor.rgb, sampleColor.bgr, params.strength), sampleColor.a);
+}
+```
+
+For GLSL, run `glslangValidator -V color-grade.frag -o color-grade.spv`. Studio validates the shader at import and translates it to WGSL and Metal shader source. Custom passes use WebGPU in the browser or SDL's Vulkan or Metal GPU renderer. The software player and libretro core draw the unfiltered scene when a pipeline is active.
+
+## Background gradients
+
+Use **Background gradient** blocks in a Room script to draw a gradient behind room art. Linear gradients have a start and end point and up to eight indexed color stops. Radial gradients blend up to eight colored foci over the room's background color. Positions run from 0 to 1 across the viewport, and radial radii are measured in units of its shorter side. Move or recolor a stop or focus by setting the same slot again.
+
+```wafflescript
+on init
+  set_room_background("#1e1e2e")
+  set_background_gradient("radial", "dithered")
+  set_gradient_focus(1, 0.25, 0.7, 0.55, "#cba6f7")
+  set_gradient_focus(2, 0.8, 0.2, 0.65, "#f9e2af")
+  set_gradient_palette_color(1, "#1e1e2e")
+  set_gradient_palette_color(2, "#cba6f7")
+  set_gradient_palette_color(3, "#f9e2af")
+end
+```
+
+For a linear ramp, call `set_gradient_axis(x1, y1, x2, y2)` and `set_gradient_stop(slot, position, color)`. Choose `"smooth"` for continuous color or fill up to 16 palette slots for ordered dithering. `clear_gradient_slot("focus", 2)` removes one focus. `set_background_gradient("none", "smooth")` clears the gradient.
+
+## Organize assets
+
+Drop files onto **Assets** or choose **Load asset**. Studio routes each file to its asset folder. For an Aseprite or PNG file, choose a sprite, tileset, bitfont, background, cover, or source image. The prompt shows the relevant import options. PNG fonts expose the glyph grid, and MIDI tracks use an imported SF2 SoundFont.
+
+Select an asset to rename it or edit its tags. Renaming updates the display name and keeps existing script and room references. Use the search, type, and tag filters to find assets.
 
 ## Prepare assets and scripts
 
@@ -90,6 +150,23 @@ A room change keeps the global variables and flags. It creates new local variabl
 Connect boolean variables, comparisons, or input conditions to **If** and **While**. Use **Repeat** for a fixed number of iterations. Use **Wait** to continue an event after a number of game ticks. The runtime also pauses long scripts after a fixed number of instructions. It continues those scripts on later ticks. A running event has one continuation for each instance. A second occurrence of the same event does not start another continuation.
 
 WaffleScript has integers, reals, booleans, and strings. Use an explicit conversion for mixed numeric arithmetic. See the scripting guide for type rules, math functions, and translation tables.
+
+## Viewport, tiles, math, and text
+
+Use **Input & sensing** to test whether an entity overlaps the viewport, reaches a viewport edge, reaches a room edge, or touches a tile. The viewport reporters give the visible rectangle in room pixels after camera zoom and clamping. Tile checks can match an asset from the project or a behavior such as solid, one-way, ladder, fluid, sensor, breakable, or decorative. The direction describes the tile face, so **top** checks for an entity standing on the tile.
+
+```wafflescript
+on tick
+  if camera.touching_edge(entity.id, "left")
+    velocity(0, entity.vy_real)
+  end
+  if tile.touching_kind(entity.id, "ladder", "any") and action.up
+    velocity(entity.vx_real, -2)
+  end
+end
+```
+
+**Operators** includes arithmetic, rounding, trig, clamp, interpolation, and seeded random numbers. `math.mod(-5, 3)` returns `1` and `-5 % 3` returns `-2`. **Text** includes joining, length, letter, slice, search, replacement, case conversion, trimming, and numeric formatting. Letter positions and inclusive slice bounds start at 1 and count Unicode code points. A missing letter returns an empty string and a missing substring position returns 0.
 
 ## Export a game
 
@@ -353,12 +430,31 @@ This preset uses the contrast-sensitive edge reconstruction used by Lemuroid's H
 
 To make an entity playable, select it in **Entities**. Select a player and **Place player in room**. Click the map to place the instance. To assign an existing instance, select it and set **Controlled by**. An actor without a script starts with built-in movement. Clear **Built-in movement** to control movement from its script.
 
-In **Game → Controls**, create an action such as `jump` and select its controls. Under **On tick**, read the action’s held, pressed, or released state from **Input & sensing**. Each player receives input on its own instance.
+In the **Game script**, use an **Input action** block with **Bind to** blocks, or write `input jump = a, x`. Under **On tick**, read the action’s held, pressed, or released state from **Input & sensing**. Define menus in the same script with **Menu** and **Menu option**, or write `menu pause = "Pause", "Resume", "Quit"`.
 
+## Entity clones
+
+Use **Clone entity** in **Entities** to copy a live instance. The new entity receives an independent copy of its local variables, along with its current position, motion, appearance, health, and components. It starts without a player assignment or a room instance name.
+
+Use **When cloned** in **Events** to set up a clone before its first tick. Use **Delete this clone** to end its current script and remove it. Clones are saved with the active room and cleared when you leave it. Use `entity.last_clone` for the result of your last attempt, or `0` if creation failed.
+
+```wafflescript
+on tick
+  if pressed.a
+    clone_entity(entity.id)
+  end
+end
+
+on clone
+  set_position(entity.x + 32, entity.y)
+  wait(120)
+  delete_clone()
+end
+```
 
 ## Initialization and settings
 
-Open **Game script** from the **Game** tab or the script picker. The starter script declares globals, flags, events, and constants. Its **On game startup** stack sets display resolution, camera behavior, the minimap, and the first gamepad's player slot. Keyboard input belongs to Player 1. Use **Controller connected?** with a player number, and use **Assign player** or **Set entity visible** on an entity to control who can play it and when it appears.
+Open **Game script** from the **Game** tab or the script picker. The starter script declares globals, flags, events, and constants. Its **On game startup** stack sets display resolution, camera behavior, the minimap, and the first gamepad's player slot. Keyboard input belongs to Player 1. Use **Controller connected?** or Game script events such as `on controller connected 2` and `on controller disconnected 2`. Removing a gamepad leaves the other gamepads in their slots. Use **Assign player** or **Set entity visible** to control who can play an entity and when it appears.
 
 **Game → Room defaults** supplies values for new rooms. Studio copies them into each room's **On init** stack when it creates the room. Edit that stack to change an existing room's camera, background, borders, gravity, music, ambience, or shader. The background picker edits the same stack. An **On init** stack runs once per entity or tile instance and again when a fresh room is created during play. Use **On tick** for behavior that should repeat each frame.
 
@@ -386,6 +482,6 @@ on init
 end
 ```
 
-An inventory owns its objects. Use a collection name, index, and field path to read or write scalar properties. An object can own another typed object, and the compiler rejects circular type declarations. Arrays hold integers or reals. Game and Player property objects use fixed indexes, 1 for the Game singleton and 1 through 4 for players.
+An inventory owns its objects. Use a collection name, index, and field path to read or write scalar properties. An object can own another typed object, up to 16 levels deep. Arrays hold integers or reals. Game and Player property objects use fixed indexes, 1 for the Game singleton and 1 through 4 for players. The Game singleton's `globals.<name>` and `flags.<name>` access the same values as ordinary global and flag expressions. The `players` object's `items.<name>` paths access counts for existing item definitions. Collections enforce a shared size budget on writes to preserve space for saved game state.
 
-WaffleScript uses a threaded interpreter and compiles hot stretches of real arithmetic with Cranelift on x86-64 and ARM64 desktop hosts. The web player compiles those stretches to WebAssembly and runs them through its function table. The interpreter handles the remaining instructions, debugging, and platforms where the JIT is unavailable. Run `node packaging/bench-vm.mjs` after building to compare the interpreter and JIT locally.
+WaffleScript uses a threaded interpreter and compiles hot stretches of real arithmetic with Cranelift on x86-64 and ARM64 desktop hosts. The web player compiles those stretches to WebAssembly and runs them through its function table. Identical kernels share compiled code within a game. Each simulation tick can compile one new kernel. The interpreter handles the remaining instructions and debugging. Run `node packaging/bench-vm.mjs` after building to compare the interpreter and JIT locally.

@@ -1,4 +1,4 @@
-import {validateCollections} from '../src/collections.mjs';
+import {propertyAliases,validateCollections} from '../src/collections.mjs';
 import {EditorState} from '@codemirror/state';
 import {EditorView,keymap,lineNumbers,highlightActiveLine,highlightActiveLineGutter,drawSelection} from '@codemirror/view';
 import {history,historyKeymap,defaultKeymap,indentWithTab} from '@codemirror/commands';
@@ -13,7 +13,7 @@ const language=StreamLanguage.define({token(stream){
   if(stream.match(/#.*/))return 'comment';
   if(stream.match(/"(?:\\.|[^"\\])*"?/))return 'string';
   if(stream.match(/\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/))return 'number';
-  if(stream.match(/(?:on|end|if|elif|else|while|repeat|change|by|return|proc|def|const|use|not|and|or)\b/))return 'keyword';
+  if(stream.match(/(?:on|clone|end|if|elif|else|while|repeat|change|by|return|proc|def|const|use|input|menu|not|and|or)\b/))return 'keyword';
   if(stream.match(/(?:true|false|none)\b/))return 'atom';
   if(stream.match(/[a-zA-Z_]\w*(?=\s*\()/))return 'variableName.function';
   if(stream.match(/[a-zA-Z_]\w*/))return 'variableName';
@@ -54,7 +54,10 @@ export async function validateText(source,moduleName,registry){
     modules=await res.json();if(!res.ok)throw Error(modules.error);
   }
   try{
-    const references=registry?.gameScript?{...registry,collections:validateCollections(unit.collections),events:{...registry.events,...unit.declarations?.events},flags:{...registry.flags,...unit.declarations?.flags}}:registry;
+    const references=registry?.gameScript?{...registry,collections:validateCollections(unit.collections),
+      propertyAliases:propertyAliases(unit.declarations?.globals,unit.declarations?.flags,registry.items),
+      controls:{...registry.controls,...unit.declarations?.controls},menus:{...registry.menus,...unit.declarations?.menus},
+      events:{...registry.events,...unit.declarations?.events},flags:{...registry.flags,...unit.declarations?.flags}}:registry;
     compileScript(unit,modules,undefined,references);
   }catch(err){Object.assign(err,locations.get(err.node));throw err;}
   return unit;

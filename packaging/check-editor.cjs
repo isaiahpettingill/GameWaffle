@@ -74,19 +74,19 @@ for(const width of [1280,800,390,320]){
   for(const tab of ['Room','World','Game','Assets','Entities','Code']){
     await nav.getByText(tab,{exact:true}).click();
     if(tab==='Assets'){
-      const field=page.getByLabel('Find source files');
-      const action=page.getByRole('button',{name:'Import file…',exact:true});
-      const [a,b]=await Promise.all([field.boundingBox(),action.boundingBox()]);
-      assert.equal(a.height,b.height,'Source search and import control heights');
-      if(b.x>=a.x+a.width)assert.ok(Math.abs(a.y-b.y)<1,'Source search and import top edges');
-      else assert.ok(b.y>=a.y+a.height,'Wrapped import button clears the search field');
+      await page.getByRole('region',{name:'Asset drop zone'}).getByRole('button',{name:'Load asset…',exact:true}).waitFor();
+      const field=page.getByLabel('Search assets');
+      await field.fill('key');
+      await page.locator('.asset').filter({hasText:'key.png'}).waitFor();
+      await field.clear();
+
     }
     if(tab==='World'){
       await page.getByRole('button',{name:'right exit'}).click();
       await page.getByRole('dialog',{name:'Edit Connection'}).getByRole('button',{name:'Cancel',exact:true}).click();
     }
     if(tab==='Game'){
-      for(const section of ['Controls','Room defaults','Project assets']){
+      for(const section of ['Game script','Room defaults','Project assets']){
         await page.getByRole('button',{name:section,exact:true}).click();
         await checkFormRows(page,section);
       }
@@ -706,8 +706,94 @@ await until('Tile playback saved',async()=>{
   const unit=await(await authoring.request.get(url+'/api/tile-script/water/0')).json();
   return unit.events?.init?.[0]?.mode==='still';
 });
+await scriptFile.selectOption('entity:maker');
+await until('Entity script picker',async()=>await scriptFile.inputValue()==='entity:maker');
+await authoring.getByRole('button',{name:'Text',exact:true}).click();
+await authoring.locator('.cm-content').fill('on a\n  clone_entity(entity.id)\nend\non clone\n  delete_clone()\nend\n');
+await until('Clone script saved',async()=>{
+  const unit=await(await authoring.request.get(url+'/api/script/maker')).json();
+  return unit.events?.clone_start?.[0]?.op==='delete_clone';
+});
+await authoring.getByRole('button',{name:'Blocks',exact:true}).click();
+for(const type of ['clone_start','clone_entity','delete_clone'])
+  await authoring.locator('.blocklyBlockCanvas .waffle_'+type).waitFor();
+await authoring.getByRole('button',{name:'Text',exact:true}).click();
+assert.match(await authoring.locator('.cm-content').innerText(),/on clone\s+delete_clone\(\)/);
+await authoring.locator('.cm-content').fill(`on tick
+  if camera.touching_edge(entity.id, "left") and tile.touching(entity.id, "water", "any")
+    local_string.note = string.letter(string.join("🪿", "ice"), 1)
+    local.score = math.mod(-5, 3)
+  end
+end
+`);
+await until('Sensing and operators saved from text',async()=>{
+  const unit=await(await authoring.request.get(url+'/api/script/maker')).json();
+  return unit.events?.tick?.[0]?.condition?.right?.call==='tile.touching';
+});
+await authoring.getByRole('button',{name:'Blocks',exact:true}).click();
+const canvas=authoring.locator('.blocklyBlockCanvas');
+for(const type of ['camera_touching_edge','tile_touching','string_letter','string_join','math_mod'])
+  await canvas.locator('.waffle_reporter_'+type).waitFor();
+await authoring.getByRole('button',{name:'Fit blocks',exact:true}).click();
+await canvas.locator('.waffle_reporter_tile_touching .blocklyDropdownText').filter({hasText:/water/i}).click();
+await authoring.getByLabel('Search options',{exact:true}).fill('water');
+await authoring.locator('.block-field-options button').filter({hasText:/water/i}).click();
+await canvas.locator('.waffle_reporter_camera_touching_edge .blocklyDropdownText').filter({hasText:/left/i}).click();
+await authoring.getByRole('listbox').getByRole('option',{name:'right',exact:true}).click();
+await until('Edge edited and saved from blocks',async()=>{
+  const unit=await(await authoring.request.get(url+'/api/script/maker')).json();
+  return unit.events?.tick?.[0]?.condition?.left?.args?.[1]==='right';
+});
+await authoring.getByRole('button',{name:'Text',exact:true}).click();
+const roundTrip=await authoring.locator('.cm-content').innerText();
+assert.match(roundTrip,/camera.touching_edge\(entity.id, "right"\)/);
+assert.match(roundTrip,/tile.touching\(entity.id, "water", "any"\)/);
+assert.match(roundTrip,/string.letter\(string.join\("🪿", "ice"\), 1\)/);
+assert.match(roundTrip,/math.mod\(-5, 3\)/);
+await authoring.getByRole('button',{name:'Assets',exact:true}).click();
+await authoring.getByRole('button',{name:'New shader…',exact:true}).click();
+const shaderDialog=authoring.getByRole('dialog',{name:'New shader'});
+await shaderDialog.getByLabel('Starter graph').selectOption('mist');
+await shaderDialog.getByRole('img',{name:'Live room preview'}).locator('canvas[data-view-width]').first().waitFor();
+await shaderDialog.getByLabel('Add shader node').selectOption('color');
+assert.ok(await shaderDialog.getByRole('article',{name:/^Color \d+$/}).isVisible());
+await shaderDialog.getByRole('button',{name:'Save shader',exact:true}).click();
+await shaderDialog.waitFor({state:'hidden'});
+await until('Shader asset saved',async()=>{
+  const unit=await(await authoring.request.get(url+'/api/project')).json();
+  return Boolean(unit.project?.shaders?.drifting_mist?.graph);
+});
+await authoring.getByRole('button',{name:'Edit shader…',exact:true}).click();
+const editShader=authoring.getByRole('dialog',{name:'Edit shader'});
+await editShader.getByLabel('Shader name').fill('Purple mist');
+await editShader.getByRole('button',{name:'Save shader',exact:true}).click();
+await editShader.waitFor({state:'hidden'});
+await until('Shader edit keeps the original asset ID',async()=>{
+  const unit=await(await authoring.request.get(url+'/api/project')).json();
+  return unit.project?.shaders?.drifting_mist?.title==='Purple mist'&&Object.keys(unit.project.shaders).length===1;
+});
+await authoring.getByRole('button',{name:'Code',exact:true}).click();
+await scriptFile.selectOption('room:vault');
+await until('Room target for gradient script',async()=>await scriptFile.inputValue()==='room:vault');
+await authoring.getByRole('button',{name:'Text',exact:true}).click();
+await authoring.locator('.cm-content').fill(`on init
+  set_background_gradient("radial", "smooth")
+  set_gradient_focus(1, 0.2, 0.4, 0.5, "#cba6f7")
+  set_gradient_focus(2, 0.8, 0.7, 0.5, "#f9e2af")
+  apply_shaders
+    shader("drifting_mist")
+  end
+end
+`);
+await until('Background gradient and authored shader saved to room',async()=>{
+  const unit=await(await authoring.request.get(url+'/api/room-script/vault')).json();
+  return unit.events?.init?.[3]?.passes?.[0]?.shader==='drifting_mist';
+});
+await authoring.getByRole('button',{name:'Blocks',exact:true}).click();
+await canvas.locator('.waffle_set_background_gradient').waitFor();
+assert.equal(await canvas.locator('.waffle_set_gradient_focus').count(),2);
 await authoring.close();
-console.log('Passed project authoring, inline events and flags, tile script editing, and conditional chains');
+console.log('Passed authoring, Blocks/Text round trips, shader graph editing, and room gradient scripts');
 
 await browser.close();server.kill();await fs.rm(fixture,{recursive:true,force:true});
 })().catch(e=>{console.error(e);process.exit(1);});
