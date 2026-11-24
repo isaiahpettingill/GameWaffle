@@ -61,7 +61,9 @@ Use a collidable layer for walls. Top-down enemies use four-direction A* on the 
 
 ## Shader pipelines
 
-Use **Shaders → New shader…** to build a fragment shader from nodes. Start with moving scanlines, drifting mist, a day/night cycle, or a screen sample. Connect node inputs using their menus and choose a color node as the fragment output. Number, vector, and color parameter nodes expose defaults that can be overridden from a Shader pass block.
+Use **Shaders → New shader…** to open the Svelte Flow canvas. Start with moving scanlines, drifting mist, a day/night cycle, or a screen sample. Find an operation with **Add node…**, drag nodes into place, and wire a color result to **Fragment output**. The input ports enforce compatible types. Number, vector, and color parameter nodes expose defaults that can be overridden from a Shader pass block.
+
+Drag the canvas to pan, scroll or pinch to zoom, and use **Fit View** to frame the graph. Select nodes or wires to delete them. The toolbar supports duplicate, undo, and redo, and the graph supports keyboard copy and paste. Studio saves node positions with the shader.
 
 The preview runs the selected room. Choose Room or Display to test the effect before or after the HUD, pause the preview, or toggle the effect to compare it with the scene. Studio uses WebGPU or WebGL 2 for this preview and keeps the last working effect while you edit. Saving creates a shader asset you can reopen and use in either script pipeline.
 

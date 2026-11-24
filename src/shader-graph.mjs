@@ -91,7 +91,7 @@ function readValue(spec,node){
   throw Error('Enter a valid '+spec.label.toLowerCase());
 }
 
-export function analyzeShaderGraph(graph){
+export function analyzeShaderGraph(graph,{inspect=false}={}){
   if(graph?.version!==1||!Array.isArray(graph.nodes)||graph.nodes.length>MAX_SHADER_NODES)
     throw Error('Use a shader graph with up to '+MAX_SHADER_NODES+' nodes');
   const ids=new Map(), definitions=new Map(), exposed=new Map(), order=[], visiting=new Set();
@@ -142,6 +142,15 @@ export function analyzeShaderGraph(graph){
     visiting.delete(id);
     return definition;
   }
+  if(inspect){
+    const errors=new Map();
+    for(const id of ids.keys()){
+      try{visit(id);}
+      catch(error){errors.set(id,error.message);visiting.clear();}
+    }
+    return {definitions,errors};
+  }
+  if(!graph.output)throw Error('Connect a color node to Fragment output');
   const output=visit(graph.output);
   if(output.type!=='vec4')throw Error('Connect a color node to Fragment output');
   for(const id of ids.keys())visit(id);

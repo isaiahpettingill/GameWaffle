@@ -26,6 +26,7 @@
     "@lezer/highlight": "^1.2.5",
     "@lucide/svelte": "1.78.0",
     "@webgpu/glslang": "0.0.15",
+    "@xyflow/svelte": "2.0.3",
     "blockly": "13.5.0",
     "cbor-x": "1.6.9",
     "fflate": "0.8.3",

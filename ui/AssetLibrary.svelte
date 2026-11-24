@@ -3,7 +3,6 @@
   import Modal from './Modal.svelte';
   import GlyphGrid from './GlyphGrid.svelte';
   import SearchSelect from './SearchSelect.svelte';
-  import ShaderEditor from './ShaderEditor.svelte';
   import CoverCrop from './CoverCrop.svelte';
   import {DEFAULT_COVER_CROP} from '../src/cover.mjs';
   import {assetCatalog,assetKinds,assetLabels,tagList} from '../src/asset-types.mjs';
@@ -106,6 +105,9 @@
     const path=await onSaveShader(data);
     type='shader';query='';tag='';selected=path;shaderEditor=null;
   }
+  function openShader(id){
+    shaderEditor={id,module:import('./ShaderEditor.svelte')};
+  }
   const icons={shader:Code,font:Type,sound:AudioLines,music:AudioLines,soundfont:AudioLines,
     sprite:Image,tile:Image,background:Image,cover:Image,source:Image};
   const singular={sprite:'Sprite',tile:'Tileset',font:'Bitfont',background:'Background image',cover:'Cover image',
@@ -114,7 +116,7 @@
 
 <section class="card library">
   <header class="row heading"><h2>{shadersOnly?'Shaders':'Assets'}</h2>
-    <button type="button" class:primary={shadersOnly} onclick={()=>shaderEditor={}}><Plus size={15}/>New shader…</button>
+    <button type="button" class:primary={shadersOnly} onclick={()=>openShader()}><Plus size={15}/>New shader…</button>
   </header>
   <div role="region" aria-label={shadersOnly?'Shader drop zone':'Asset drop zone'} class="dropzone" class:dragging
     ondragover={acceptDrop} ondragleave={event=>{if(!event.currentTarget.contains(event.relatedTarget))dragging=false;}} ondrop={loadDrop}>
@@ -166,7 +168,7 @@
         </div>{/if}
         {#if shader}
           {#if project.shaders?.[shaderId]?.graph}
-            <button type="button" onclick={()=>shaderEditor={id:shaderId}}>Edit shader…</button>
+            <button type="button" onclick={()=>openShader(shaderId)}>Edit shader…</button>
           {/if}
           <h3>Shader parameters</h3>
           <dl class="uniforms">
@@ -184,7 +186,18 @@
 </section>
 
 {#if shaderEditor}
-  <ShaderEditor id={shaderEditor.id} shader={project.shaders?.[shaderEditor.id]} {room} onSave={saveShader} onClose={()=>shaderEditor=null}/>
+  {@const close=()=>shaderEditor=null}
+  {@const title=shaderEditor.id?'Edit shader':'New shader'}
+  {#await shaderEditor.module}
+    <Modal {title} onClose={close}><p role="status">Loading shader editor…</p></Modal>
+  {:then {default:ShaderEditor}}
+    <ShaderEditor id={shaderEditor.id} shader={project.shaders?.[shaderEditor.id]} {room} onSave={saveShader} onClose={close}/>
+  {:catch error}
+    <Modal {title} onClose={close}>
+      <p role="alert" class="error">{error.message}</p>
+      <div class="dialog-actions"><button type="button" onclick={close}>Close</button></div>
+    </Modal>
+  {/await}
 {/if}
 
 {#if file}
