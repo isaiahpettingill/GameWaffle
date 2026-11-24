@@ -1,12 +1,10 @@
 <script>
   import {Database, Plus, Search} from '@lucide/svelte';
-  import Modal from './Modal.svelte';
   import SearchSelect from './SearchSelect.svelte';
-  import {resourceName} from '../src/resource-name.mjs';
   import {resourceTables,validResourceText} from '../src/resource-tables.mjs';
 
-  let {value, resources={}, onChange, onGameScript}=$props();
-  let language=$state(''), query=$state(''), adding=$state(false), name=$state(''), initial=$state(''), error=$state('');
+  let {value, resources={}, onChange, onAdd, onGameScript}=$props();
+  let language=$state(''), query=$state(''), error=$state('');
   const effective=$derived(resourceTables(value,resources));
   const defaultLanguage=$derived(effective.locale);
   const base=$derived(effective.tables[defaultLanguage]??{});
@@ -38,14 +36,6 @@
     write(id,{});
     language=id;
   }
-  function addKey(event){
-    event.preventDefault();
-    if(!name.trim()||!validResourceText(initial))return;
-    const id=resourceName(name,'text',[base]);
-    const target=defaultLanguage||'en';
-    write(target,{...value?.tables?.[target],[id]:initial},target);
-    language=target;query='';adding=false;
-  }
   function setDefault(){
     const previous=Object.fromEntries(Object.entries(value?.tables?.[defaultLanguage]??{})
       .filter(([key])=>!Object.hasOwn(resources,key)));
@@ -66,8 +56,8 @@
   <header class="heading row">
     <h2 id="resources-title">Resources</h2>
     <div class="row">
-      <button type="button" onclick={onGameScript}>Game script</button>
-      <button type="button" class="primary" onclick={()=>{name='';initial='';adding=true;}}><Plus size={15}/>Add text…</button>
+      {#if Object.keys(resources).length}<button type="button" onclick={onGameScript}>Game script</button>{/if}
+      <button type="button" class="primary" onclick={()=>onAdd(()=>{language='';query='';error='';})}><Plus size={15}/>Add text…</button>
     </div>
   </header>
   <div class="tools">
@@ -110,21 +100,9 @@
     <div class="empty">
       <Database size={22} aria-hidden="true"/>
       <strong>{query.trim()?'No matching resources':'No text resources yet'}</strong>
-      {#if !query.trim()}<small>Add text here or declare <code>resource greeting = "Hello"</code> in the Game script.</small>{/if}
     </div>
   {/if}
 </section>
-
-{#if adding}
-  <Modal title="Add text resource" onClose={()=>adding=false}>
-    <form onsubmit={addKey}>
-      <label>Resource name<input required maxlength="64" bind:value={name} placeholder="Greeting"></label>
-      <label>{nameOf(defaultLanguage||'en')} text<textarea rows="3" maxlength="4096" bind:value={initial}></textarea></label>
-      <div class="dialog-actions"><button type="button" onclick={()=>adding=false}>Cancel</button>
-        <button class="primary" disabled={!name.trim()||!validResourceText(initial)}>Add text</button></div>
-    </form>
-  </Modal>
-{/if}
 
 <style>
   .resources{display:grid;gap:.75rem;padding:.75rem;min-width:0}
@@ -143,7 +121,6 @@
   .base-value{white-space:pre-wrap}
   .empty{display:grid;justify-items:center;gap:.45rem;padding:2rem .6rem;color:var(--muted);text-align:center}
   .empty :global(svg){color:var(--accent)}
-  .empty code{overflow-wrap:anywhere}
   @media(max-width:530px){
     .tools :global(.search-select),.tools .stack{flex:1 1 8rem}
     .search{flex-basis:100%}

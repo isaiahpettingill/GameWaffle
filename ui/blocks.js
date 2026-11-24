@@ -43,6 +43,7 @@ const roomEvents = ['start','restored','menu_selected','use_item',...buttons.sli
 const tileEvents = worldEvents;
 const eventBlock = 'waffle_event', worldHat = 'waffle_world_event', roomHat='waffle_room_event', inputHat = 'waffle_input_event', receivedHat='waffle_received_event';
 const tileHat='waffle_tile_event',timerHat='waffle_timer',controllerHat='waffle_controller_event';
+const legacyResourceDeclaration='waffle_legacy_resource_declaration';
 const conditionShape = new Blockly.zelos.ConstantProvider().SHAPES.HEXAGONAL;
 const logic = Object.fromEntries(logicDefinitions(conditionShape).map(spec=>[spec.type,spec]));
 const commandType = id => 'waffle_'+id+(messageInputs[id]?'_text':'');
@@ -107,8 +108,11 @@ Blockly.defineBlocksWithJsonArray([
   {type:'waffle_clone_start',message0:'When cloned',nextStatement:'waffle',style:'events'},
   {type:'waffle_game_startup',message0:'On game startup',nextStatement:'waffle',style:'events'},
   {type:'waffle_declare',message0:'Declare %1 %2 = %3',style:'variables',args0:[
-    {type:'field_dropdown',name:'kind',options:[['global','globals'],['flag','flags'],['event','events'],['constant','constants'],['text resource','resources']]},
+    {type:'field_dropdown',name:'kind',options:[['global','globals'],['flag','flags'],['event','events'],['constant','constants']]},
     {type:'field_input',name:'name',text:'score'}, {type:'input_value',name:'value',check:'WaffleValue'},
+  ]},
+  {type:legacyResourceDeclaration,message0:'Declare text resource %1 = %2',style:'text',args0:[
+    {type:'field_input',name:'name',text:'greeting'}, {type:'input_value',name:'value',check:'WaffleValue'},
   ]},
   {type:'waffle_use',message0:'Use module %1',args0:[{type:'field_input',name:'name',text:'common'}],style:'routines'},
 ]);
@@ -312,7 +316,6 @@ for(const [id,field,list,empty] of [
   ['pressed','pressed','actions','Select action'],['released','released','actions','Select action'],
   ['action','action','actions','Select action'],['item','item','items','Register an item'],
   ['item_key','item','items','Register an item'],
-  ['localized','key','keys','Add a text key'],
   ['instance_ref','value','names','Choose entity'],
   ['component_ref','value','components','Choose component'],
   ['entity_field_ref','value','fields','Choose field'],
@@ -322,6 +325,12 @@ for(const [id,field,list,empty] of [
     this.jsonInit({...spec,args0:[menu(field,()=>data[list],empty,list==='actions'?buttonLabels:data[list+'Labels']??{})]});
   }};
 }
+Blockly.Blocks.waffle_localized={init(){
+  const data=registry(this),spec=logic.waffle_localized;
+  const field=menu('key',()=>data.keys,'Choose resource',{},()=>data.createResource&&{label:'+ Add resource…',open:data.createResource});
+  field.edit=key=>data.editResource&&data.keys.includes(key)?{label:'Edit resource…',open:()=>data.editResource(key)}:null;
+  this.jsonInit({...spec,args0:[field]});
+}};
 for(const id of ['set','change','get']){
   Blockly.Blocks['waffle_'+id]={init(){
     const spec=logic[this.type], data=registry(this);
@@ -422,8 +431,7 @@ const toolbox = (isRoom,isGame=false,isTile=false,isModule=false) => {
     ...picks('entities'),
   ]),
   category('drawing',picks('drawing')),
-  category('text',[...(isGame?[block('declare',{kind:'resources',name:'greeting'},{value:'Hello'})]:[]),
-    block('localized'),block('string'),...reporterChoices('text'),...picks('text')]),
+  category('text',[block('localized',{key:''}),block('string'),...reporterChoices('text'),...picks('text')]),
   category('items',[block('item'),block('item_key'),block('actor',{actor:'used_item'}),...picks('items')]),
   {...category('routines',[]),custom:'WAFFLE_ROUTINES'},
   ];
@@ -585,9 +593,9 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
   const blockToolbox=workspace.getToolbox();
   const roots=new Set([eventBlock,worldHat,roomHat,tileHat,timerHat,inputHat,receivedHat,'waffle_tick','waffle_init','waffle_game_startup','waffle_use','waffle_proc','waffle_fn']);
   const activeRoot=block=>block.type==='waffle_clone_start'&&!data.roomScript&&!data.tileScript||
-    data.gameScript&&(block.type==='waffle_declare'||collectionRoots.has(block.type)||configRoots.has(block.type)||block.type===controllerHat)||roots.has(block.type)&&(block.type!==receivedHat||block.getFieldValue('event'));
+    data.gameScript&&(block.type==='waffle_declare'||block.type===legacyResourceDeclaration||collectionRoots.has(block.type)||configRoots.has(block.type)||block.type===controllerHat)||roots.has(block.type)&&(block.type!==receivedHat||block.getFieldValue('event'));
   let projectKeys=keys;
-  const resourceNames=blocks=>blocks.filter(block=>block.type==='waffle_declare'&&block.getFieldValue('kind')==='resources')
+  const resourceNames=blocks=>blocks.filter(block=>block.type===legacyResourceDeclaration)
     .map(block=>block.getFieldValue('name')).filter(variableName);
   function refreshResourceKeys(names){
     data.keys=[...new Set([...projectKeys,...names])].sort();
@@ -878,8 +886,9 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
         layout[(hat.type==='waffle_bind_input'?'config:':'menu:')+name]=[position.x,position.y];continue;
       }
       if(hat.type==='waffle_use'){imports.push(name);layout['use:'+name]=[position.x,position.y];continue;}
-      if(hat.type==='waffle_declare'&&data.gameScript){
-        const kind=hat.getFieldValue('kind'), value=readValue(hat.getInputTargetBlock('value'));
+      if(data.gameScript&&(hat.type==='waffle_declare'||hat.type===legacyResourceDeclaration)){
+        const kind=hat.type===legacyResourceDeclaration?'resources':hat.getFieldValue('kind');
+        const value=readValue(hat.getInputTargetBlock('value'));
         if(!variableName(name)||!constantType(value)||Object.hasOwn(defined[kind],name)||
           (kind==='flags'&&typeof value!=='boolean')||(['events','resources'].includes(kind)&&typeof value!=='string'))throw Error('Use a unique name and a matching declaration value');
         defined[kind][name]=value;layout['declaration:'+kind+':'+name]=[position.x,position.y];continue;
@@ -950,6 +959,10 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
 
   function upgradeBlock(block){
     if(!block||typeof block!=='object')return;
+    if(block.type==='waffle_declare'&&block.fields?.kind==='resources'){
+      block.type=legacyResourceDeclaration;
+      delete block.fields.kind;
+    }
     if(block.type==='waffle_if_then'){
       block.type='waffle_if';
       block.extraState={otherwise:false};

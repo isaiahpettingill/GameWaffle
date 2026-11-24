@@ -13,6 +13,7 @@ export class SearchDropdown extends Blockly.FieldDropdown {
     });
     field.maxDisplayLength=24;
     field.create=options.create;
+    field.edit=options.edit;
     return field;
   }
 
@@ -55,6 +56,15 @@ export class SearchDropdown extends Blockly.FieldDropdown {
         });
       };
       picker.append(createButton);
+    }
+    const edit=this.edit?.(this.getValue());
+    if(edit){
+      const button=document.createElement('button');
+      button.type='button';
+      button.className='block-field-create';
+      button.textContent=edit.label;
+      button.onclick=()=>{dropdown.hideWithoutAnimation();edit.open();};
+      picker.append(button);
     }
     const options=this.getOptions(false).filter(([,value])=>!create||value!=='');
     const choose=value=>{

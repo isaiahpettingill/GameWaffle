@@ -174,9 +174,9 @@ end
 
 ## Text resources
 
-Open **Resources** to add text, choose languages, and edit translations. In the **Game** script, declare a key and its fallback text with `resource greeting = "Hello"` or the **Declare text resource** block in **Text**. Each declaration uses a string literal. A translation for the exported language takes precedence over the fallback.
+Open **Resources** to add text, choose languages, and edit translations. In Blockly, drag in a **Resource** block from **Text** and choose **+ Add resource…** from its dropdown. Studio saves the entry in the project’s resource table and selects it on the block. Choose **Edit resource…** in the same dropdown to change the selected entry or its translations.
 
-Use `text.greeting` or the searchable **Text key** block when the key is known. Use `text.lookup(local_string.key)` or **Look up text for** when the script computes the key. An unknown computed key returns an empty string. Each playable export includes the selected language and its fallbacks.
+Use `R.greeting` or `R["greeting"]` in WaffleScript when the key is known. Use `text.lookup(local_string.key)` or **Look up text for** when the script computes the key. An unknown computed key returns an empty string. Each playable export includes a read-only table with the selected language and its fallbacks.
 
 ## Export a game
 

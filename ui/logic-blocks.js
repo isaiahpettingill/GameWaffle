@@ -83,7 +83,7 @@ const definitions = {
   real:['operators','real %1',[number('value',0.5)],'value'],
   string:['text','text %1',[text('value','Hello')],'value'],
   color:['looks','%1',[{type:'field_color_picker',name:'value',text:'#a6e3a1'}],'value'],
-  localized:['text','Text key %1',[text('key','greeting')],'value','Read the translation packaged in this cartridge.'],
+  localized:['text','Resource %1',[text('key','greeting')],'value','Read a text resource in the cartridge’s language.'],
   join:['text','Join %1 and %2',[input('left'),input('right')],'value'],
   bool:['operators','%1',[options('value',['true','false'])],'condition'],
   get:['variables','%1 %2',[options('scope',scopes,scopeLabels),text('name','score')],'value'],

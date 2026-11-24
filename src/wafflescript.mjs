@@ -39,6 +39,13 @@ export function parseScript(source){
   const need=s=>{if(!eat(s))fail('Expected '+s);};
   const id=()=>{if(!identifier.test(peek()??''))fail('Expected a name');return tokens[i++].s;};
   const qualified=()=>{const name=id();return eat('.')?name+'.'+id():name;};
+  function stringLiteral(){
+    if(!peek()?.startsWith('"'))fail('Expected a quoted string');
+    let value;
+    try{value=JSON.parse(peek());}catch{fail('Invalid string');}
+    i++;
+    return value;
+  }
   const eol=()=>{if(peek()!==undefined && !eat('\n'))fail('Start a new line');while(eat('\n')){}};
   const mark=(obj,start)=>{locations.set(obj,{from:start,to:tokens[i-1]?.at+tokens[i-1]?.s.length});return obj;};
   function args(){
@@ -60,16 +67,23 @@ export function parseScript(source){
     else if(eat('not'))value={calc:'not',left:expr(6)};
     else if(eat('-')){if(!/^\d/.test(peek()??''))fail('Expected a number');value=numeric(-1);}
     else if(/^\d/.test(peek()??''))value=numeric();
-    else if(peek()?.startsWith('"')){try{value=JSON.parse(tokens[i].s);}catch{fail('Invalid string');}i++;}
+    else if(peek()?.startsWith('"'))value=stringLiteral();
     else if(eat('none'))value=null;
     else if(eat('true'))value=true;
     else if(eat('false'))value=false;
+    else if(peek()==='R'&&tokens[i+1]?.s==='['){
+      i+=2;
+      const key=stringLiteral();
+      if(!identifier.test(key))fail('Expected a resource key');
+      need(']');value={text:key};
+    }
     else {
       const name=qualified(),[scope,key]=name.split('.');
       if(peek()==='(')value={call:name==='controller_connected'?'entity.controller_connected':name,args:args()};
       else if(key && scopes.includes(scope))value={scope,get:key};
       else if(key && scope==='const')value={constant:key};
       else if(key && scope==='entity')value={actor:key};
+      else if(key && scope==='R')value={text:key};
       else if(key && ['item','button','actor','action','pressed','released','text'].includes(scope))value={[scope]:key};
       else if(!key)value={param:name};
       else fail('Unknown name '+name);
@@ -268,7 +282,7 @@ function value(v){
   if(v.param)return v.param;
   if(v.constant!=null)return 'const.'+v.constant;
   if(v.get)return v.scope+'.'+v.get;
-  if(v.text)return 'text.'+v.text;
+  if(v.text!==undefined)return identifier.test(v.text)?'R.'+v.text:'R['+JSON.stringify(v.text)+']';
   if(v.actor)return "entity."+v.actor;
   if(v.pressed)return 'pressed.'+v.pressed;
   if(v.released)return 'released.'+v.released;

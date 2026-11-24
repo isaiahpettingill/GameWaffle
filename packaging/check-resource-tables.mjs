@@ -15,11 +15,15 @@ resource pause_title = "Paused"
 on game startup
   global_string.prefix = "gree"
   global_string.greeting = text.lookup(global_string.prefix + "ting")
-  global_string.pause = text.pause_title
+  global_string.pause = R["pause_title"]
   global_string.missing = text.lookup("missing") + "!"
 end
 `);
 assert.equal(parseScript(formatScript(game)).declarations.resources.pause_title,'Paused');
+assert.match(formatScript(game),/global_string\.pause = R\.pause_title/);
+assert.deepEqual(parseScript('on tick\n  say(R.greeting)\nend').events,
+  parseScript('on tick\n  say(text.greeting)\nend').events);
+assert.throws(()=>compileScript(parseScript('on tick\n  say(R["missing"])\nend'),{},undefined,{text:{}}),/Add text key/);
 assert.throws(()=>parseScript('resource greeting = string.join("a", "b")'),/quoted string/);
 assert.throws(()=>parseScript('resource greeting = "hi"\nresource greeting = "hello"'),/unique name/);
 assert.throws(()=>compileScript(game,{},undefined,{gameScript:false}),/Game script/);

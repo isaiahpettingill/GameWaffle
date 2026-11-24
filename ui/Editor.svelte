@@ -22,6 +22,7 @@
   }
   import ScriptPanel from './ScriptPanel.svelte';
   import Localization from './Localization.svelte';
+  import ResourceDialog from './ResourceDialog.svelte';
   import RoomDefaults from './RoomDefaults.svelte';
   import {resourceTables} from '../src/resource-tables.mjs';
   import ComponentPicker from './ComponentPicker.svelte';
@@ -73,7 +74,7 @@
   let inspector=$derived(assetKind==='tile' ? tile : sprite);
   let artFiles=$derived(assets.filter(file=>/\.(ase|aseprite|png)$/i.test(file)));
   let stageFilter=$state(''),placeAs=$state('');
-  let nameDialog=$state.raw(null),newName=$state('');
+  let nameDialog=$state.raw(null),newName=$state(''),resourceDialog=$state.raw(null);
   let gameSettings=$state(''),returnToCodeTarget=false,instanceSection=$state('Placement'),mobilePane=$state('Editor');
   const tabs=[['world','World'],['room','Room'],['actors','Entities'],['blocks','Code'],['assets','Assets'],['shaders','Shaders'],['resources','Resources'],['game','Game']];
 
@@ -115,6 +116,8 @@
   const gameGlobals=$derived({...project?.variables,...gameScript?.declarations?.globals});
   const gameEvents=$derived({...project?.events,...gameScript?.declarations?.events});
   const blockReferences=$derived({
+    createResource:openResourceDialog,
+    editResource:openResourceEdit,
     names:[...new Set(Object.values(project?.rooms??{}).flatMap(room=>instanceNames(room.entities??[])))].sort(),
     componentsLabels:componentLabels,
     spritesLabels:Object.fromEntries(Object.entries(project?.sprites??{}).map(([id,sprite])=>[id,sprite.title??id])),
@@ -149,6 +152,36 @@
   function askName(kind,query,register,select){
     newName=query.slice(0,100);
     nameDialog={kind,register,select};
+  }
+  function openResourceDialog(suggestedName='',select){
+    resourceDialog={suggestedName,select};
+  }
+  function openResourceEdit(key){
+    if(!Object.hasOwn(textEntries,key))return;
+    const values=Object.fromEntries(Object.entries(localization.tables).map(([locale,table])=>[locale,
+      Object.hasOwn(table,key)?table[key]:undefined]));
+    resourceDialog={entry:{key,values}};
+  }
+  async function addTextResource(name,text){
+    const locale=localization.locale||'en';
+    const key=resourceName(name,'text',[textEntries]);
+    const tables=project.localization?.tables;
+    project.localization={locale,tables:{...tables,[locale]:{...tables?.[locale],[key]:text}}};
+    mark('resource '+key);
+    const {select}=resourceDialog;
+    resourceDialog=null;
+    await tick();
+    select?.(key);
+  }
+  function editTextResource(changes){
+    const {key}=resourceDialog.entry;
+    const locale=localization.locale;
+    const tables={...project.localization?.tables};
+    tables[locale]??={};
+    for(const [language,text] of Object.entries(changes))tables[language]={...tables[language],[key]:text};
+    project.localization={locale,tables};
+    mark('edit resource '+key);
+    resourceDialog=null;
   }
   function newEvent(query='',select){
     askName('event',query,async title=>{
@@ -1118,6 +1151,10 @@
     </form>
   </Modal>
 {/if}
+{#if resourceDialog}
+  <ResourceDialog suggestedName={resourceDialog.suggestedName} entry={resourceDialog.entry} locale={localization.locale}
+    onAdd={addTextResource} onEdit={editTextResource} onClose={()=>resourceDialog=null}/>
+{/if}
 {#if nameDialog}
   {@const kind=nameDialog.kind}
   {@const label=kind[0].toUpperCase()+kind.slice(1)}
@@ -1260,7 +1297,7 @@
         <World rooms={project.rooms} flags={Object.keys(gameFlags)} {roomId} onSelect={id=>selectRoom(id,'stage')} onEdit={(changes,label)=>{Object.assign(project.rooms,changes);updateDirty(label);}}/>
       {:else if tab==='resources'}
         <Localization value={project.localization} resources={gameScript?.declarations?.resources}
-          onChange={value=>set(project,'localization',value)} onGameScript={()=>openGameScript('game')}/>
+          onChange={value=>set(project,'localization',value)} onAdd={select=>openResourceDialog('',select)} onGameScript={()=>openGameScript('game')}/>
       {:else if tab==='shaders'}
         <ShaderWorkspace {project} files={assets} {shaderDefinitions} room={roomId} target={shaderTarget} drafts={shaderDrafts}
           onUpload={uploadLibraryAsset} onEdit={editLibraryAsset} onOpen={openLibraryAsset} onShader={openShaderWorkspace}
