@@ -93,7 +93,7 @@ Blockly.defineBlocksWithJsonArray([
   eventDefinition(roomHat,roomEvents),
   eventDefinition(tileHat,tileEvents),
   {type:controllerHat,message0:'When player %1 %2',nextStatement:'waffle',style:'events',args0:[
-    {type:'field_dropdown',name:'player',options:['2','3','4'].map(slot=>[slot,slot])},
+    {type:'field_dropdown',name:'player',options:['2','1','3','4'].map(slot=>[slot,slot])},
     {type:'field_dropdown',name:'edge',options:[['connects','controller_connected'],['disconnects','controller_disconnected']]},
   ]},
   {type:timerHat,message0:'%1 %2 seconds',nextStatement:'waffle',style:'events',args0:[

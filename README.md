@@ -252,6 +252,8 @@ Open the **Game script**. Set a fixed display resolution or set adaptive display
 
 Connect standard-mapped gamepads or use the keyboard. The players support four local slots. In the web player, set **Players** to the number of players. Compare the number of gamepads and player slots. If there are fewer gamepads, use the keyboard for the first slot. Gamepads use the other slots.
 
+Couch players share one screen by default. Games can enable split-screen with automatic merging in the desktop and Android player and in the Libretro core. [WaffleScript multiplayer controls](docs/wafflescript.md#couch-and-lan-players)
+
 | Control | Player 1 keyboard | Player 2 keyboard (web) |
 |---|---|---|
 | D-pad | Arrow keys or W A S D | I J K L |

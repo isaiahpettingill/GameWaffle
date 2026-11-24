@@ -4,6 +4,7 @@
   import {Pause,Play} from '@lucide/svelte';
   import {unpack} from '../src/cartridge.mjs';
   import {createRuntime} from './runtime.js';
+  import {MAX_CATCH_UP,TICK_MS} from './frame-clock.js';
   import {drawRoom,loadAtlas} from './render.js';
   import {previewShaderStatus,runShaderPipeline} from './shader-pipeline.js';
   import {createShaderPreviewGL} from './shader-preview-gl.js';
@@ -61,11 +62,11 @@
     if(!runtime)return;
     try{
       prepare(definition);
-      elapsed=Math.min(elapsed+(last?now-last:0),100);
+      elapsed=Math.min(elapsed+(last?now-last:0),TICK_MS*MAX_CATCH_UP);
       last=now;
-      if(playing&&elapsed>=1000/30){
-        const frames=Math.floor(elapsed/(1000/60));
-        elapsed-=frames*(1000/60);
+      if(playing&&elapsed>=2*TICK_MS){
+        const frames=Math.floor((elapsed+1e-6)/TICK_MS);
+        elapsed=Math.max(0,elapsed-frames*TICK_MS);
         runtime.advance_buttons(0,frames);
         snapshot=decodeFrame(runtime.snapshot());
         needsPaint=true;

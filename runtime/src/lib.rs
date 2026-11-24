@@ -37,6 +37,13 @@ const GAME_SCRIPT: &str = "@game";
 const MAX_ACTIONS: usize = MAX_ACTORS * 8;
 const MAX_BROADCASTS: usize = 128;
 const MAX_EVENT_DELIVERIES: usize = MAX_ACTORS * 2;
+const RESUME_FUEL: usize = 64 * vm::SLICE;
+const EVENT_FUEL: usize = 32 * vm::SLICE;
+const TICK_FUEL: usize = 96 * vm::SLICE;
+const LATE_FUEL: usize = 32 * vm::SLICE;
+const CONTROL_RESUME_FUEL: usize = 8 * vm::SLICE;
+const CONTROL_FUEL: usize = 24 * vm::SLICE;
+const SCRIPT_FUEL: usize = RESUME_FUEL + EVENT_FUEL + TICK_FUEL + LATE_FUEL + CONTROL_RESUME_FUEL + CONTROL_FUEL;
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 struct Broadcast {
@@ -247,6 +254,9 @@ pub struct Runtime {
     bars: BTreeMap<String, [i32; 2]>,
     counters: BTreeMap<String, i32>,
     script_fuel: usize,
+    control_fuel: usize,
+    resume_cursor: Option<(u32, String)>,
+    tick_cursor: Option<u32>,
     jit_enabled: bool,
     jit_cache: jit::Cache,
     jit_runs: u32,
@@ -375,7 +385,7 @@ impl Runtime {
     }
 
     pub fn set_connected_players(&mut self, mask: u8) {
-        self.connected_players = (mask & 15) | 1;
+        self.connected_players = mask & 15;
     }
 
     pub fn first_controller_slot(&self) -> usize {
@@ -385,6 +395,10 @@ impl Runtime {
 
 impl Runtime {
     pub fn game_settings(&self) -> &GameSettings { &self.game_settings }
+
+    pub fn connected_player_mask(&self) -> u8 {
+        self.connected_players
+    }
 
     fn next_random_u32(rng: &mut u32) -> u32 {
         *rng ^= *rng << 13;
@@ -420,7 +434,9 @@ impl Runtime {
 
     fn focus(&self) -> Option<[f32; 2]> {
         if self.group_camera {
-            let mut players = self.actors.values().filter(|a| a.player.is_some());
+            let mut players = self.actors.values().filter(|actor| {
+                !actor.hidden && actor.player.is_some_and(|slot| self.connected_players & (1 << slot) != 0)
+            });
             if let Some(first) = players.next() {
                 let (mut left, mut right, mut top, mut bottom) =
                     (first.p.x, first.p.x, first.p.y, first.p.y);
@@ -439,7 +455,11 @@ impl Runtime {
                 .or_else(|| {
                     self.actors
                         .values()
-                        .find(|a| a.player == Some(self.camera_slot))
+                        .find(|a| !a.hidden && a.player == Some(self.camera_slot)
+                            && (self.camera_slot != 0 || self.connected_players & 1 != 0))
+                        .or_else(|| self.actors.values().find(|a| !a.hidden
+                            && a.player.is_some_and(|slot| self.connected_players & (1 << slot) != 0)))
+                        .or_else(|| self.actors.values().find(|a| !a.hidden && a.player == Some(self.camera_slot)))
                 })
                 .map(|a| [a.p.x, a.p.y])
         })
@@ -747,8 +767,8 @@ impl Runtime {
             room_settings: RoomSettings::default(),
             room_script_id: None,
             game_settings: GameSettings::default(),
-            connected_players: (connected & 15) | 1,
-            reported_players: 1,
+            connected_players: connected & 15,
+            reported_players: 0,
             startup_gamepads: gamepads.map(|count| count.min(4)),
             shapes: Vec::new(),
             view_size: [512, 512],
@@ -767,6 +787,9 @@ impl Runtime {
             bars: Default::default(),
             counters: Default::default(),
             script_fuel: 0,
+            control_fuel: 0,
+            resume_cursor: None,
+            tick_cursor: None,
             jit_enabled: jit::SUPPORTED,
             jit_cache: jit::Cache::default(),
             jit_runs: 0,
@@ -783,13 +806,14 @@ impl Runtime {
     fn update_startup_controllers(&mut self) {
         if let Some(count) = self.startup_gamepads {
             let pressed = ((1u8 << count) - 1) << self.first_controller_slot();
-            self.set_connected_players(pressed);
+            self.set_connected_players(pressed | 1);
         }
     }
 
     fn game_startup(&mut self) -> Result<(), String> {
         self.jit_cache.begin_tick();
-        self.script_fuel = 262144;
+        self.script_fuel = SCRIPT_FUEL;
+        self.control_fuel = 0;
         let mut actions = Vec::new();
         let inputs = self.inputs;
         self.events.clear();
@@ -815,6 +839,8 @@ impl Runtime {
             self.memory.insert(self.room.clone(), state);
         }
         self.actors.clear();
+        self.resume_cursor = None;
+        self.tick_cursor = None;
         self.tile_entities.clear();
         self.entity_ids.clear();
         self.animated_colliders.clear();
@@ -1311,7 +1337,8 @@ impl Runtime {
                         .cloned()
                         .unwrap_or_default();
                     let mut actions = Vec::new();
-                    self.script_fuel = 262144;
+                    self.script_fuel = SCRIPT_FUEL;
+                    self.control_fuel = 0;
                     self.run(menu.owner, "menu_selected", &inputs, &mut actions);
                     self.apply(&mut actions, &inputs);
                     if let Some(room) = self.transition.take() {
@@ -1344,7 +1371,8 @@ impl Runtime {
         self.tick += 1;
         self.jit_cache.begin_tick();
         self.shapes.clear();
-        self.script_fuel = 262144;
+        self.script_fuel = RESUME_FUEL;
+        self.control_fuel = CONTROL_RESUME_FUEL;
         self.update_activity();
         let mut actions = Vec::new();
         let suspended: Vec<_> = self
@@ -1353,23 +1381,39 @@ impl Runtime {
             .flat_map(|actor| {
                 actor
                     .scripts
-                    .keys()
-                    .filter(|event| !actor.dormant || event.starts_with("received."))
-                    .map(move |event| (actor.id, event.clone()))
+                    .iter()
+                    .filter(|(event, machine)| {
+                        *event != "tick" && machine.ready(self.tick)
+                            && (!actor.dormant || event.starts_with("received."))
+                    })
+                    .map(move |(event, _)| (actor.id, event.clone()))
             })
             .collect();
-        for (id, event) in suspended {
-            if event != "tick" {
-                self.run_script(
-                    id,
-                    &event,
-                    &inputs,
-                    &mut actions,
-                    false,
-                    ScriptPayload::Numbers([0; 2]),
-                );
+        let resume_start = self
+            .resume_cursor
+            .take()
+            .map_or(0, |cursor| suspended.partition_point(|job| job < &cursor));
+        for (id, event) in suspended[resume_start..].iter().chain(&suspended[..resume_start]) {
+            if self.script_budget(*id, event) == 0 {
+                if self.resume_cursor.is_none() {
+                    self.resume_cursor = Some((*id, event.clone()));
+                }
+                if self.control_fuel == 0 {
+                    break;
+                }
+                continue;
             }
+            self.run_script(
+                *id,
+                event,
+                &inputs,
+                &mut actions,
+                false,
+                ScriptPayload::Numbers([0; 2]),
+            );
         }
+        // Let later phases spend unused fuel from earlier ones.
+        self.script_fuel += EVENT_FUEL;
         if std::mem::take(&mut self.restored) {
             let actors: Vec<_> = self
                 .actors
@@ -1394,10 +1438,11 @@ impl Runtime {
                 self.run(id, "start", &inputs, &mut actions);
             }
         }
+        self.control_fuel += CONTROL_FUEL;
         let changed = self.reported_players ^ self.connected_players;
         self.reported_players = self.connected_players;
         if changed != 0 {
-            for slot in 1..4 {
+            for slot in 0..4 {
                 if changed & (1 << slot) == 0 { continue; }
                 let event = if self.connected_players & (1 << slot) == 0 {"disconnected"} else {"connected"};
                 self.run(0, &format!("controller_{event}.{}", slot + 1), &inputs, &mut actions);
@@ -1405,6 +1450,7 @@ impl Runtime {
         }
         self.deliver_broadcasts(&inputs, &mut actions);
         self.run_timers(&inputs, &mut actions);
+        self.script_fuel += TICK_FUEL;
         let mut emitter_ids = Vec::new();
         let scripted: Vec<_> = self
             .entity_ids
@@ -1457,7 +1503,11 @@ impl Runtime {
                 }
             }
         }
-        for (id, player) in scripted {
+        let tick_start = self.tick_cursor.take().and_then(|cursor| {
+            scripted.iter().position(|(id, _)| *id == cursor)
+                .or_else(|| scripted.iter().position(|(id, _)| *id > cursor))
+        }).unwrap_or(0);
+        for &(id, player) in scripted[tick_start..].iter().chain(&scripted[..tick_start]) {
             let actor = &mut self.actors.get_mut(&id).unwrap();
             let finished = !actor.animation_finished
                 && actor
@@ -1484,6 +1534,12 @@ impl Runtime {
                     self.engine(id, inputs[slot], 1, [8., 0., 0.], "", &mut actions);
                 }
             }
+            if self.script_fuel < vm::SLICE
+                && self.tick_cursor.is_none()
+                && self.script_budget(id, "tick") < vm::SLICE
+            {
+                self.tick_cursor = Some(id);
+            }
             self.run(id, "tick", &inputs, &mut actions);
             if let Some(slot) = player {
                 for event in &edges[slot] {
@@ -1504,6 +1560,7 @@ impl Runtime {
             }
         }
         self.inputs = inputs;
+        self.script_fuel += LATE_FUEL + std::mem::take(&mut self.control_fuel);
         self.apply(&mut actions, &inputs);
         if let Some(room) = self.transition.take() {
             return self.load(&room);
@@ -1592,7 +1649,8 @@ impl Runtime {
         }
         self.sync_gates()?;
         self.process_respawns()?;
-        self.particles.update(self.focus(), self.view_size);
+        let particle_focus = self.game_settings.split_screen.is_none().then(|| self.focus()).flatten();
+        self.particles.update(particle_focus, self.view_size);
         if std::mem::take(&mut self.retry) {
             if let Some(saved) = self.checkpoint.clone() {
                 return self.load_game(&saved);
@@ -1641,7 +1699,7 @@ impl Runtime {
     }
 
     fn deliver_broadcasts(&mut self, inputs: &[Input; 4], actions: &mut Vec<Action>) {
-        for signal in std::mem::take(&mut self.broadcasts) {
+        while let Some(signal) = self.broadcasts.front() {
             let event = format!("received.{}", signal.name);
             let listeners = self
                 .entity_ids
@@ -1657,8 +1715,13 @@ impl Runtime {
                         .is_some_and(|events| events.contains_key(&event))
                 });
             let room = MAX_EVENT_DELIVERIES.saturating_sub(self.event_deliveries.len());
+            let listeners: Vec<_> = listeners.take(room + 1).collect();
+            if listeners.len() > room {
+                break;
+            }
+            let signal = self.broadcasts.pop_front().unwrap();
             self.event_deliveries
-                .extend(listeners.take(room).map(|id| EventDelivery {
+                .extend(listeners.into_iter().map(|id| EventDelivery {
                     receiver: id,
                     signal: signal.clone(),
                 }));
@@ -1693,6 +1756,24 @@ impl Runtime {
             true,
             ScriptPayload::Numbers([0; 2]),
         );
+    }
+
+    fn is_control_event(event: &str) -> bool {
+        matches!(event, "tick" | "a" | "b" | "x" | "menu")
+            || event.starts_with("pressed.")
+            || event.starts_with("released.")
+            || event.starts_with("controller_")
+    }
+
+    fn script_budget(&self, id: u32, event: &str) -> usize {
+        if self.control_fuel != 0 && Self::is_control_event(event)
+            && (id == 0 || self.room_script_id == Some(id)
+                || self.actors.get(&id).is_some_and(|actor| actor.player.is_some()))
+        {
+            self.control_fuel
+        } else {
+            self.script_fuel
+        }
     }
 
     fn run_script(
@@ -1746,7 +1827,14 @@ impl Runtime {
             .player
             .or((id == 0 || self.room_script_id == Some(id)).then_some(0));
         let (input, previous) = slot.map_or((Input::default(), 0), |slot| (inputs[slot], self.prior_buttons[slot]));
+        let control = self.control_fuel != 0 && slot.is_some() && Self::is_control_event(event);
+        if control {
+            std::mem::swap(&mut self.script_fuel, &mut self.control_fuel);
+        }
         let result = machine.run(self, id, event, input, previous, actions);
+        if control {
+            std::mem::swap(&mut self.script_fuel, &mut self.control_fuel);
+        }
         if self.actors.get(&id).is_some_and(|actor| actor.clone_deleting) {
             if let Some(body) = self.remove_entity_record(id).and_then(|actor| actor.body) {
                 self.world.remove(body);
@@ -1857,7 +1945,7 @@ impl Runtime {
         name: &str,
         actions: &mut Vec<Action>,
     ) {
-        if actions.len() >= MAX_ACTIONS {
+        if actions.len() >= MAX_ACTIONS && matches!(opcode, 2 | 3 | 9 | 26 | 38 | 64) {
             return;
         }
         let arg = |index: usize| args[index - 1];

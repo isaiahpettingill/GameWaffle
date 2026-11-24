@@ -5,7 +5,7 @@ export const roomBorder = (room, topDown) => room.border ?? (room.closedEdges ==
 export const Events = ['init','start','clone_start','game_startup','use_item', 'restored', 'tick', 'a', 'b', 'x', 'menu', 'begin_contact', 'end_contact', 'damage', 'destroy', 'animation_finished', 'menu_selected'];
 export const receivedEvent=name=>/^received\.[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name);
 export const inputEvent=name=>/^(pressed|released)\.[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name);
-export const controllerEvent=name=>/^controller_(connected|disconnected)\.[2-4]$/.test(name);
+export const controllerEvent=name=>/^controller_(connected|disconnected)\.[1-4]$/.test(name);
 export const timerEvent=name=>/^(after|every)\.[1-9][0-9]{0,6}$/.test(name)&&Number(name.split('.')[1])<=1296000;
 export function initialScript(actor){
   const init=[], self={actor:'id'}, events={};
@@ -26,6 +26,7 @@ export const Blocks = {
   set_default_camera:['Set default camera to %1',[['target',['player','group'],'player']]],
   set_minimap:['Set minimap to %1',[['mode',['off','world','explored'],'off']]],
   set_first_controller:['First gamepad controls player %1',[['player','integer',2]]],
+  set_split_screen:['Split screen %1 · merge within %2 pixels',[['enabled','boolean',true],['merge_distance','integer',0]]],
   set_entity_visible:['Show entity %1 %2',[['entity','integer',0],['visible','boolean',true]]],
   assign_entity_player:['Assign entity %1 to player %2',[['entity','integer',0],['player','integer',1]]],
   clone_entity:['Clone entity %1',[['entity','integer',{actor:'id'}]]],
@@ -179,14 +180,14 @@ export const Opcodes = Object.freeze({
   clone_entity:141,delete_clone:142,
   reporter:143,
   set_background_gradient:144,set_gradient_axis:145,set_gradient_stop:146,set_gradient_focus:147,
-  set_gradient_palette_color:148,clear_gradient_slot:149,
+  set_gradient_palette_color:148,clear_gradient_slot:149,set_split_screen:150,
   set_entity_layer:130,set_entity_team:131,set_entity_max_health:132,set_entity_friction:133,set_emitter:134,
 });
 export const collectionCommands=['inventory_append','inventory_remove','inventory_set','inventory_create_child','inventory_remove_child','array_append','array_set','array_remove'];
 export const collectionQueries=['inventory.length','inventory.type','inventory.has','inventory.get','array.length','array.at'];
 export const drawingCommands=['draw_space','fill','no_fill','stroke','no_stroke','stroke_width','rect','ellipse','circle','line','triangle','point'];
 export const tileCommands=['set_tile_playback','set_tile_frame','advance_tile_frame','set_tile_friction','set_tile_body'];
-export const gameCommands=['set_display_resolution','set_adaptive_display','set_default_camera','set_minimap','set_first_controller'];
+export const gameCommands=['set_display_resolution','set_adaptive_display','set_default_camera','set_minimap','set_first_controller','set_split_screen'];
 export const gradientCommands=['set_background_gradient','set_gradient_axis','set_gradient_stop','set_gradient_focus','set_gradient_palette_color','clear_gradient_slot'];
 export const roomCommands = ['camera_follow_entity','camera_zoom','reset_room_camera','set_room_gravity',
   'set_room_background','set_room_background_image','set_camera_bottom_inset','set_room_border','set_room_depth_sort','set_room_music','set_room_ambience','set_room_shader','reset_room_shader',...gradientCommands];

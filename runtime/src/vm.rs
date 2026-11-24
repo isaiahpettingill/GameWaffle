@@ -77,7 +77,7 @@ impl Value {
 pub type Programs = BTreeMap<String, Rc<Program>>;
 
 const REGISTERS: usize = 64;
-const SLICE: usize = 1024;
+pub(crate) const SLICE: usize = 1024;
 // Bound the host stack on targets that do not eliminate indirect tail calls.
 const DISPATCH_BATCH: usize = 16;
 const INTEGER_BITS: u64 = 8192;
@@ -239,6 +239,7 @@ impl Program {
                 147 => "WWWWW",
                 148 => "WW",
                 149 => "NW",
+                150 => "WW",
                 2 => "WWW",
                 3 | 9 => "NWW",
                 5 | 7 | 8 => "N",
@@ -456,6 +457,10 @@ fn run_numeric_region<const FIRST: u8>(
 }
 
 impl Machine {
+    pub(crate) fn ready(&self, tick: u64) -> bool {
+        self.wake <= tick
+    }
+
     pub fn new(program: Rc<Program>, payload: [i64; 2]) -> Self {
         Self {
             payload,
@@ -592,7 +597,7 @@ impl Machine {
 
 // The loader resolves each opcode once. Each handler reads the next handler
 // address directly from the decoded instruction stream.
-const HANDLERS: [Handler; 150] = [
+const HANDLERS: [Handler; 151] = [
     execute::<0>,
     execute::<1>,
     execute::<2>,
@@ -743,6 +748,7 @@ const HANDLERS: [Handler; 150] = [
     execute::<147>,
     execute::<148>,
     execute::<149>,
+    execute::<150>,
 ];
 fn execute<const OP: u8>(
     i: &Instruction,
@@ -773,7 +779,7 @@ fn execute<const OP: u8>(
         135..=138 => shader_command(OP, i, m, cx),
         118..=126 => collection_command(OP,i,m,cx),
         106..=117 => draw_command(OP, i, m, cx),
-        92..=98 => system_command(OP, i, m, cx),
+        92..=98 | 150 => system_command(OP, i, m, cx),
         100..=104 => tile_command(OP, i, m, cx),
         105 => {
             let [target,x,y,..]=i.args;
@@ -1217,7 +1223,7 @@ fn system_command(op: u8, i: &Instruction, m: &Machine, cx: &mut Context<'_>) ->
     };
     let name = || m.program.names[i.args[0] as usize].as_ref();
     let runtime = &mut cx.runtime;
-    if op <= 96 && cx.id != 0 {
+    if (op <= 96 || op == 150) && cx.id != 0 {
         return Err("Use this command in the Game script");
     }
     match op {
@@ -1260,6 +1266,10 @@ fn system_command(op: u8, i: &Instruction, m: &Machine, cx: &mut Context<'_>) ->
             let player = integer(1)?;
             if player > 4 { return Err("Choose player 1 to 4, or 0 for no player"); }
             runtime.assign_player(entity, player.checked_sub(1).map(|player| player as usize));
+        }
+        150 => {
+            let distance = u16::try_from(integer(1)?).map_err(|_| "Split-screen merge distance must be between 0 and 65535 pixels")?;
+            runtime.game_settings.split_screen = (!m.registers[i.args[0] as usize].zero()).then_some(distance);
         }
         _ => unreachable!(),
     }

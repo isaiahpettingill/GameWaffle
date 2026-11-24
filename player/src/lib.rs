@@ -6,6 +6,7 @@ mod shaders;
 #[cfg(feature = "libretro")]
 mod retro;
 mod sound;
+mod split;
 
 use gamewaffle_runtime::{Input, RoomShader, Runtime, ShaderKind, viewport, viewport_zoom};
 use media::Media;
@@ -27,6 +28,8 @@ use std::{
 };
 type Error = Box<dyn std::error::Error>;
 const TICK: Duration = Duration::from_nanos(16_666_667);
+const MAX_CATCH_UP: u32 = 3;
+const UPDATE_BUDGET: Duration = Duration::from_millis(8);
 
 fn active_track<'a>(setting: &'a Option<String>, default: &'a Option<String>) -> Option<&'a str> {
     setting
@@ -40,16 +43,16 @@ struct Game {
     media: Media,
 }
 impl Game {
-    fn open(path: &Path, gamepads: usize, window: [u32; 2]) -> Result<Self, Error> {
+    fn open(path: &Path, connected: u8, gamepads: Option<u8>, window: [u32; 2]) -> Result<Self, Error> {
         let mut bytes = Vec::new();
         sdl3::iostream::IOStream::from_file(path, "rb")?
             .take(256 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)?;
-        Self::from_cartridge(&bytes, 1, Some(gamepads.min(4) as u8), window)
+        Self::from_cartridge(&bytes, connected, gamepads, window)
     }
     fn from_cartridge(bytes: &[u8], connected: u8, gamepads: Option<u8>, window: [u32; 2]) -> Result<Self, Error> {
         std::hint::black_box(
-            b"GAMEWAFFLE_CARTRIDGE_3\0GAMEWAFFLE_RUNTIME_ABI_3\0GAMEWAFFLE_RUNTIME_ABI_4\0GAMEWAFFLE_RUNTIME_ABI_5\0GAMEWAFFLE_RUNTIME_ABI_6\0GAMEWAFFLE_RUNTIME_ABI_7\0GAMEWAFFLE_RUNTIME_ABI_8\0GAMEWAFFLE_RUNTIME_ABI_9\0GAMEWAFFLE_RUNTIME_ABI_10\0GAMEWAFFLE_RUNTIME_ABI_11\0GAMEWAFFLE_RUNTIME_ABI_12\0GAMEWAFFLE_RUNTIME_ABI_13\0GAMEWAFFLE_RUNTIME_ABI_14\0GAMEWAFFLE_RUNTIME_ABI_15\0GAMEWAFFLE_RUNTIME_ABI_16\0GAMEWAFFLE_RUNTIME_ABI_17\0",
+            b"GAMEWAFFLE_CARTRIDGE_3\0GAMEWAFFLE_RUNTIME_ABI_3\0GAMEWAFFLE_RUNTIME_ABI_4\0GAMEWAFFLE_RUNTIME_ABI_5\0GAMEWAFFLE_RUNTIME_ABI_6\0GAMEWAFFLE_RUNTIME_ABI_7\0GAMEWAFFLE_RUNTIME_ABI_8\0GAMEWAFFLE_RUNTIME_ABI_9\0GAMEWAFFLE_RUNTIME_ABI_10\0GAMEWAFFLE_RUNTIME_ABI_11\0GAMEWAFFLE_RUNTIME_ABI_12\0GAMEWAFFLE_RUNTIME_ABI_13\0GAMEWAFFLE_RUNTIME_ABI_14\0GAMEWAFFLE_RUNTIME_ABI_15\0GAMEWAFFLE_RUNTIME_ABI_16\0GAMEWAFFLE_RUNTIME_ABI_17\0GAMEWAFFLE_RUNTIME_ABI_18\0",
         );
         let mut runtime = Runtime::from_cartridge_with_view(bytes, None, connected, gamepads, window[0], window[1], false)?;
         runtime.set_seed(
@@ -172,18 +175,16 @@ fn request_file(window: &Window, sender: &mpsc::Sender<PathBuf>) -> Result<(), E
     Ok(())
 }
 
-fn draw_world<T: sdl3::render::RenderTarget>(
-    canvas: &mut Canvas<T>,
+fn scene_origin(
     game: &Game,
     snapshot: &gamewaffle_runtime::Snapshot<'_>,
-    atlas: &mut Texture<'_>,
     view: [u32; 4],
-    rectangles: &mut Vec<FRect>,
-    gradient: Option<&Texture<'_>>,
-) -> Result<(), Error> {
+    focus: Option<[f32; 2]>,
+) -> [i32; 2] {
     let room = &game.media.rooms[snapshot.room];
     let source = &game.media.atlases[snapshot.room];
     let [vx, vy, w, h] = view;
+    let focus = focus.or(snapshot.focus);
     let seam = |edge: &str, name: &str, horizontal: bool| {
         if room.seams.get(edge) != Some(&true) {
             return 0;
@@ -210,7 +211,7 @@ fn draw_world<T: sdl3::render::RenderTarget>(
         vx,
         w,
         room.width,
-        snapshot.focus.map(|p| p[0]),
+        focus.map(|p| p[0]),
         seam("left", "seam/left", true),
         seam("right", "seam/right", true),
     );
@@ -218,7 +219,7 @@ fn draw_world<T: sdl3::render::RenderTarget>(
         vy,
         h,
         snapshot.room_settings.camera_height.unwrap_or_else(|| room.camera_height()),
-        snapshot.focus.map(|p| p[1]),
+        focus.map(|p| p[1]),
         seam("up", "seam/up", false),
         if snapshot.room_settings.camera_height.or(room.camera_height).is_none_or(|height| height >= room.height) {
             seam("down", "seam/down", false)
@@ -226,6 +227,21 @@ fn draw_world<T: sdl3::render::RenderTarget>(
             0
         },
     );
+    [x, y]
+}
+
+fn draw_world<T: sdl3::render::RenderTarget>(
+    canvas: &mut Canvas<T>,
+    game: &Game,
+    snapshot: &gamewaffle_runtime::Snapshot<'_>,
+    atlas: &mut Texture<'_>,
+    [x, y]: [i32; 2],
+    [w, h]: [u32; 2],
+    rectangles: &mut Vec<FRect>,
+    gradient: Option<&Texture<'_>>,
+) -> Result<(), Error> {
+    let room = &game.media.rooms[snapshot.room];
+    let source = &game.media.atlases[snapshot.room];
     if let Some(gradient) = gradient {
         canvas.copy(gradient, None, FRect::new(0., 0., w as f32, h as f32))?;
     } else {
@@ -682,6 +698,7 @@ fn draw<T: sdl3::render::RenderTarget>(
     snapshot: &gamewaffle_runtime::Snapshot<'_>,
     atlas: &mut Texture<'_>,
     view: [u32; 4],
+    focus: Option<[f32; 2]>,
     rectangles: &mut Vec<FRect>,
     ripple_target: Option<&mut Texture<'_>>,
     hd_target: Option<&mut Texture<'_>>,
@@ -695,7 +712,8 @@ fn draw<T: sdl3::render::RenderTarget>(
     let stack = snapshot.room_settings.shader_pipeline.as_deref();
     let shader = stack.is_none().then(|| override_shader.or(room.shader)).flatten();
     let hd = if stack.is_some() { 0 } else { room.hd_strength(override_shader) };
-    let scene_origin = [view[0] as f32, view[1] as f32];
+    let origin = scene_origin(game, snapshot, view, focus);
+    let scene_origin = origin.map(|axis| axis as f32);
     let rasterized = if let (Some(passes), Some((pipeline, targets))) = (stack, room_effects) {
         canvas.set_draw_color(Color::BLACK);
         canvas.clear();
@@ -703,7 +721,7 @@ fn draw<T: sdl3::render::RenderTarget>(
             canvas, targets, &game.media.shaders, passes, snapshot.tick,
             FRect::new(0., 0., w as f32, h as f32),
             |target| {
-                draw_world(target, game, snapshot, atlas, view, rectangles, gradient)?;
+                draw_world(target, game, snapshot, atlas, origin, [w, h], rectangles, gradient)?;
                 draw_shapes(target, snapshot.shapes, false, scene_origin)
             },
         )?;
@@ -717,7 +735,7 @@ fn draw<T: sdl3::render::RenderTarget>(
         {
             let mut result = Ok(());
             canvas.with_texture_canvas(scene, |target| {
-                result = draw_world(target, game, snapshot, atlas, view, rectangles, gradient);
+                result = draw_world(target, game, snapshot, atlas, origin, [w, h], rectangles, gradient);
             })?;
             result?;
             for row in (0..h).step_by(2) {
@@ -747,7 +765,7 @@ fn draw<T: sdl3::render::RenderTarget>(
                 }
             }
         } else {
-            draw_world(canvas, game, snapshot, atlas, view, rectangles, gradient)?;
+            draw_world(canvas, game, snapshot, atlas, origin, [w, h], rectangles, gradient)?;
         }
         let layers = shader.map_or(
             &[
@@ -954,7 +972,7 @@ pub fn run_network(
 ) -> Result<(), Error> {
     let mut network = connection
         .map(|(address, n)| {
-            lan::Network::connect(
+            lan::Session::connect(
                 path.as_deref().ok_or("Select a cartridge for LAN play")?,
                 &address,
                 n,
@@ -1004,7 +1022,11 @@ pub fn run_network(
     let mut mixer = sound::Mixer::new(sdl.audio().ok());
     let (width, height) = canvas.output_size()?;
     let initial_view = if network.is_some() { [640, 480] } else { [width, height] };
-    let mut game = path.as_deref().map(|path| Game::open(path, controllers.len(), initial_view)).transpose()?;
+    let (connected, gamepads) = network.as_ref().map_or(
+        (1, Some(controllers.len().min(4) as u8)),
+        |(session, _)| (session.connected(), None),
+    );
+    let mut game = path.as_deref().map(|path| Game::open(path, connected, gamepads, initial_view)).transpose()?;
     let mut controller_slots = [None; 4];
     let mut first_controller_slot = None;
     if let (Some((_, seed)), Some(game)) = (&network, &mut game) {
@@ -1013,6 +1035,7 @@ pub fn run_network(
     let mut texture = None;
     let mut frame_texture = None;
     let mut ripple_texture = None;
+    let mut split_targets = Default::default();
     let mut shader_pipeline = shaders::Pipeline::new(&canvas);
     let mut room_shader_targets: Option<shaders::Targets<'_>> = None;
     let mut gradient_layer = gradient::Layer::default();
@@ -1026,14 +1049,17 @@ pub fn run_network(
     let mut touch_override = touch_requested.then_some(true);
     let mut fingers = BTreeMap::new();
     let mut taps = [false; 8];
+    let mut controller_taps = BTreeMap::<_, [bool; 8]>::new();
     let mut view = [0, 0, 320, 224];
     let mut display = [320, 224];
     let mut previous = Instant::now();
     let mut lag = Duration::ZERO;
+    let mut skipped_paint = false;
 
     let mut frames = 0;
     let mut particle_rects = Vec::new();
     'running: loop {
+        let frame_started = Instant::now();
         for event in pump.poll_iter() {
             if setup.is_none() && network.is_none() {
                 let command = match event {
@@ -1206,7 +1232,15 @@ pub fn run_network(
                         controllers.push(pad);
                     }
                 }
-                Event::GamepadRemoved { .. } => controllers.retain(Gamepad::connected),
+                Event::GamepadRemoved { which, .. } => {
+                    controllers.retain(Gamepad::connected);
+                    controller_taps.remove(&which);
+                }
+                Event::GamepadButtonDown { which, button, .. } => {
+                    if let Some(index) = BUTTONS.iter().position(|&mapped| mapped == button) {
+                        controller_taps.entry(which).or_default()[index] = true;
+                    }
+                }
                 Event::Window {
                     win_event: WindowEvent::FocusLost,
                     ..
@@ -1214,6 +1248,7 @@ pub fn run_network(
                     fingers.clear();
                     mouse.fill(false);
                     taps = [false; 8];
+                    controller_taps.clear();
                 }
                 Event::FingerDown {
                     touch_id, finger_id, x, y, ..
@@ -1235,6 +1270,9 @@ pub fn run_network(
                     finger_id, x, y, ..
                 } if touch && !cfg!(target_os = "android") => {
                     if let Some(index) = touch_button(&canvas, display, x, y).filter(|n| *n < 8) {
+                        if fingers.get(&finger_id) != Some(&index) {
+                            taps[index] = true;
+                        }
                         fingers.insert(finger_id, index);
                     } else {
                         fingers.remove(&finger_id);
@@ -1251,7 +1289,8 @@ pub fn run_network(
                 continue;
             }
             let (width, height) = canvas.output_size()?;
-            match Game::open(&path, controllers.iter().filter(|pad| pad.connected()).count(), [width, height]) {
+            let gamepads = controllers.iter().filter(|pad| pad.connected()).count().min(4) as u8;
+            match Game::open(&path, 1, Some(gamepads), [width, height]) {
                 Ok(new) => {
                     let title = format!("GameWaffle — {}", new.media.name.replace('\0', ""));
                     canvas.window_mut().set_title(&title)?;
@@ -1269,7 +1308,7 @@ pub fn run_network(
         }
         let output = canvas.output_size()?;
         let now = Instant::now();
-        lag = (lag + now.duration_since(previous)).min(TICK * 5);
+        lag = (lag + now.duration_since(previous)).min(TICK * MAX_CATCH_UP);
         previous = now;
         if let Some(game) = &mut game {
             let [width, height] = if network.is_some() { [640, 480] } else { [output.0, output.1] };
@@ -1277,8 +1316,13 @@ pub fn run_network(
             if setup.is_some() {
                 lag = Duration::ZERO;
             }
+            let deadline = Instant::now() + UPDATE_BUDGET;
+            let mut stepped = false;
             while lag >= TICK {
-                lag -= TICK;
+                if stepped && Instant::now() >= deadline {
+                    lag = lag.min(TICK);
+                    break;
+                }
                 let keys = pump.keyboard_state();
                 let mut states = [[false; 8]; 4];
                 for (index, pair) in KEYS.iter().enumerate() {
@@ -1286,10 +1330,10 @@ pub fn run_network(
                         || taps[index]
                         || fingers.values().any(|value| *value == index);
                 }
-                taps = [false; 8];
                 states[0][4] |= mouse[0];
                 states[0][5] |= mouse[1];
-                let first_pad = game.runtime.first_controller_slot();
+                let first_pad = if network.is_some() { 0 } else { game.runtime.first_controller_slot() };
+                let last_pad = if network.is_some() { 1 } else { 4 };
                 if first_controller_slot != Some(first_pad) {
                     first_controller_slot = Some(first_pad);
                     controller_slots.fill(None);
@@ -1303,12 +1347,13 @@ pub fn run_network(
                 for pad in controllers.iter().filter(|pad| pad.connected()) {
                     let Ok(id) = pad.id() else { continue };
                     let Some(player) = controller_slots.iter().position(|slot| *slot == Some(id))
-                        .or_else(|| (first_pad..4).find(|&slot| controller_slots[slot].is_none())) else { continue };
+                        .or_else(|| (first_pad..last_pad).find(|&slot| controller_slots[slot].is_none())) else { continue };
                     controller_slots[player] = Some(id);
                     connected |= 1 << player;
                     let slot = &mut states[player];
                     for (index, button) in BUTTONS.iter().enumerate() {
-                        slot[index] |= pad.button(*button);
+                        slot[index] |= pad.button(*button)
+                            || controller_taps.get(&id).is_some_and(|buttons| buttons[index]);
                     }
                     let x = pad.axis(Axis::LeftX);
                     let y = pad.axis(Axis::LeftY);
@@ -1317,13 +1362,25 @@ pub fn run_network(
                     slot[2] |= x < -16000;
                     slot[3] |= x > 16000;
                 }
-                game.runtime.set_connected_players(connected);
                 if let Some((net, _)) = &mut network {
-                    states = net.step(states[0])?;
+                    if net.request(states[0])? {
+                        taps.fill(false);
+                        controller_taps.clear();
+                    }
+                    let Some(frame) = net.poll()? else {
+                        lag = lag.min(TICK);
+                        break;
+                    };
+                    states = frame;
                     game.runtime.set_view_size(320, 240);
                 } else {
+                    game.runtime.set_connected_players(connected);
                     game.runtime.set_view_size(view[2], view[3]);
+                    taps.fill(false);
+                    controller_taps.clear();
                 }
+                lag -= TICK;
+                stepped = true;
                 game.runtime.step_inputs(states.map(buttons))?;
                 let room_id = game.runtime.room();
                 let room = game
@@ -1359,7 +1416,17 @@ pub fn run_network(
                     }
                 }
             }
-            let snapshot = game.runtime.view();
+            if stepped && lag >= TICK && !skipped_paint && !verify {
+                skipped_paint = true;
+                mixer.update();
+                continue 'running;
+            }
+        } else {
+            lag = Duration::ZERO;
+        }
+        skipped_paint = false;
+        let snapshot = game.as_ref().map(|game| game.runtime.view());
+        if let (Some(game), Some(snapshot)) = (&game, &snapshot) {
             let room = game
                 .media
                 .rooms
@@ -1392,7 +1459,6 @@ pub fn run_network(
                 snapshot.room_settings.zoom,
             ) };
         } else {
-            lag = Duration::ZERO;
             view = viewport(
                 Default::default(),
                 [output.0, output.1],
@@ -1400,12 +1466,27 @@ pub fn run_network(
                 [160., 112.],
             );
         }
-        let hd = game.as_ref().is_some_and(|g| {
+        display = game
+            .as_ref()
+            .and_then(|g| g.runtime.game_settings().display.unwrap_or(g.media.camera).fixed_resolution())
+            .unwrap_or([view[2], view[3]]);
+        let layout = game.as_ref().zip(snapshot.as_ref()).map_or_else(split::Layout::default, |(g, s)| {
+            let camera = s.game_settings.display.unwrap_or(g.media.camera);
+            let window = if network.is_some() { [640, 480] } else { [output.0, output.1] };
+            let split_display = camera.view_size(window, None);
+            split::Layout::for_frame(s, g.runtime.connected_player_mask(), split_display, [view[2], view[3]])
+        });
+        let split = layout.is_split();
+        if let Some(size) = layout.display() {
+            display = size;
+        }
+        let frame_size = if split { display } else { [view[2], view[3]] };
+        let hd = !split && game.as_ref().is_some_and(|g| {
             g.runtime.room_settings().shader_pipeline.is_none()
                 && g.media.rooms[g.runtime.room()].hd_strength(g.runtime.room_settings().shader) > 0
         });
         let scale = if hd { 2 } else { 1 };
-        let dimensions = [view[2] * scale, view[3] * scale];
+        let dimensions = frame_size.map(|axis| axis * scale);
         if frame_dimensions != dimensions || hd_texture.is_some() != hd {
             let mut target =
                 creator.create_texture_target(PixelFormat::RGBA32, dimensions[0], dimensions[1])?;
@@ -1423,8 +1504,7 @@ pub fn run_network(
             };
             ripple_texture = None;
         }
-        let snapshot = game.as_ref().map(|game| game.runtime.view());
-        let ripple = game.as_ref().zip(snapshot.as_ref()).is_some_and(|(g, s)| {
+        let ripple = !split && game.as_ref().zip(snapshot.as_ref()).is_some_and(|(g, s)| {
             s.room_settings.shader_pipeline.is_none()
                 && g.media.rooms[s.room].ripple_settings(s.room_settings.shader).is_some()
         });
@@ -1446,7 +1526,7 @@ pub fn run_network(
             })
         });
         let room_size = [view[2], view[3]];
-        if enabled_room && room_shader_targets.as_ref().is_none_or(|targets| targets.dimensions != room_size) {
+        if !split && enabled_room && room_shader_targets.as_ref().is_none_or(|targets| targets.dimensions != room_size) {
             room_shader_targets = Some(shaders::Targets::new(&creator, room_size)?);
         }
         let frame = frame_texture.as_mut().unwrap();
@@ -1454,6 +1534,13 @@ pub fn run_network(
         canvas.with_texture_canvas(frame, |canvas| {
             rendered = (|| -> Result<(), Error> {
                 if let (Some(game), Some(snapshot)) = (&game, &snapshot) {
+                    if split {
+                        return split::draw(
+                            canvas, &creator, game, snapshot, texture.as_mut().unwrap(), &layout,
+                            &mut split_targets, &mut particle_rects, enabled_room.then_some(&shader_pipeline),
+                            1,
+                        );
+                    }
                     let settings = snapshot.room_settings;
                     let room = &game.media.rooms[snapshot.room];
                     let gradient = gradient_layer.get(
@@ -1468,6 +1555,7 @@ pub fn run_network(
                         snapshot,
                         texture.as_mut().unwrap(),
                         view,
+                        layout.focus,
                         &mut particle_rects,
                         ripple_texture.as_mut(),
                         hd_texture.as_mut(),
@@ -1495,10 +1583,6 @@ pub fn run_network(
             })();
         })?;
         rendered?;
-        display = game
-            .as_ref()
-            .and_then(|g| g.runtime.game_settings().display.unwrap_or(g.media.camera).fixed_resolution())
-            .unwrap_or([view[2], view[3]]);
         canvas.set_logical_size(
             display[0],
             display[1],
@@ -1506,7 +1590,7 @@ pub fn run_network(
         )?;
         canvas.set_draw_color(Color::RGB(14, 14, 22));
         canvas.clear();
-        let [x, y, w, h] = fit_frame([view[2], view[3]], display).map(|axis| axis as f32);
+        let [x, y, w, h] = fit_frame(frame_size, display).map(|axis| axis as f32);
         let game_passes = game.as_ref().zip(snapshot.as_ref()).and_then(|(g, s)| {
             let passes = &s.game_settings.postprocessing;
             (!passes.is_empty() && shader_pipeline.prepare(&canvas, &g.media.shaders, passes))
@@ -1525,7 +1609,7 @@ pub fn run_network(
                 |target| {
                     target.set_draw_color(Color::RGB(14, 14, 22));
                     target.clear();
-                    let [x, y, w, h] = fit_frame([view[2], view[3]], dimensions).map(|v| v as f32);
+                    let [x, y, w, h] = fit_frame(frame_size, dimensions).map(|v| v as f32);
                     target.copy(frame, None, FRect::new(x, y, w, h))?;
                     Ok(())
                 },
@@ -1582,7 +1666,7 @@ pub fn run_network(
         if verify && frames >= 5 {
             break;
         }
-        std::thread::sleep(Duration::from_millis(13));
+        std::thread::sleep(TICK.saturating_sub(frame_started.elapsed()));
     }
     Ok(())
 }

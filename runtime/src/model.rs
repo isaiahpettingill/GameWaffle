@@ -539,6 +539,8 @@ pub struct GameSettings {
     pub group_camera: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_controller_slot: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub split_screen: Option<u16>,
 }
 
 impl GameSettings {

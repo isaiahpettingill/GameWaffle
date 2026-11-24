@@ -7,6 +7,7 @@
   import { buttons } from '../src/schema.mjs';
   import { createRuntime } from './runtime.js';
   import { accessSaveSlot } from './save-store.js';
+  import { createFrameClock } from './frame-clock.js';
   import { drawRoom, loadAtlas } from './render.js';
   import { createAudio } from './audio.js';
 
@@ -15,10 +16,11 @@
   let cart = $state.raw(null), snapshot = $state.raw(null);
   let touch = $state(false), muted = $state(true), players = $state(1);
   let status = $state('Loading cartridge…'), error = $state(''), lanSlots = $state([]);
-  let runtime, atlasImages = {}, socket, loop, last = 0, elapsed = 0, loadVersion = 0;
+  let runtime, atlasImages = {}, socket, loop, loadVersion = 0, lanPaint=false;
   let slot=$state(1), savePending=$state(false);
   const audio = createAudio();
-  const keys = new Set(), fingers = new Map(), taps = new Set();
+  const keys = new Set(), fingers = new Map(), taps = [new Set(),new Set()];
+  const frameClock=createFrameClock();
   const embedded = document.getElementById('gamewaffle-cartridge');
   const hosted = !embedded && /^https?:$/.test(location.protocol);
   const query=new URLSearchParams(location.search);
@@ -99,6 +101,7 @@
     socket = null;
     connection?.close();
     lanSlots = [];
+    lanPaint = false;
   }
   async function join() {
     disconnect();
@@ -114,16 +117,19 @@
       socket = connection;
       connection.onopen = () => {
         if (socket !== connection) return;
-        status = 'LAN game';
         connection.send(JSON.stringify({kind:'join',players}));
       };
       connection.onmessage = event => {
         if (socket !== connection) return;
         if (typeof event.data !== 'string') {
-          show(decodeFrame(new Uint8Array(event.data)));
+          show(decodeFrame(new Uint8Array(event.data)),false);
+          lanPaint=true;
         } else {
           const msg = JSON.parse(event.data);
-          if (msg.kind === 'slots') lanSlots = msg.slots;
+          if (msg.kind === 'slots') {
+            lanSlots = msg.slots;
+            status=lanSlots.length?'LAN game':'Waiting for a LAN slot…';
+          }
         }
       };
       connection.onclose = () => {
@@ -149,20 +155,26 @@
       if (keyboard[key]) result[0][keyboard[key]] = true;
       if (players > 1 && second[key]) result[1][second[key]] = true;
     }
-    for (const key of [...fingers.values(),...taps]) if (key) result[0][key] = true;
-    const first = Math.min(socket?players-1:3,snapshot?.gameSettings?.firstControllerSlot??0);
-    const end=socket?players:4, range=first+':'+end;
+    for (const key of fingers.values()) if (key) result[0][key] = true;
+    for(const [slot,pending] of taps.entries()){
+      if(slot===0||players>1)for(const key of pending)result[slot][key]=true;
+    }
     const pads=connectedPads();
+    const end=socket?lanSlots.length:4;
+    const authored=snapshot?.gameSettings?.firstControllerSlot;
+    const first=Math.min(end-1,authored??0);
+    const range=first+':'+end+':'+players;
+    const order=Array.from({length:end},(_,slot)=>slot).filter(slot=>slot>=first);
+    if(authored==null && players>1 && pads.length<players && order.length>1)order.push(order.shift());
     if(range!==padRange){padSlots.clear();padRange=range;}
     for(const id of padSlots.keys())if(!pads.some(pad=>pad.index===id))padSlots.delete(id);
     const occupied=new Set(padSlots.values());
-    let connected=1;
+    let connected=players>1?3:1;
     for (const pad of pads) {
       let slot=padSlots.get(pad.index);
       if(slot===undefined){
-        slot=first;
-        while(occupied.has(slot))slot++;
-        if(slot>=end)continue;
+        slot=order.find(slot=>!occupied.has(slot));
+        if(slot===undefined)continue;
         padSlots.set(pad.index,slot);
         occupied.add(slot);
       }
@@ -177,26 +189,26 @@
   }
   function tick(now) {
     try {
-      elapsed = Math.min(elapsed + (last ? now - last : 0),100);
-      last = now;
       let updated=false;
-      if(elapsed>=1000/60 && runtime && !socket && cart?.runtimeAbi>=15)
-        runtime.set_camera_window(...cameraWindow(),true);
-      while (elapsed >= 1000/60) {
-        elapsed -= 1000/60;
+      frameClock.run(now,()=>{
+        if(socket ? !lanSlots.length || socket.readyState!==WebSocket.OPEN || socket.bufferedAmount>=64_000 : !runtime)return false;
         const data = inputs();
-        taps.clear();
-        if (socket?.readyState === WebSocket.OPEN) {
-          if (socket.bufferedAmount < 64_000) socket.send(JSON.stringify({kind:'input',input:data}));
-         } else if (runtime && !socket) {
+        if (socket) {
+          socket.send(JSON.stringify({kind:'input',slots:lanSlots,input:data}));
+        } else {
+          if(!updated && cart?.runtimeAbi>=15)runtime.set_camera_window(...cameraWindow(),true);
           runtime.set_view_size(Number(canvas.dataset.viewWidth)||canvas.width,Number(canvas.dataset.viewHeight)||canvas.height);
           const mask = data.reduce((bits,input,slot)=>buttons.reduce((value,button,index)=>
             input[button] ? value | (1 << (slot*8+index)) : value,bits),0) >>> 0;
           show(decodeFrame(runtime.step_buttons(mask)),false);
           updated=true;
         }
+        for(const pending of taps)pending.clear();
+      });
+      if(updated||lanPaint){
+        lanPaint=false;
+        paintFrame(snapshot);
       }
-      if(updated)paintFrame(snapshot);
     } catch (err) {
       error = String(err.message ?? err);
       runtime?.free();
@@ -209,20 +221,20 @@
     if (!button) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     fingers.set(event.pointerId,button);
-    taps.add(button);
+    taps[0].add(button);
     event.preventDefault();
   }
   function touchMove(event) {
     if (!fingers.has(event.pointerId)) return;
     const button = document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-button]')?.dataset.button;
-    if (button && fingers.get(event.pointerId) !== button) taps.add(button);
+    if (button && fingers.get(event.pointerId) !== button) taps[0].add(button);
     fingers.set(event.pointerId,button);
   }
   function mouseChange(event) {
     if (event.type === 'mousedown' && event.target !== canvas) return;
     const key = ['MouseLeft',null,'MouseRight'][event.button];
     if (!key) return;
-    if (event.type === 'mousedown') { keys.add(key); taps.add(keyboard[key]); canvas.focus(); }
+    if (event.type === 'mousedown') { keys.add(key); taps[0].add(keyboard[key]); canvas.focus(); }
     else keys.delete(key);
   }
   function touchUp(event) { fingers.delete(event.pointerId); }
@@ -238,11 +250,18 @@
     const button = keyboard[event.code];
     if (!button && !second[event.code]) return;
     keys.add(event.code);
-    if (!event.repeat && button && ['a','b','x','menu'].includes(button)) taps.add(button);
+    if (!event.repeat) {
+      if(button)taps[0].add(button);
+      if(players>1 && second[event.code])taps[1].add(second[event.code]);
+    }
     event.preventDefault();
   }
   function release(event) { keys.delete(event.code); }
-  function clear() { keys.clear(); fingers.clear(); taps.clear(); }
+  function clear() {
+    keys.clear();fingers.clear();
+    for(const pending of taps)pending.clear();
+    frameClock.reset();
+  }
   async function sound() {
     try { muted = await audio.toggle(); }
     catch { error = 'Audio is unavailable in this browser.'; }
@@ -309,16 +328,17 @@
       <button disabled={!cart||status==='LAN game'||savePending} onclick={()=>progress(false)}><FolderOpen/>Load</button>
       <button class="icon" title={muted?'Enable audio':'Mute audio'} aria-label={muted?'Enable audio':'Mute audio'} onclick={sound} aria-pressed={!muted}>{#if muted}<VolumeX/>{:else}<Volume2/>{/if}</button>
       {#if document.fullscreenEnabled}<button class="icon" aria-label="Fullscreen" title="Fullscreen" onclick={()=>document.fullscreenElement?document.exitFullscreen():shell.requestFullscreen().catch(()=>{})}><Maximize/></button>{/if}
-      <button class="icon" aria-label="Player options" title="Player options" aria-expanded={options} onclick={()=>options=!options}><Settings2/></button>
+      <button aria-label="Player options" title="Player options" aria-expanded={options} onclick={()=>options=!options}><Settings2/>Players</button>
       {#if !playtest}<button onclick={()=>fileInput.click()}>Open cartridge</button>{/if}
     </div>
   </header>
   <input hidden type="file" accept=".waffle" bind:this={fileInput} onchange={chooseFile} aria-label="Cartridge file">
   {#if options}<section class="options">
-    <label>Players <select bind:value={players} onchange={countChanged}>{#each [1,2,3,4] as n}<option value={n}>{n}</option>{/each}</select></label>
+    <label>Players on this device <select bind:value={players} onchange={countChanged}>{#each [1,2,3,4] as n}<option value={n}>{n}</option>{/each}</select></label>
     <button onclick={()=>{touch=!touch;clear();}} aria-pressed={touch}>Touch controls</button>
     {#if hosted}<button onclick={join}>Join LAN</button>{/if}
     <small>Move with WASD or arrows. Use Z, X, C, and Enter for A, B, X, and Start.</small>
+    <small>Local players share this screen. Connect a gamepad for each additional player.</small>
     {#if players>1}<small>Player 2 uses IJKL, N, M, comma, and period.</small>{/if}
   </section>{/if}
   <div class="feedback" role="status">{shaderStatus||status}{#if lanSlots.length} · P{lanSlots.map(n=>n+1).join(', P')}{/if}</div>

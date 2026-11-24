@@ -143,3 +143,7 @@ or 3 for more guests. Each guest runs
 `gamewaffle-player --join HOST_IP:4872 game.waffle`. Each computer supplies
 one controller. The host assigns slots in connection order. The players exchange
 button states before each simulation tick. A dropped connection ends the session.
+
+## Libretro video
+
+The core uses the Game script's fixed or adaptive display size for the output aspect ratio. The camera and split-screen panes fit inside that display with nearest-neighbor scaling. HD pixel smoothing doubles the output dimensions in both shared and split-screen play. Camera zoom and pane changes keep the same output aspect ratio.

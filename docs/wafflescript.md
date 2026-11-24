@@ -7,6 +7,26 @@ keeps comments with the text until you change the program in Blocks.
 
 Use the **+** on an **if** block to add **else if** or **else**. Use **−** on a branch to remove it and detach any blocks inside. Text uses `elif` for the same chain. The chain runs the first matching branch. Put independent checks in separate `if` blocks to let both run on the same tick.
 
+Long loops yield automatically and resume from the same instruction. A `wait(1)` suspends that invocation until the next tick. Keep movement in `on tick` and use a separate event such as `on pressed.a` for a sequence that waits between actions.
+
+## Couch and LAN players
+
+Assign a different player slot to each playable entity in the room. Its input checks and button events then use that slot for both couch and LAN players. Use `controller_connected(1)` through `controller_connected(4)` to check the current roster. In the Game script, use `on controller connected 2` or `on controller disconnected 2` to react to changes. These events work for all four slots.
+
+Players share one screen by default. To enable split-screen in the native player, add **Game settings → Split screen** to **On game startup** in the Game script, or use text.
+
+```ruby
+on game startup
+  set_split_screen(true, 96)
+end
+```
+
+Choose a merge distance in room pixels. The cameras combine into a shared view when every pair of players is within that distance and all players fit on screen. They split again as the players move apart. Use `set_split_screen(true, 0)` to keep separate views whenever there are two or more players, and `set_split_screen(false, 0)` to use the room's shared camera. You can change this setting in any Game script event.
+
+Two players get equal panes. With three players, Player 1 gets half the screen and the other players share the remaining half. Four players get equal quadrants. The layout uses connected slots with visible player entities in the current room. The browser player uses one shared view. Use `set_default_camera("group")` in the Game script to center that view on the connected players.
+
+For couch play, use `set_first_controller(1)` to start assigning gamepads at Player 1. Use `set_first_controller(2)` to let Player 1 use the keyboard while gamepads control Players 2 through 4.
+
 ## Room scripts
 
 Pick a room from **Room scripts** in the script file menu. This keeps the current stage and editor view. Selecting a room in the sidebar also selects its script. Use **World & camera** for the room controls. A room script starts on each entry, runs its own tick, and reads controller 1. The room inspector supplies defaults on each entry. When you load a save, the current room state is restored before `on restored`.

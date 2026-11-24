@@ -49,6 +49,11 @@ struct Geometry {
     max_h: u32,
     aspect: f32,
 }
+impl Geometry {
+    fn new([w, h]: [u32; 2]) -> Self {
+        Self { w, h, max_w: 1024, max_h: 1024, aspect: w as f32 / h as f32 }
+    }
+}
 #[repr(C)]
 struct Timing {
     fps: f64,
@@ -71,6 +76,14 @@ const PAD: u32 = 1;
 const IDS: [u32; 8] = [4, 5, 6, 7, 0, 8, 1, 3];
 const SAVE_SIZE: usize = 4 * 1024 * 1024 + 4;
 const ROLLBACK_TAG: &[u8; 4] = b"GWRS";
+type Ports = [Option<bool>; 4];
+const DEFAULT_PORTS: Ports = [Some(true), None, None, None];
+
+fn connected_ports(ports: Ports, discovered: u8) -> u8 {
+    ports.into_iter().enumerate().fold(0, |mask, (slot, enabled)| {
+        mask | (u8::from(enabled.unwrap_or(discovered & (1 << slot) != 0)) << slot)
+    })
+}
 
 #[derive(serde::Deserialize, serde::Serialize)]
 struct RollbackState {
@@ -78,6 +91,8 @@ struct RollbackState {
     physics: serde_bytes::ByteBuf,
     audio: audio::SavedAudio,
     ticks: u64,
+    #[serde(default)]
+    discovered_ports: u8,
 }
 struct Core {
     game: Game,
@@ -86,19 +101,20 @@ struct Core {
     ram: Vec<u8>,
     first: bool,
     ticks: u64,
+    discovered_ports: u8,
     signature: [u8; 32],
 }
 impl Core {
-    fn load(bytes: &[u8], ports: [bool; 4]) -> Result<Self, Error> {
-        let connected = ports.iter().enumerate().fold(1, |mask, (slot, enabled)| mask | (u8::from(*enabled) << slot));
+    fn load(bytes: &[u8], ports: Ports) -> Result<Self, Error> {
+        let connected = connected_ports(ports, 0);
         let mut game = Game::from_cartridge(bytes, connected, None, [0, 0])?;
         // The same cartridge starts from the same seed on every peer.
         let signature: [u8; 32] = bytes[bytes.len() - 32..].try_into().unwrap();
         game.runtime
             .set_seed(u32::from_le_bytes(signature[..4].try_into().unwrap()));
         let video = Video::new(&game)?;
-        game.runtime
-            .set_view_size(video.dimensions[0], video.dimensions[1]);
+        let [width, height] = video.dimensions;
+        game.runtime.set_view_size(width, height);
         Ok(Self {
             game,
             video,
@@ -106,6 +122,7 @@ impl Core {
             ram: vec![0; SAVE_SIZE],
             first: true,
             ticks: 0,
+            discovered_ports: 0,
             signature,
         })
     }
@@ -129,6 +146,7 @@ impl Core {
             }
             self.audio.restore(&self.game, state.audio);
             self.ticks = state.ticks;
+            self.discovered_ports = state.discovered_ports & 15;
         } else {
             if self.game.runtime.load_game(save).is_err() {
                 return false;
@@ -162,6 +180,7 @@ impl Core {
                 physics: physics.into(),
                 audio: self.audio.save(),
                 ticks: self.ticks,
+                discovered_ports: self.discovered_ports,
             },
             payload,
         )
@@ -173,7 +192,7 @@ impl Core {
             write_checkpoint(&mut self.ram, &save);
         }
     }
-    fn frame(&mut self, host: Host, ports: [bool; 4]) -> Result<(), Error> {
+    fn frame(&mut self, host: Host, ports: Ports) -> Result<(), Error> {
         if self.first {
             self.first = false;
             if let Some(save) = checkpoint(&self.ram) {
@@ -184,11 +203,18 @@ impl Core {
             poll();
         }
         let states = std::array::from_fn(|port| {
-            buttons(IDS.map(|id| {
-                ports[port] && host.input.is_some_and(|f| f(port as u32, PAD, 0, id) != 0)
-            }))
+            let state = buttons(IDS.map(|id| {
+                ports[port] != Some(false) && host.input.is_some_and(|f| f(port as u32, PAD, 0, id) != 0)
+            }));
+            // Some frontends announce only the first device. Accept input from any unconfigured port.
+            if ports[port].is_none() && state.bits() != 0 {
+                self.discovered_ports |= 1 << port;
+            }
+            state
         });
-        self.game.runtime.set_connected_players(ports.iter().enumerate().fold(1, |mask, (slot, enabled)| mask | (u8::from(*enabled) << slot)));
+        self.game.runtime.set_connected_players(connected_ports(ports, self.discovered_ports));
+        let [width, height] = Video::display_size(&self.game);
+        self.game.runtime.set_view_size(width, height);
         self.game.runtime.step_inputs(states)?;
         if let Some(video) = host.video {
             self.video.frame(&self.game, video, host.env)?;
@@ -227,7 +253,7 @@ fn write_checkpoint(bytes: &mut [u8], save: &[u8]) -> bool {
 thread_local! {
     static HOST:RefCell<Host>=RefCell::default();
     static CORE:RefCell<Option<Core>>=const{RefCell::new(None)};
-    static PORTS:RefCell<[bool;4]>=const{RefCell::new([true;4])};
+    static PORTS:RefCell<Ports>=const{RefCell::new(DEFAULT_PORTS)};
 }
 
 macro_rules! setter {
@@ -272,7 +298,7 @@ unsafe extern "C" fn retro_get_system_av_info(out: *mut AvInfo) {
     if out.is_null() {
         return;
     }
-    let [w, h] = CORE.with(|slot| {
+    let dimensions = CORE.with(|slot| {
         slot.try_borrow()
             .ok()
             .and_then(|c| c.as_ref().map(|c| c.video.dimensions))
@@ -280,13 +306,7 @@ unsafe extern "C" fn retro_get_system_av_info(out: *mut AvInfo) {
     });
     unsafe {
         out.write(AvInfo {
-            geometry: Geometry {
-                w,
-                h,
-                max_w: 1024,
-                max_h: 1024,
-                aspect: w as f32 / h as f32,
-            },
+            geometry: Geometry::new(dimensions),
             timing: Timing {
                 fps: 60.,
                 rate: 48000.,
@@ -296,7 +316,7 @@ unsafe extern "C" fn retro_get_system_av_info(out: *mut AvInfo) {
 }
 #[unsafe(no_mangle)]
 extern "C" fn retro_init() {
-    PORTS.with_borrow_mut(|p| *p = [true; 4]);
+    PORTS.with_borrow_mut(|p| *p = DEFAULT_PORTS);
 }
 #[unsafe(no_mangle)]
 extern "C" fn retro_deinit() {
@@ -392,7 +412,7 @@ extern "C" fn retro_reset() {
 extern "C" fn retro_set_controller_port_device(port: u32, device: u32) {
     PORTS.with_borrow_mut(|p| {
         if let Some(slot) = p.get_mut(port as usize) {
-            *slot = device & 255 == PAD;
+            *slot = Some(device & 255 == PAD);
         }
     });
 }

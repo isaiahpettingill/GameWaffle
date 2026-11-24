@@ -239,7 +239,7 @@ export function parseScript(source){
         if(!timerEvent(name))fail('Use a timer between one tick and six hours');
       }else if(eat('controller')){
         const edge=id(),player=peek();
-        if(!/^[2-4]$/.test(player??''))fail('Choose player 2 to 4. Player 1 includes the keyboard.');
+        if(!/^[1-4]$/.test(player??''))fail('Choose player 1 to 4.');
         i++;name='controller_'+edge+'.'+player;
       }else name=eat('game')?(need('startup'),'game_startup'):eat('collide')?'begin_contact':eat('clone')?'clone_start':qualified();
       if(!Events.includes(name)&&!inputEvent(name)&&!receivedEvent(name)&&!timerEvent(name)&&!controllerEvent(name)||Object.hasOwn(events,name))error('Unknown or duplicate event '+name,start,tokens[i-1].at+name.length);

@@ -358,7 +358,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     return { image: id, ms: frame.duration };
   }
 
-  const scriptAbi=script=>script?.requiresAbi17?17:script?.requiresAbi16?16:script?.requiresAbi15?15:script?.requiresAbi14?14:script?.requiresAbi13?13:script?.requiresAbi12?12:script?.requiresAbi10?10:9;
+  const scriptAbi=script=>script?.requiresAbi18?18:script?.requiresAbi17?17:script?.requiresAbi16?16:script?.requiresAbi15?15:script?.requiresAbi14?14:script?.requiresAbi13?13:script?.requiresAbi12?12:script?.requiresAbi10?10:9;
   let runtimeAbi=Math.max(scriptAbi(gameScript),gameUnit?12:9);
   let tileSensing=Boolean(gameScript?.tileSensing);
   for(const id of gameScript?.shaderUses??[])usedShaders.add(id);

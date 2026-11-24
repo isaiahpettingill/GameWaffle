@@ -4,7 +4,7 @@
   "version": "0.2.0",
   "description": "Sprite game studio and Rust cartridge runtime",
   "scripts": {
-    "check": "cargo test --manifest-path runtime/Cargo.toml --locked && npm run build && node packaging/check-game.mjs && node packaging/check-scripts.mjs && node packaging/check-script-surfaces.mjs && node packaging/check-clones.mjs && node packaging/check-sensing.mjs && node packaging/check-resource-tables.mjs && node packaging/check-shaders.mjs && node packaging/check-desktop.mjs",
+    "check": "cargo test --manifest-path runtime/Cargo.toml --locked && npm run build && node packaging/check-game.mjs && node packaging/check-scripts.mjs && node packaging/check-script-surfaces.mjs && node packaging/check-scheduler.mjs && node packaging/check-clones.mjs && node packaging/check-sensing.mjs && node packaging/check-resource-tables.mjs && node packaging/check-shaders.mjs && node packaging/check-desktop.mjs",
     "check:editor": "node packaging/check-editor.cjs",
     "build:native": "node src/build.mjs --native",
     "build:player": "node src/build.mjs --player-only",

@@ -48,7 +48,7 @@ let bytes = cartFile ? await readFile(resolve(cartFile)) : pack(cartridge);
 let editorBytes = cartridge ? pack(cartridge,{editor:true}) : null;
 let previewKey = cartridge ? thumbnailKey(cartridge) : '';
 let runtime;
-try{runtime=createRuntime(bytes);}
+try{runtime=createRuntime(bytes,lan?0:1);}
 catch(error){console.error('Could not load the cartridge: '+String(error?.message??error));process.exit(1);}
 let clientsCart = bytes;
 let mutation = Promise.resolve();
@@ -56,8 +56,8 @@ let revision = 0, sourceError = '';
 const slots = Array(4).fill(null);
 const connections = new Set();
 
-function createRuntime(data) {
-  const runtime=Runtime.from_cartridge(data);
+function createRuntime(data,connected=1) {
+  const runtime=Runtime.from_cartridge_with_controllers(data,undefined,connected,undefined);
   runtime.set_seed(crypto.getRandomValues(new Uint32Array(1))[0]);
   return runtime;
 }
@@ -513,13 +513,27 @@ server.on('upgrade',(request,socket,head)=>{
 const wsSend = (client, value) => {
   if (client.readyState === WebSocket.OPEN && client.bufferedAmount < 512_000) client.send(value);
 };
+const assignSeats = reply => {
+  for(const state of connections){
+    const before=state.slots.length;
+    while(state.slots.length<state.desired){
+      const id=slots.indexOf(null);
+      if(id<0)break;
+      slots[id]=state;
+      state.slots.push(id);
+    }
+    if((state===reply||state.slots.length!==before)&&state.client.readyState===WebSocket.OPEN){
+      state.client.send(JSON.stringify({kind:'slots',slots:state.slots}));
+    }
+  }
+};
 wss.on('connection', client => {
   if (!connections.size && bytes !== clientsCart) {
     runtime.free();
     clientsCart = bytes;
-    runtime = createRuntime(clientsCart);
+    runtime = createRuntime(clientsCart,0);
   }
-  const state = { client, slots:[], input:[{},{},{},{}], alive:true };
+  const state = { client, slots:[], desired:0, input:[{},{},{},{}], alive:true };
   connections.add(state);
   client.on('pong',()=>{ state.alive = true; });
   client.on('error',()=>client.terminate());
@@ -527,25 +541,22 @@ wss.on('connection', client => {
     try {
       const msg = JSON.parse(buffer.toString());
       if (msg.kind === 'join') {
-        const desired = Math.min(4, Math.max(1, Number.isInteger(msg.players) ? msg.players : 1));
-        while (state.slots.length > desired) {
+        state.desired = Math.min(4, Math.max(1, Number.isInteger(msg.players) ? msg.players : 1));
+        while (state.slots.length > state.desired) {
           const id = state.slots.pop();
           slots[id] = null;
           state.input[id] = {};
         }
-        while (state.slots.length < desired && slots.includes(null)) {
-          const id = slots.indexOf(null);
-          slots[id] = state;
-          state.slots.push(id);
-        }
-        wsSend(client,JSON.stringify({kind:'slots',slots:state.slots}));
+        assignSeats(state);
       } else if (msg.kind === 'input' && Array.isArray(msg.input)) {
+        if(Array.isArray(msg.slots) && (msg.slots.length!==state.slots.length ||
+          msg.slots.some((id,index)=>id!==state.slots[index])))return;
         for (const [index,id] of state.slots.entries()) {
           const input = msg.input[index];
           const entry = Object.fromEntries(buttons.map(button=>[button,input?.[button] === true]));
           const previous = state.input[id];
-          for (const button of ['a','b','x','menu']) {
-            if (entry[button] && !previous.raw?.[button]) previous.pressed = (previous.pressed ?? 0) | (1 << buttons.indexOf(button));
+          for (const [bit,button] of buttons.entries()) {
+            if (entry[button] && !previous.raw?.[button]) previous.pressed = (previous.pressed ?? 0) | (1 << bit);
           }
           previous.raw = entry;
         }
@@ -555,12 +566,13 @@ wss.on('connection', client => {
   client.on('close',()=>{
     for (const id of state.slots) slots[id] = null;
     connections.delete(state);
+    assignSeats();
   });
 });
 let outgoingSounds = [], outgoingEvents = [], count = 0;
 if (lan) {
   setInterval(()=>{
-    if (!connections.size) return;
+    if (slots.every(state=>state===null)) return;
     const input = slots.map((state, id)=>{
       const previous = state?.input[id];
       if (!previous?.raw) return {};
@@ -569,7 +581,7 @@ if (lan) {
       previous.pressed = 0;
       return current;
     });
-    runtime.set_connected_players(slots.reduce((mask,state,slot)=>state?mask|(1<<slot):mask,1));
+    runtime.set_connected_players(slots.reduce((mask,state,slot)=>state?mask|(1<<slot):mask,0));
     const mask = input.reduce((bits, state, slot)=>buttons.reduce((value, button, index)=>
       state[button] ? value | (1 << (slot*8+index)) : value, bits),0) >>> 0;
     const data = decodeWireFrame(runtime.step_buttons(mask));

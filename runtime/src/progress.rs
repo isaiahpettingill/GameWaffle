@@ -95,6 +95,10 @@ struct Scene {
     broadcasts: std::collections::VecDeque<Broadcast>,
     #[serde(default, skip_serializing_if = "std::collections::VecDeque::is_empty")]
     event_deliveries: std::collections::VecDeque<EventDelivery>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resume_cursor: Option<(u32, String)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tick_cursor: Option<u32>,
     #[serde(default)]
     entry_removed: std::collections::BTreeSet<String>,
     pending: Vec<(u32, Spawn)>,
@@ -357,6 +361,8 @@ impl Scene {
             starts: runtime.pending_start.iter().copied().filter(|id| runtime.actors.contains_key(id)).collect(),
             broadcasts: runtime.broadcasts.clone(),
             event_deliveries: runtime.event_deliveries.clone(),
+            resume_cursor: runtime.resume_cursor.clone(),
+            tick_cursor: runtime.tick_cursor,
             entry_removed: runtime.entry_removed.iter().cloned().collect(),
             pending: runtime.pending_instances.clone(),
             particles: runtime.particles.clone(),
@@ -508,7 +514,7 @@ impl Scene {
         }
         runtime.next = self.next;
         runtime.inputs = self.inputs.map(Input::from_bits);
-        runtime.reported_players = self.reported_players & 15 | 1;
+        runtime.reported_players = self.reported_players & 15;
         runtime.pending_start = self.starts;
         for id in &runtime.pending_start {
             if let Some(actor) = runtime.actors.get_mut(id) && actor.clone_source.is_some() {
@@ -520,6 +526,8 @@ impl Scene {
         }
         runtime.broadcasts = self.broadcasts;
         runtime.event_deliveries = self.event_deliveries;
+        runtime.resume_cursor = self.resume_cursor;
+        runtime.tick_cursor = self.tick_cursor;
         runtime.entry_removed = self.entry_removed.into_iter().collect();
         runtime.pending_instances = self.pending;
         for ((_, current), saved) in runtime.gates.iter_mut().zip(self.gates) {
