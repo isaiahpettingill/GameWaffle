@@ -311,7 +311,10 @@ const server = createServer(async (req, res) => {
         const kind=match?.[1],id=tileMatch?.[1]??match?.[2], variant=Number(tileMatch?.[2]);
         const isRoom=kind==='room-script', collection=isRoom?'rooms':isTile?'tiles':'sprites';
         const defaultPath=isGame?gameScriptPath:isTile?tileScriptPath(id,variant):`scripts/${collection}/${id}.cbor`;
-        if(isTile&&!cartridge.tilePreviews[id]?.[variant])throw Error('Choose a valid tile variant');
+        if(isTile){
+          await mutation;
+          if(!cartridge.tilePreviews[id]?.variants[variant])throw Error('Choose a valid tile variant');
+        }
         if (req.method === 'GET') {
           await mutation;
           const project = JSON.parse(await store.read('project.json','utf8'));

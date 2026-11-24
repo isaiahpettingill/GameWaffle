@@ -697,8 +697,17 @@ await copiedHint.waitFor({state:'attached'});
 assert.equal(await copiedHint.isVisible(),false);
 await authoring.keyboard.press('Control+v');
 await until('Pasted block',async()=> await clipboardBlock.count()===2);
+await scriptFile.selectOption('tile:water:0');
+await until('Tile script picker',async()=>await scriptFile.inputValue()==='tile:water:0');
+await authoring.locator('.blocklyBlockCanvas .waffle_init').waitFor();
+await authoring.getByRole('button',{name:'Text',exact:true}).click();
+await authoring.locator('.cm-content').fill('on init\n  set_tile_playback("still")\nend\n');
+await until('Tile playback saved',async()=>{
+  const unit=await(await authoring.request.get(url+'/api/tile-script/water/0')).json();
+  return unit.events?.init?.[0]?.mode==='still';
+});
 await authoring.close();
-console.log('Passed project authoring, inline event and flag creation, and editable conditional chains');
+console.log('Passed project authoring, inline events and flags, tile script editing, and conditional chains');
 
 await browser.close();server.kill();await fs.rm(fixture,{recursive:true,force:true});
 })().catch(e=>{console.error(e);process.exit(1);});
