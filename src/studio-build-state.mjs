@@ -13,7 +13,8 @@ export async function studioBuildId(){
     }
   }
   async function add(path){hash.update(path);hash.update('\0');hash.update(await readFile(path));}
-  for(const path of ['src','ui','runtime/src','demo'])await visit(path);
-  for(const path of ['.cargo/config.toml','runtime/Cargo.lock','runtime/Cargo.toml','package-lock.json','vite.config.js','index.html','projects.html','player.html','packaging/gamewaffle.svg'])await add(path);
+  for(const path of ['src','ui','runtime/src','asset-codec/src','demo'])await visit(path);
+  for(const path of ['.cargo/config.toml','runtime/Cargo.lock','runtime/Cargo.toml','asset-codec/Cargo.lock','asset-codec/Cargo.toml',
+    'package-lock.json','vite.config.js','index.html','projects.html','player.html','packaging/gamewaffle.svg'])await add(path);
   return hash.digest('hex');
 }

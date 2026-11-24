@@ -1,0 +1,16 @@
+[package]
+name = "gamewaffle-asset-codec"
+version = "0.1.0"
+edition = "2024"
+license = "0BSD"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+png = { version = "=0.18.1", features = ["zlib-rs"] }
+wasm-bindgen = "=0.2.105"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

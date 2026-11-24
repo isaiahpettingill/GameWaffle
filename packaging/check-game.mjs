@@ -21,8 +21,8 @@ const cart=unpack(bytes);
 assert.equal(bytes[5],3);
 assert.ok(bytes.readUInt32LE(18)>0);
 for(const {png} of Object.values(cart.atlases))assert.equal(png[25],3);
-for(const [colors,depth] of [[2,1],[4,2],[16,4],[256,8],[257,8]]){
-  const pixels=Buffer.alloc(17*17*4);
+for(const [colors,depth] of [[1,1],[2,1],[3,2],[4,2],[5,4],[16,4],[17,8],[256,8],[257,8]]){
+  const pixels=Buffer.alloc(17*17*4+3).subarray(3);
   for(let i=0;i<pixels.length/4;i++){
     const color=i%colors;
     pixels.writeUInt32BE(color*65536+(color*37%256),i*4);
@@ -31,7 +31,13 @@ for(const [colors,depth] of [[2,1],[4,2],[16,4],[256,8],[257,8]]){
   assert.equal(png[24],depth);
   assert.equal(png[25],colors<=256?3:6);
   assert.deepEqual(PNG.sync.read(png).data,pixels);
+  assert.deepEqual(encodePng(17,17,pixels),png);
 }
+const opaquePng=encodePng(1,1,Uint8Array.of(12,34,56,255));
+assert.equal(opaquePng.includes(Buffer.from('tRNS')),false);
+assert.deepEqual(PNG.sync.read(opaquePng).data,Buffer.from([12,34,56,255]));
+assert.throws(()=>encodePng(2,2,Buffer.alloc(12)),/RGBA image dimensions or length/);
+assert.throws(()=>encodePng(1.5,1,Buffer.alloc(4)),/RGBA image dimensions or data/);
 const wrongSize=Buffer.from(bytes);
 wrongSize.writeUInt32LE(bytes.readUInt32LE(18)-1,18);
 assert.throws(()=>unpack(wrongSize),/expanded cartridge section length/);

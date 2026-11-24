@@ -11,7 +11,9 @@ function run(command,args){
 const id=await studioBuildId();
 let ready=false;
 try{
-  await Promise.all(['site/projects.html','site/index.html','runtime/runtime_bg.wasm','runtime/runtime.js','standalone/gamewaffle-player.html'].map(p=>access('web-built/'+p)));
+  await Promise.all(['site/projects.html','site/index.html','runtime/runtime_bg.wasm','runtime/runtime.js',
+    'png-codec/png-codec_bg.wasm','png-codec/png-codec.cjs',
+    'standalone/gamewaffle-player.html'].map(p=>access('web-built/'+p)));
   ready=(await readFile('web-built/studio-build-id','utf8'))===id;
 }catch{}
 if(!ready){

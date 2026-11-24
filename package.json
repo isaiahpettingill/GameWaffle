@@ -9,7 +9,7 @@
     "build:native": "node src/build.mjs --native",
     "build:player": "node src/build.mjs --player-only",
     "prebuild": "node src/check-dependencies.mjs",
-    "build": "node src/compiler.mjs && node src/build.mjs --check-demo",
+    "build": "node src/build.mjs --check-demo",
     "start": "node src/start-studio.mjs",
     "demo": "node src/demo.mjs",
     "cart": "node src/compiler.mjs",

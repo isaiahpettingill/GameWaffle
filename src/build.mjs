@@ -12,6 +12,10 @@ if (process.argv.includes('--native')) {
   await cp('player/target/release/' + name,'web-built/native/' + name);
   process.exit(0);
 }
+if (!process.argv.includes('--player-only')) {
+  execFileSync(process.execPath,['src/build-png.mjs'],options);
+  if (process.argv.includes('--check-demo')) execFileSync(process.execPath,['src/compiler.mjs'],options);
+}
 execFileSync('cargo', ['build','--locked','--manifest-path','runtime/Cargo.toml','--release','--target','wasm32-unknown-unknown'], options);
 await mkdir('web-built/runtime', { recursive: true });
 execFileSync('wasm-bindgen', ['--target','web','--out-dir','web-built/runtime','--out-name','runtime',

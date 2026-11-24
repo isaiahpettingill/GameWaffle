@@ -1,59 +1,28 @@
-import { crc32, deflateSync } from 'node:zlib';
-import { PNG } from 'pngjs';
+import {execFileSync} from 'node:child_process';
+import {existsSync} from 'node:fs';
+import {createRequire} from 'node:module';
+import {fileURLToPath} from 'node:url';
 
-const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-const end = chunk('IEND', Buffer.alloc(0));
+const require=createRequire(import.meta.url);
+const directory=new URL('../web-built/png-codec/',import.meta.url);
+let encode;
 
-function chunk(type, data) {
-  const bytes = Buffer.allocUnsafe(12 + data.length);
-  bytes.writeUInt32BE(data.length, 0);
-  bytes.write(type, 4, 4, 'ascii');
-  bytes.set(data, 8);
-  bytes.writeUInt32BE(crc32(bytes.subarray(4, 8 + data.length)), 8 + data.length);
-  return bytes;
-}
-
-export function encodePng(width, height, data) {
-  const pixels = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  const palette = new Map();
-  for (let offset = 0; offset < pixels.byteLength; offset += 4) {
-    const color = pixels.getUint32(offset);
-    if (palette.has(color)) continue;
-    if (palette.size === 256) {
-      return PNG.sync.write({width, height, data}, {deflateLevel: 4, deflateStrategy: 0});
+export function encodePng(width,height,data) {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 ||
+      width > 0xffffffff || height > 0xffffffff || !(data instanceof Uint8Array)) {
+    throw Error('Invalid RGBA image dimensions or data');
+  }
+  if (!encode) {
+    if (!['png-codec.cjs','png-codec_bg.wasm'].every(file=>existsSync(new URL(file,directory)))) {
+      const builder=fileURLToPath(new URL('./build-png.mjs',import.meta.url));
+      execFileSync(process.execPath,[builder],{stdio:'inherit'});
     }
-    palette.set(color, palette.size);
+    encode=require(fileURLToPath(new URL('png-codec.cjs',directory))).encode_png;
   }
-
-  const depth = palette.size <= 2 ? 1 : palette.size <= 4 ? 2 : palette.size <= 16 ? 4 : 8;
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(width, 0);
-  header.writeUInt32BE(height, 4);
-  header[8] = depth;
-  header[9] = 3;
-  const colors = Buffer.allocUnsafe(palette.size * 3);
-  const alpha = Buffer.allocUnsafe(palette.size);
-  let alphaLength = 0;
-  for (const [color, index] of palette) {
-    colors[index * 3] = color >>> 24;
-    colors[index * 3 + 1] = color >>> 16 & 255;
-    colors[index * 3 + 2] = color >>> 8 & 255;
-    alpha[index] = color & 255;
-    if (alpha[index] !== 255) alphaLength = index + 1;
+  try {
+    const png=encode(width,height,data);
+    return Buffer.from(png.buffer,png.byteOffset,png.byteLength);
+  } catch (error) {
+    throw error instanceof Error ? error : Error(String(error));
   }
-
-  // Each row starts with PNG filter 0. Pack the leftmost index into the high bits.
-  const stride = 1 + Math.ceil(width * depth / 8);
-  const rows = Buffer.alloc(stride * height);
-  for (let y = 0, offset = 0; y < height; y++) {
-    const row = y * stride + 1;
-    for (let x = 0; x < width; x++, offset += 4) {
-      const bit = x * depth;
-      rows[row + (bit >>> 3)] |= palette.get(pixels.getUint32(offset)) << (8 - depth - (bit & 7));
-    }
-  }
-  const chunks = [signature, chunk('IHDR', header), chunk('PLTE', colors)];
-  if (alphaLength) chunks.push(chunk('tRNS', alpha.subarray(0, alphaLength)));
-  chunks.push(chunk('IDAT', deflateSync(rows, {level: 4})), end);
-  return Buffer.concat(chunks);
 }

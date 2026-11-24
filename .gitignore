@@ -1,5 +1,6 @@
 node_modules/
 runtime/target/
+asset-codec/target/
 web-built/
 *.waffle
 
