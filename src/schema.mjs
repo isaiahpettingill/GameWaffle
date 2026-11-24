@@ -281,4 +281,5 @@ export const reporters={
   'math.hypot':['operators','Hypotenuse of %1 and %2','real',[['real',{real:3}],['real',{real:4}]]],
   'math.random_integer':['operators','Random integer from %1 to %2','integer',[['integer',1],['integer',10]]],
   'math.random_real':['operators','Random real from %1 to %2','real',[['real',{real:0}],['real',{real:1}]]],
+  'text.lookup':['text','Look up text for %1','string',[['string','greeting']]],
 };

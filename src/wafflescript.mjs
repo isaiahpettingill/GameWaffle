@@ -1,5 +1,6 @@
 import {Blocks,Events,inputEvent,receivedEvent,timerEvent,controllerEvent} from './schema.mjs';
 import {binaryMath, conditionalBranches, constantType, formatParameters, maxParameters, parseParameters, scopes, unaryMath} from './script.mjs';
+import {validResourceText} from './resource-tables.mjs';
 
 const symbols = {or:'or',and:'and','==':'equal','!=':'not_equal','<':'less','<=':'less_equal','>':'greater','>=':'greater_equal','+':'add','-':'subtract','*':'multiply','/':'divide','%':'remainder'};
 const precedence = {or:1,and:2,'==':3,'!=':3,'<':3,'<=':3,'>':3,'>=':3,'+':4,'-':4,'*':5,'/':5,'%':5};
@@ -146,7 +147,7 @@ export function parseScript(source){
     return rows;
   }
   const events=Object.create(null), routines=Object.create(null),constants=Object.create(null),imports=[],declarations=[];
-  const game=Object.fromEntries(['globals','flags','events','controls','menus'].map(kind=>[kind,Object.create(null)]));
+  const game=Object.fromEntries(['globals','flags','events','controls','menus','resources'].map(kind=>[kind,Object.create(null)]));
   const collections={types:Object.create(null),inventories:Object.create(null),arrays:Object.create(null)};
   while(eat('\n')){}
   while(peek()!==undefined){
@@ -185,6 +186,13 @@ export function parseScript(source){
         fail('Give the menu a title and one or more text options');
       group[name]=kind==='input'?entries:{title:entries[0],options:entries.slice(1)};
       eol();continue;
+    }
+    if(eat('resource')){
+      const name=id();need('=');
+      const text=expr();
+      if(Object.hasOwn(game.resources,name)||!validResourceText(text))
+        fail('Give each resource a unique name and a quoted string of up to 4096 bytes');
+      game.resources[name]=text;eol();continue;
     }
     if(['global','flag','event'].includes(peek())){
       const kind=tokens[i++].s,name=id();
@@ -320,6 +328,7 @@ export function formatScript(script){
   for(const [kind,collection] of [['global','globals'],['flag','flags'],['event','events']]){
     for(const [name,literal] of Object.entries(script.declarations?.[collection]??{}))lines.push(kind+' '+name+' = '+value(literal));
   }
+  for(const [name,literal] of Object.entries(script.declarations?.resources??{}))lines.push('resource '+name+' = '+value(literal));
   for(const [name,keys] of Object.entries(script.declarations?.controls??{}))lines.push('input '+name+' = '+keys.join(', '));
   for(const [name,menu] of Object.entries(script.declarations?.menus??{}))
     lines.push('menu '+name+' = '+[menu.title,...menu.options].map(value).join(', '));

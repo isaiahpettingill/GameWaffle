@@ -1,5 +1,6 @@
 import { actorReadings, Blocks, Events, inputEvent, receivedEvent, timerEvent, controllerEvent, Opcodes, messageInputs, entityQueries, reporters, commandScopeError, collectionCommands, collectionQueries, valueInput } from './schema.mjs';
 import {inventoryTypes,propertyAliases,propertyType,scalarTypes,validateCollections} from './collections.mjs';
+import {validResourceText} from './resource-tables.mjs';
 
 const variableScopes = {local:0,global:1,flag:2,local_real:9,global_real:10,local_bool:11,global_bool:12,local_string:13,global_string:14};
 export const scopes = Object.keys(variableScopes);
@@ -100,7 +101,10 @@ function compileEvents(script, modules, trace, registry) {
     if(!variableName(name)||!constantType(value))throw Error('Invalid constant '+name);
   }
   if(registry&&!registry.gameScript&&(script.collections||Object.values(script.declarations??{}).some(group=>Object.keys(group).length)))
-    throw Error('Declare game settings, globals, events, and collections in the Game script');
+    throw Error('Use the Game script for global declarations, including resources');
+  for(const [name,value] of Object.entries(script.declarations?.resources??{})){
+    if(!variableName(name)||!validResourceText(value))throw Error('Invalid text resource '+name);
+  }
   for(const name of script.imports??[])if(!Object.hasOwn(modules,name))throw Error('Unknown module '+name);
   for(const [name,r] of Object.entries(script.routines??{})){
     if(!variableName(name) || Object.hasOwn(Blocks,name) || name==='wait' || !Array.isArray(r.params) ||
@@ -109,7 +113,7 @@ function compileEvents(script, modules, trace, registry) {
        r.paramTypes.some(type=>!types.includes(type)))))throw Error('Invalid routine '+name);
   }
   try {
-  let scriptBorder=false,requiresAbi13=false,requiresAbi14=false,requiresAbi15=false,requiresAbi16=false,tileSensing=false;
+  let scriptBorder=false,requiresAbi13=false,requiresAbi14=false,requiresAbi15=false,requiresAbi16=false,requiresAbi17=false,tileSensing=false;
   const dependencies = new Set(), shaderUses=new Set(), backgroundUses = new Set(), shaderPresets = new Set(), fontUses = new Set();
   const collections=registry?.collections??validateCollections(script.collections);
   const aliases=registry?.propertyAliases??propertyAliases(script.declarations?.globals,script.declarations?.flags,registry?.items);
@@ -184,7 +188,7 @@ function compileEvents(script, modules, trace, registry) {
         emit(47,target,...word(intern(names,value)));
         return 'string';
       } else if (value?.text != null) {
-        if(registry?.text && !Object.hasOwn(registry.text,value.text))throw Error('Add text key in Game → Text: '+value.text);
+        if(registry?.text && !Object.hasOwn(registry.text,value.text))throw Error('Add text key in Resources or the Game script: '+value.text);
         emit(48,target,...word(named(value.text)));
         return 'string';
       } else if (value?.real !== undefined || (typeof value==='number' && !Number.isInteger(value))) {
@@ -218,6 +222,7 @@ function compileEvents(script, modules, trace, registry) {
           }
           emit(Opcodes.reporter,target,reporterCodes.indexOf(value.call),...Array.from({length:3},(_,i)=>word(params[i]?target+i:target)).flat());
           requiresAbi15=true;
+          if(value.call==='text.lookup')requiresAbi17=true;
           if(namespace==='tile')tileSensing=true;
           return result==='numeric'?numeric:result;
         }
@@ -538,6 +543,6 @@ function compileEvents(script, modules, trace, registry) {
     if (bytes.length >= 65535) throw Error('Script bytecode exceeds 64 KiB');
     if (bytes.length) events[event] = { b:typeof Buffer === "undefined" ? Uint8Array.from(bytes) : Buffer.from(bytes), n:names, k:constants, ...(reals.length ? {f:reals} : {}) };
   }
-  return { events, dependencies, backgroundUses, scriptBorder, shaderUses, shaderPresets, fontUses, scriptGravity, scriptJump, requiresAbi10, requiresAbi12, requiresAbi13, requiresAbi14, requiresAbi15, requiresAbi16, tileSensing };
+  return { events, dependencies, backgroundUses, scriptBorder, shaderUses, shaderPresets, fontUses, scriptGravity, scriptJump, requiresAbi10, requiresAbi12, requiresAbi13, requiresAbi14, requiresAbi15, requiresAbi16, requiresAbi17, tileSensing };
   } catch(error){error.node=current;throw error;}
 }

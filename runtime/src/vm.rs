@@ -305,7 +305,7 @@ impl Program {
                     b'u' => index <= crate::shader::MAX_SHADER_WORDS,
                     b'o' if opcode == 137 => index < 3,
                     b'o' if opcode == 138 => index < 2,
-                    b'o' if opcode == 143 => index < 29,
+                    b'o' if opcode == 143 => index < 30,
                     b'o' if opcode == 50 => index < 20,
                     b'o' if opcode == 126 => index < 6,
                     b'o' if opcode == 49 => matches!(index, 20 | 21 | 22 | 33 | 37),

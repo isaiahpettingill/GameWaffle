@@ -10,6 +10,7 @@ export async function loadModules(script,read,modules=Object.create(null),visiti
     try{source=await read(path,'utf8');}catch(error){throw Error('Cannot read '+path,{cause:error});}
     const unit=parseScript(source);
     if(Object.keys(unit.events).length)throw Error('Move event handlers out of '+path);
+    if(Object.keys(unit.declarations?.resources??{}).length)throw Error('Declare text resources in the Game script: '+path);
     visiting.add(name);await loadModules(unit,read,modules,visiting);visiting.delete(name);
     modules[name]=unit;
   }

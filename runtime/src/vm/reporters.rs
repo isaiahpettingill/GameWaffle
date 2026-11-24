@@ -196,6 +196,7 @@ pub(super) fn evaluate(
                 real_result(lo * (1. - t) + hi * t)?
             }
         }
+        29 => Value::Text(Rc::from(cx.runtime.localized_text(text(a)?))),
         _ => unreachable!(),
     };
     m.registers[usize::from(dest)] = value;

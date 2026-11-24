@@ -28,6 +28,7 @@ import {loadModules} from './modules.mjs';
 import {parseScript} from './wafflescript.mjs';
 import { compileScript, constantType, tileSizes, variableName } from './script.mjs';
 import { instanceNames } from './instances.mjs';
+import {resourceTables,validResourceText} from './resource-tables.mjs';
 
 function compileLocalization(config = {locale:'',tables:{}}) {
   const {locale,tables} = config;
@@ -43,7 +44,7 @@ function compileLocalization(config = {locale:'',tables:{}}) {
     return [language,Object.fromEntries(Object.entries(entries).map(([id,translation])=>{
       if (!variableName(id) || !safe(id) || !Object.hasOwn(tables[locale],id))
         throw Error('Add text key to the default language: '+id);
-      if (typeof translation!=='string' || Buffer.byteLength(translation)>4096)
+      if (!validResourceText(translation))
         throw Error('Use up to 4096 bytes of text for '+id);
       return [id,translation];
     }))];
@@ -316,7 +317,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     if(!variableName(id)||Object.hasOwn(controls,id)||!Array.isArray(keys)||!keys.length||keys.some(key=>!buttons.includes(key)))throw Error('Invalid input action: '+id);
     controls[id]=keys.reduce((mask,key)=>mask|(1<<buttons.indexOf(key)),0);
   }
-  const localization = compileLocalization(project.localization);
+  const localization = compileLocalization(resourceTables(project.localization,declarations?.resources));
   const menus=Object.fromEntries(Object.entries(declarations?.menus??project.menus??{}).map(([id,menu])=>{
     if(!variableName(id)||!safe(id)||typeof menu.title!=='string'||!Array.isArray(menu.options)||!menu.options.length||menu.options.length>8)
       throw Error('Give menu '+id+' a title and one to eight options');
@@ -357,7 +358,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     return { image: id, ms: frame.duration };
   }
 
-  const scriptAbi=script=>script?.requiresAbi16?16:script?.requiresAbi15?15:script?.requiresAbi14?14:script?.requiresAbi13?13:script?.requiresAbi12?12:script?.requiresAbi10?10:9;
+  const scriptAbi=script=>script?.requiresAbi17?17:script?.requiresAbi16?16:script?.requiresAbi15?15:script?.requiresAbi14?14:script?.requiresAbi13?13:script?.requiresAbi12?12:script?.requiresAbi10?10:9;
   let runtimeAbi=Math.max(scriptAbi(gameScript),gameUnit?12:9);
   let tileSensing=Boolean(gameScript?.tileSensing);
   for(const id of gameScript?.shaderUses??[])usedShaders.add(id);
