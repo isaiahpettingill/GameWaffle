@@ -107,7 +107,7 @@ Blockly.defineBlocksWithJsonArray([
   {type:'waffle_clone_start',message0:'When cloned',nextStatement:'waffle',style:'events'},
   {type:'waffle_game_startup',message0:'On game startup',nextStatement:'waffle',style:'events'},
   {type:'waffle_declare',message0:'Declare %1 %2 = %3',style:'variables',args0:[
-    {type:'field_dropdown',name:'kind',options:[['global','globals'],['flag','flags'],['event','events'],['constant','constants']]},
+    {type:'field_dropdown',name:'kind',options:[['global','globals'],['flag','flags'],['event','events'],['constant','constants'],['text resource','resources']]},
     {type:'field_input',name:'name',text:'score'}, {type:'input_value',name:'value',check:'WaffleValue'},
   ]},
   {type:'waffle_use',message0:'Use module %1',args0:[{type:'field_input',name:'name',text:'common'}],style:'routines'},
@@ -422,7 +422,8 @@ const toolbox = (isRoom,isGame=false,isTile=false,isModule=false) => {
     ...picks('entities'),
   ]),
   category('drawing',picks('drawing')),
-  category('text',[block('string'),block('localized'),...reporterChoices('text'),...picks('text')]),
+  category('text',[...(isGame?[block('declare',{kind:'resources',name:'greeting'},{value:'Hello'})]:[]),
+    block('localized'),block('string'),...reporterChoices('text'),...picks('text')]),
   category('items',[block('item'),block('item_key'),block('actor',{actor:'used_item'}),...picks('items')]),
   {...category('routines',[]),custom:'WAFFLE_ROUTINES'},
   ];
@@ -582,9 +583,15 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
     for(const [key,values] of Object.entries(known))data[key]=[...new Set([...(currentReferences[key]??[]),...values])].sort();
   }
   const blockToolbox=workspace.getToolbox();
-  const roots=new Set([eventBlock,worldHat,roomHat,tileHat,timerHat,inputHat,receivedHat,'waffle_tick','waffle_init','waffle_game_startup','waffle_declare','waffle_use','waffle_proc','waffle_fn']);
+  const roots=new Set([eventBlock,worldHat,roomHat,tileHat,timerHat,inputHat,receivedHat,'waffle_tick','waffle_init','waffle_game_startup','waffle_use','waffle_proc','waffle_fn']);
   const activeRoot=block=>block.type==='waffle_clone_start'&&!data.roomScript&&!data.tileScript||
-    data.gameScript&&(collectionRoots.has(block.type)||configRoots.has(block.type)||block.type===controllerHat)||roots.has(block.type)&&(block.type!==receivedHat||block.getFieldValue('event'));
+    data.gameScript&&(block.type==='waffle_declare'||collectionRoots.has(block.type)||configRoots.has(block.type)||block.type===controllerHat)||roots.has(block.type)&&(block.type!==receivedHat||block.getFieldValue('event'));
+  let projectKeys=keys;
+  const resourceNames=blocks=>blocks.filter(block=>block.type==='waffle_declare'&&block.getFieldValue('kind')==='resources')
+    .map(block=>block.getFieldValue('name')).filter(variableName);
+  function refreshResourceKeys(names){
+    data.keys=[...new Set([...projectKeys,...names])].sort();
+  }
   function refreshGameConfiguration(declarations){
     if(!data.gameScript)return;
     data.actions=[...buttons,...Object.keys(declarations?.controls??{})];
@@ -639,7 +646,9 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
       }
       if(data.gameScript){
         try{data.collectionDefinitions=readCollectionDeclarations(workspace.getTopBlocks(false));}catch{}
-        refreshGameConfiguration(readGameConfiguration(workspace.getTopBlocks(false)));
+        const roots=workspace.getTopBlocks(false);
+        refreshGameConfiguration(readGameConfiguration(roots));
+        refreshResourceKeys(resourceNames(roots));
       }
       checkImports();
       updateDetachedAppearance();
@@ -688,6 +697,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
   function load(script) {
     data.collectionDefinitions=script.collections;
     refreshGameConfiguration(script.declarations);
+    refreshResourceKeys(data.gameScript?Object.keys(script.declarations?.resources??{}):[]);
     changing = true;
     routineScope=null;
     setConstants(script.constants);
@@ -739,7 +749,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
           const entries=declarationStack(options.map(label=>({type:'waffle_menu_option',fields:{label}})));
           add('menu:'+name,{type:'waffle_define_menu',fields:{name,title},inputs:entries?{entries:{block:entries}}:{}});
         }
-        for(const kind of ['globals','flags','events','constants']){
+        for(const kind of ['globals','flags','events','constants','resources']){
           const values=kind==='constants'?script.constants:script.declarations?.[kind];
           for(const [name,value] of Object.entries(values??{})){
             add('declaration:'+kind+':'+name,{type:'waffle_declare',fields:{kind,name},inputs:{value:encodeValue(value)}});
@@ -857,7 +867,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
   }
   function save() {
     const events = {}, layout = {}, routines=Object.create(null),imports=[],detached=[];
-    const defined={globals:Object.create(null),flags:Object.create(null),events:Object.create(null),constants:Object.create(null)};
+    const defined=Object.fromEntries(['globals','flags','events','constants','resources'].map(kind=>[kind,Object.create(null)]));
     for (const hat of workspace.getTopBlocks(true)) {
       const name=hat.getFieldValue('name'),position=hat.getRelativeToSurfaceXY();
       if(data.gameScript&&collectionRoots.has(hat.type)){
@@ -871,7 +881,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
       if(hat.type==='waffle_declare'&&data.gameScript){
         const kind=hat.getFieldValue('kind'), value=readValue(hat.getInputTargetBlock('value'));
         if(!variableName(name)||!constantType(value)||Object.hasOwn(defined[kind],name)||
-          (kind==='flags'&&typeof value!=='boolean')||(kind==='events'&&typeof value!=='string'))throw Error('Use a unique name and a matching declaration value');
+          (kind==='flags'&&typeof value!=='boolean')||(['events','resources'].includes(kind)&&typeof value!=='string'))throw Error('Use a unique name and a matching declaration value');
         defined[kind][name]=value;layout['declaration:'+kind+':'+name]=[position.x,position.y];continue;
       }
       if(['waffle_proc','waffle_fn'].includes(hat.type)){
@@ -893,7 +903,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
       layout[event] = [p.x,p.y];
       events[event] = decodeStack(hat.getNextBlock());
     }
-    const declarations=data.gameScript?{globals:defined.globals,flags:defined.flags,events:defined.events,
+    const declarations=data.gameScript?{globals:defined.globals,flags:defined.flags,events:defined.events,resources:defined.resources,
       ...readGameConfiguration(workspace.getTopBlocks(false),true)}:null;
     const savedConstants=data.gameScript?defined.constants:constants;
     const collections=data.gameScript?readCollectionDeclarations(workspace.getTopBlocks(false),true):null;
@@ -967,7 +977,9 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
   }
   return {load,save,fit,selectCategory,editRoutine,setRoutineModules,setRoomContext,setConstants:next=>setConstants(next,true),updateRegistry(sprites,items,actions,tags,keys,menus,references){
       const shaderChanged=JSON.stringify(data.shaders)!==JSON.stringify(references.shaders);
-      currentReferences=references;Object.assign(data,{sprites,items,actions,keys,menus,...references,animations:[...new Set([...tags,...extraTags])]});remember(null);
+      currentReferences=references;projectKeys=keys;
+      Object.assign(data,{sprites,items,actions,menus,...references,animations:[...new Set([...tags,...extraTags])]});remember(null);
+      refreshResourceKeys(data.gameScript?resourceNames(workspace.getTopBlocks(false)):[]);
       if(shaderChanged)for(const block of workspace.getAllBlocks(false)){
         if(block.type==='waffle_shader_pass')block.configureShader(block.getFieldValue('shader'));
       }

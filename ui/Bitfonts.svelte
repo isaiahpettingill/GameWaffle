@@ -5,7 +5,7 @@
   import SearchSelect from './SearchSelect.svelte';
   import {resourceName} from '../src/resource-name.mjs';
   import {fontFile} from '../src/font.mjs';
-  let { fonts, active, legacy, sources, onSelect, onSave, onImport }=$props();
+  let { fonts, active, legacy, sources, controlsVisible=true, onSelect, onSave, onImport }=$props();
   let editing=$state(null), name=$state(''), source=$state(''), width=$state(6), height=$state(8), assignments=$state({});
   let file=$state.raw(null), error=$state(''), busy=$state(false), picker=$state();
   const installed=$derived(fonts[active]);
@@ -54,7 +54,7 @@
   }
 </script>
 
-<div class="bitfonts">
+{#if controlsVisible}<div class="bitfonts">
   <SearchSelect label="Game bitfont" value={active} options={[
     {value:'builtin',label:'Built-in'},
     ...(legacy?[{value:'legacy',label:'Original bitmap font'}]:[]),
@@ -64,7 +64,7 @@
     <button onclick={()=>open()}>Import bitfont…</button>
     {#if installed}<button onclick={()=>open(active)}>Edit bitfont…</button>{/if}
   </div>
-</div>
+</div>{/if}
 {#if editing!==null}
   <Modal title={editing?'Edit Bitfont':'Import Bitfont'} {busy} onClose={()=>editing=null}>
     <form onsubmit={event=>{event.preventDefault();save();}}>
@@ -97,7 +97,8 @@
 {/if}
 
 <style>
-  .bitfonts{display:grid;gap:.65rem;max-width:26rem}
+  .bitfonts{display:flex;align-items:end;flex-wrap:wrap;gap:.5rem;padding:.45rem .6rem;background:var(--well);border:1px solid var(--line)}
+  .bitfonts :global(.search-select){flex:0 1 15rem}
   .font-source{align-items:end}.font-source :global(.search-select){flex:1 1 10rem}
   .font-size{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
   label{display:grid;gap:.25rem;color:var(--muted);min-width:0}small{color:var(--muted)}

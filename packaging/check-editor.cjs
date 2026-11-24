@@ -71,7 +71,7 @@ for(const width of [1280,800,390,320]){
   await page.locator('.appbar .status').filter({hasText:/^(Ready|Unsaved project|Project saved)$/}).waitFor({state:'attached'});
   assert.deepEqual(await page.locator('.banner[role=alert]').allTextContents(),[],'Project opens without a startup error');
   const nav=page.getByRole('navigation',{name:'Editor views'});
-  for(const tab of ['Room','World','Game','Assets','Entities','Code']){
+  for(const tab of ['Room','World','Game','Assets','Resources','Entities','Code']){
     await nav.getByText(tab,{exact:true}).click();
     if(tab==='Assets'){
       await page.getByRole('region',{name:'Asset drop zone'}).getByRole('button',{name:'Load asset…',exact:true}).waitFor();
@@ -86,11 +86,19 @@ for(const width of [1280,800,390,320]){
       await page.getByRole('dialog',{name:'Edit Connection'}).getByRole('button',{name:'Cancel',exact:true}).click();
     }
     if(tab==='Game'){
-      for(const section of ['Game script','Room defaults','Project assets']){
-        await page.getByRole('button',{name:section,exact:true}).click();
-        await checkFormRows(page,section);
+      const game=page.getByRole('region',{name:'Game code'});
+      await game.locator('.blocklySvg:visible').waitFor();
+      assert.equal(await game.getByLabel('Script file').inputValue(),'game');
+      assert.equal(await game.evaluate(editor=>Boolean(editor.closest('dialog'))),false);
+      for(const [button,title] of [['Room defaults…','New room defaults'],['Project settings…','Project settings']]){
+        await game.getByRole('button',{name:button,exact:true}).click();
+        const settings=page.getByRole('dialog',{name:title});
+        assert.ok(await settings.evaluate(dialog=>dialog.scrollWidth<=dialog.clientWidth+1),title+' fits the window');
+        await page.keyboard.press('Escape');
+        await settings.waitFor({state:'hidden'});
       }
     }
+    if(tab==='Resources')await page.getByRole('region',{name:'Resources'}).getByRole('button',{name:'Add text…',exact:true}).waitFor();
     if(tab==='Code'){
       await page.getByRole('button',{name:'Blocks',exact:true}).click();
       await page.locator('.blocklySvg:visible').first().waitFor();
@@ -130,6 +138,8 @@ for(const width of [1280,800,390,320]){
       assert.equal(await page.locator('.code-pane').isVisible(),false,'Room shows the map without the script editor');
       assert.equal(await page.getByRole('button',{name:'Select instance',exact:true}).getAttribute('aria-pressed'),'true');
       assert.equal(await page.getByRole('button',{name:'Brush',exact:true}).getAttribute('aria-pressed'),'false');
+    }else if(tab==='Game'){
+      assert.equal(await page.locator('.map-pane').isVisible(),false,'Game uses the workspace for its script');
     }else{
       assert.equal(await page.locator('.author-panes').isVisible(),false,'Project view should take the workspace in '+tab);
       assert.ok(await page.getByRole('region',{name:'Project tools'}).isVisible());
@@ -249,8 +259,6 @@ for(const width of [1280,800,390,320]){
         unit.events.init.some(row=>row.op==='set_camera_bottom_inset'&&row.tiles===2);
     },page);
     await nav.getByText('Game',{exact:true}).click();
-    await page.getByRole('button',{name:'Game script',exact:true}).click();
-    await page.getByRole('button',{name:'Open Game script',exact:true}).click();
     await page.getByRole('button',{name:'Text',exact:true}).click();
     const gameSource=page.locator('.cm-content');
     const previousGame=await gameSource.innerText();
@@ -310,26 +318,43 @@ for(const width of [1280,800,390,320]){
     await page.getByRole('button',{name:'Play here'}).waitFor();
 
 
-    await nav.getByText('Game',{exact:true}).click();
-    await page.getByRole('button',{name:'Text',exact:true}).click();
-    await page.getByRole('button',{name:'Language to add'}).click();
-    let languages=page.getByRole('dialog',{name:'Language to add'});
+    await nav.getByText('Resources',{exact:true}).click();
+    const resources=page.getByRole('region',{name:'Resources'});
+    await resources.getByRole('button',{name:'Add language',exact:true}).click();
+    let languages=page.getByRole('dialog',{name:'Add language'});
     await languages.getByRole('searchbox').fill('English');
     await languages.getByRole('button',{name:'English',exact:true}).click();
-    await page.getByRole('button',{name:'Add language'}).click();
-    await page.getByLabel('Text name').fill('greeting');
-    await page.getByRole('button',{name:'Add text'}).click();
-    await page.getByLabel('greeting',{exact:true}).fill('Hello!');
-    await page.getByLabel('greeting',{exact:true}).press('Tab');
-    await page.getByRole('button',{name:'Language to add'}).click();
-    languages=page.getByRole('dialog',{name:'Language to add'});
+    await resources.getByRole('button',{name:'Add text…',exact:true}).click();
+    const addText=page.getByRole('dialog',{name:'Add text resource'});
+    await addText.getByLabel('Resource name').fill('greeting');
+    await addText.getByLabel('English text').fill('Hello!');
+    await addText.getByRole('button',{name:'Add text',exact:true}).click();
+    await resources.getByRole('button',{name:'Add language',exact:true}).click();
+    languages=page.getByRole('dialog',{name:'Add language'});
     await languages.getByRole('searchbox').fill('Spanish');
     await languages.getByRole('button',{name:'Spanish',exact:true}).click();
-    await page.getByRole('button',{name:'Add language'}).click();
-    await page.getByLabel('greeting',{exact:true}).fill('¡Hola!');
-    await page.keyboard.press('Control+s');
+    await resources.getByLabel('greeting',{exact:true}).fill('¡Hola!');
+    await resources.getByLabel('greeting',{exact:true}).press('Tab');
     await page.waitForFunction(async()=> (await(await fetch('./api/project')).json()).project.localization?.tables.es?.greeting==='¡Hola!');
-    await page.getByRole('button',{name:'Project assets',exact:true}).click();
+    await resources.getByRole('button',{name:'Game script',exact:true}).click();
+    const gameCode=page.getByRole('region',{name:'Game code'});
+    await gameCode.getByRole('button',{name:'Text',exact:true}).click();
+    const resourceSource=gameCode.getByLabel('WaffleScript source');
+    const baseGame=await resourceSource.innerText();
+    await resourceSource.fill('resource start_prompt = "Play"\n'+baseGame);
+    await page.waitForFunction(async()=> (await(await fetch('./api/game-script')).json()).declarations?.resources?.start_prompt==='Play');
+    await gameCode.getByRole('button',{name:'Blocks',exact:true}).click();
+    await gameCode.locator('.waffle_declare').filter({hasText:'start_prompt'}).waitFor();
+    await nav.getByText('Resources',{exact:true}).click();
+    const prompt=resources.getByRole('row').filter({hasText:'start_prompt'});
+    await prompt.getByText('Play',{exact:true}).waitFor();
+    await resources.getByLabel('Resource language').selectOption('es');
+    await prompt.getByLabel('start_prompt',{exact:true}).fill('Jugar');
+    await prompt.getByLabel('start_prompt',{exact:true}).press('Tab');
+    await page.waitForFunction(async()=> (await(await fetch('./api/project')).json()).project.localization?.tables.es?.start_prompt==='Jugar');
+    await nav.getByText('Game',{exact:true}).click();
+    await page.getByRole('button',{name:'Project settings…',exact:true}).click();
+    const projectSettings=page.getByRole('dialog',{name:'Project settings'});
     const coverChooser=page.waitForEvent('filechooser');
     await page.getByRole('button',{name:'Choose cover image…'}).click();
     const {PNG}=require('pngjs');
@@ -359,6 +384,7 @@ for(const width of [1280,800,390,320]){
     await coverDialog.getByRole('button',{name:'Save cover'}).click();
     await coverDialog.waitFor({state:'hidden'});
     assert.deepEqual((await getProject()).coverCrop,{x:0,y:.5,zoom:8});
+    await projectSettings.getByRole('button',{name:'Done',exact:true}).click();
 
     const fileMenu=page.locator('summary').filter({hasText:/^File$/});
     await fileMenu.focus();
@@ -376,6 +402,7 @@ for(const width of [1280,800,390,320]){
     const published=unpack(await fs.readFile(await download.path()),{simulation:true});
     assert.equal(published.locale,'es');
     assert.equal(published.text.greeting,'¡Hola!');
+    assert.equal(published.text.start_prompt,'Jugar');
     assert.ok(published.fontGlyphs['¡']>=96);
     const publishedCover=PNG.sync.read(Buffer.from(published.coverArt));
     assert.deepEqual([publishedCover.width,publishedCover.height],[512,512]);
@@ -522,11 +549,12 @@ await authoring.getByRole('button',{name:'Undo connection from Top-down Courtyar
 await until('Undo of the connection',async()=> (await readProject()).rooms.courtyard.exits.right.targets.join(',')==='yard,vault');
 
 await views.getByRole('button',{name:'Game',exact:true}).click();
-await authoring.getByRole('button',{name:'Room defaults',exact:true}).click();
+await authoring.getByRole('button',{name:'Room defaults…',exact:true}).click();
 const getRoomInit=async id=>(await(await authoring.request.get(url+'/api/room-script/'+id)).json()).events.init;
 const oldYardInit=await getRoomInit('yard');
 const zoomDefault=authoring.getByRole('spinbutton',{name:'Camera zoom (×)',exact:true});
-await zoomDefault.fill('1.75');await zoomDefault.press('Tab');
+await zoomDefault.fill('1.75');
+await authoring.getByRole('button',{name:'Apply defaults',exact:true}).click();
 await until('Room defaults saved',async()=>(await readProject()).roomDefaults?.cameraZoom===1.75);
 await views.getByRole('button',{name:'Room',exact:true}).click();
 await authoring.getByRole('button',{name:'New room',exact:true}).click();
@@ -537,9 +565,37 @@ await until('New room',async()=> (await readProject()).rooms.upper_deck?.title==
 assert.equal((await getRoomInit('upper_deck')).find(row=>row.op==='camera_zoom').zoom,1.75);
 assert.deepEqual(await getRoomInit('yard'),oldYardInit);
 
-await views.getByRole('button',{name:'Game',exact:true}).click();
-await authoring.getByRole('button',{name:'Bitfonts',exact:true}).click();
-await authoring.getByRole('button',{name:'Import bitfont…'}).click();
+await views.getByRole('button',{name:'Assets',exact:true}).click();
+const assetLibrary=authoring.getByRole('region',{name:'Asset library'});
+assert.equal(await assetLibrary.getByRole('button',{name:'New shader…',exact:true}).count(),0);
+await assetLibrary.getByLabel('Search assets').fill('maker');
+const makerAsset=assetLibrary.locator('.asset').filter({hasText:'maker.aseprite'});
+await makerAsset.locator('img').waitFor();
+await assetLibrary.getByRole('button',{name:'Edit details for maker',exact:true}).click();
+const details=authoring.getByRole('dialog',{name:'Asset details'});
+await details.getByLabel('Tags',{exact:true}).fill('Player art');
+await details.getByLabel('Tags',{exact:true}).press('Enter');
+await details.getByRole('button',{name:'Remove tag Player art',exact:true}).waitFor();
+await details.getByRole('button',{name:'Save details',exact:true}).click();
+await until('Asset tag saved',async()=> (await readProject()).assetInfo?.['assets/sprites/maker.aseprite']?.tags?.[0]==='Player art');
+await assetLibrary.getByLabel('Search assets').clear();
+await assetLibrary.getByRole('button',{name:'Filter by tag Player art',exact:true}).click();
+assert.equal(await assetLibrary.locator('tbody tr').count(),1);
+await makerAsset.click();
+await authoring.getByRole('region',{name:'Project tools'}).getByLabel('Entity type').waitFor();
+assert.equal(await views.getByRole('button',{name:'Entities',exact:true}).getAttribute('aria-current'),'page');
+await views.getByRole('button',{name:'Assets',exact:true}).click();
+await assetLibrary.getByLabel('Asset files',{exact:true}).setInputFiles({name:'Tag test.png',mimeType:'image/png',buffer:await fs.readFile('demo/assets/sprites/key.png')});
+const loadAsset=authoring.getByRole('dialog',{name:'Load asset'});
+await loadAsset.getByLabel('Asset type',{exact:true}).selectOption('source');
+await loadAsset.getByLabel('Tags',{exact:true}).fill('Interface');
+await loadAsset.getByLabel('Tags',{exact:true}).press('Enter');
+await loadAsset.getByRole('button',{name:'Remove tag Interface',exact:true}).waitFor();
+await loadAsset.getByRole('button',{name:'Load asset',exact:true}).click();
+await loadAsset.waitFor({state:'hidden'});
+await until('Tag saved with imported image',async()=> (await readProject()).assetInfo?.['assets/images/tag-test.png']?.tags?.[0]==='Interface');
+await assetLibrary.getByRole('button',{name:'Bitfonts',exact:true}).click();
+await assetLibrary.getByRole('button',{name:'Import bitfont…'}).click();
 const bitfont=authoring.getByRole('dialog',{name:'Import Bitfont'});
 const {PNG}=require('pngjs');
 const sheet=new PNG({width:12,height:8});
@@ -880,11 +936,11 @@ const shaderImport=authoring.getByRole('dialog',{name:'Load shader'});
 await shaderImport.getByLabel('Name',{exact:true}).fill('Imported scanlines');
 await shaderImport.getByRole('button',{name:'Load shader',exact:true}).click();
 await shaderImport.waitFor({state:'hidden'});
-await authoring.getByRole('button',{name:/Imported scanlines/}).waitFor();
+await authoring.getByRole('button',{name:/^Imported scanlines/}).waitFor();
 await authoring.getByLabel('Search shaders').fill('Purple');
-assert.equal(await authoring.getByRole('button',{name:/Imported scanlines/}).count(),0);
+assert.equal(await authoring.getByRole('button',{name:/^Imported scanlines/}).count(),0);
 await authoring.setViewportSize({width:390,height:760});
-await authoring.getByRole('button',{name:/Purple mist/}).click();
+await authoring.getByRole('button',{name:/^Purple mist/}).click();
 await shaderEditor.getByRole('region',{name:'Shader graph'}).waitFor();
 assert.ok(await shaderEditor.evaluate(workspace=>workspace.scrollWidth<=workspace.clientWidth+1),'The inline shader workspace fits a narrow screen');
 await shaderEditor.getByRole('button',{name:'Add shader node',exact:true}).click();

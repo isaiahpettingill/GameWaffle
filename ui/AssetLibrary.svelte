@@ -1,28 +1,36 @@
 <script>
-  import {Upload, Search, Image, AudioLines, File, Code, Type, Tag, Plus} from '@lucide/svelte';
+  import {Upload, Search, Image, AudioLines, File, Code, Type, Plus, Ellipsis, ChevronUp, ChevronDown, ChevronLeft, ChevronRight} from '@lucide/svelte';
   import Modal from './Modal.svelte';
   import GlyphGrid from './GlyphGrid.svelte';
   import SearchSelect from './SearchSelect.svelte';
   import CoverCrop from './CoverCrop.svelte';
+  import TagInput from './TagInput.svelte';
   import {DEFAULT_COVER_CROP} from '../src/cover.mjs';
   import {assetCatalog,assetKinds,assetLabels,tagList} from '../src/asset-types.mjs';
 
-  let {project,files,shaderDefinitions,onUpload,onEdit,onOpen,onShader,selectedPath='',initialKind='',shadersOnly=false}=$props();
+  let {project,files,shaderDefinitions,onUpload,onEdit,onOpen,onShader,previewFor=()=>'',fontTools,selectedPath='',initialKind='',shadersOnly=false}=$props();
   let query=$state(''), type=$state(''), tag=$state(''), selected=$state('');
+  let sortBy=$state('name'), descending=$state(false), page=$state(0), details=$state.raw(null), destinations=$state.raw(null);
   let picker=$state(), dragging=$state(false), queue=$state.raw([]), file=$state.raw(null);
   let suggestedKind='';
-  let name=$state(''), tags=$state(''), kind=$state(''), error=$state(''), saving=$state(false);
+  let name=$state(''), tags=$state([]), kind=$state(''), error=$state(''), saving=$state(false);
+  let editName=$state(''), editTags=$state([]);
   let soundFont=$state(''), compress=$state(true), tileCollision=$state(true);
   let width=$state(6), height=$state(8), assignments=$state({}), preview=$state('');
   let coverCrop=$state({...DEFAULT_COVER_CROP}), coverUpload=$state.raw(null);
   const catalog=$derived(assetCatalog(project,files).filter(asset=>!shadersOnly||asset.kind==='shader'));
   const tagChoices=$derived([...new Set(catalog.flatMap(asset=>asset.tags))].sort((a,b)=>a.localeCompare(b)));
+  const match=$derived(query.trim().toLowerCase());
   const filtered=$derived(catalog.filter(asset=>(!type||asset.kind===type)&&(!tag||asset.tags.includes(tag))
-    &&[asset.name,asset.path,...asset.tags].some(value=>value.toLowerCase().includes(query.trim().toLowerCase()))));
-  const groups=$derived(Object.groupBy(filtered,asset=>asset.kind));
-  const active=$derived(catalog.find(asset=>asset.path===(shadersOnly?selectedPath:selected)));
-  const shaderId=$derived(active?.linked.find(link=>link.kind==='shader')?.id);
-  const shader=$derived(shaderDefinitions[shaderId]);
+    &&(!match||[asset.name,asset.path,...asset.tags].some(value=>value.toLowerCase().includes(match)))));
+  const pageSize=24;
+  const order=new Intl.Collator(undefined,{numeric:true,sensitivity:'base'});
+  const sortValue=asset=>sortBy==='kind'?assetLabels[asset.kind]??asset.kind:asset.name;
+  const sorted=$derived(filtered.toSorted((a,b)=>(descending?-1:1)*order.compare(sortValue(a),sortValue(b))||a.path.localeCompare(b.path)));
+  const pageCount=$derived(Math.ceil(filtered.length/pageSize));
+  const pageIndex=$derived(Math.min(page,Math.max(0,pageCount-1)));
+  const visible=$derived(sorted.slice(pageIndex*pageSize,(pageIndex+1)*pageSize));
+  const shader=$derived(shaderDefinitions[details?.linked.find(link=>link.kind==='shader')?.id]);
   function uploadKinds(name){
     const kinds=/\.(jpe?g|webp)$/i.test(name)?['cover']:assetKinds(name);
     return shadersOnly?kinds.filter(kind=>kind==='shader'):kinds;
@@ -36,6 +44,7 @@
   const loadLabel=$derived(shadersOnly?'Load shader':'Load asset');
 
   $effect(()=>{type=initialKind;});
+  $effect(()=>{query;type;tag;sortBy;descending;page=0;});
   $effect(()=>{
     if(!sheet||!file){preview='';return;}
     const url=URL.createObjectURL(file);
@@ -48,7 +57,7 @@
     const types=uploadKinds(next.name);
     kind=types.includes(suggestedKind)?suggestedKind:types[0];
     name=next.name.replace(/\.[^.]+$/,'');
-    tags='';soundFont=soundFonts.length===1?soundFonts[0].value:'';compress=true;tileCollision=true;
+    tags=[];soundFont=soundFonts.length===1?soundFonts[0].value:'';compress=true;tileCollision=true;
     width=6;height=8;assignments={};error='';
     coverCrop={...DEFAULT_COVER_CROP};coverUpload=null;
   }
@@ -74,7 +83,7 @@
     saving=true;error='';
     try{
       const path=await onUpload({filename:source.name,data:new Uint8Array(await source.arrayBuffer()),kind,
-        name:name.trim(),tags:tagList(tags.split(',')),soundFont,compress,tileCollision,
+        name:name.trim(),tags:tagList(tags),soundFont,compress,tileCollision,
         ...(kind==='cover'?{coverCrop:$state.snapshot(coverCrop)}:{}),
         ...(sheet?{font:{glyphWidth:width,glyphHeight:height,assignments:$state.snapshot(assignments)}}:{})});
       type=kind;query='';tag='';selected=path;
@@ -91,7 +100,7 @@
     if(!event.dataTransfer?.files.length)return;
     event.preventDefault();
     dragging=false;
-    suggestedKind=initialKind;
+    suggestedKind=type||initialKind;
     if(!saving)enqueue(event.dataTransfer.files);
   }
   export function pick(type=initialKind) {
@@ -101,9 +110,27 @@
   export function select(path) {
     query='';tag='';selected=path;
   }
+  function edit(asset){
+    editName=asset.name;editTags=[...asset.tags];details=asset;
+  }
+  function applyMetadata(event){
+    event.preventDefault();
+    if(!editName.trim())return;
+    onEdit(details,{name:editName.trim(),tags:tagList(editTags)});
+    details=null;
+  }
+  function changeSort(field){
+    if(sortBy===field)descending=!descending;
+    else{sortBy=field;descending=false;}
+  }
+  function sortDirection(field){return sortBy===field?(descending?'descending':'ascending'):'none';}
   function activate(asset){
     selected=asset.path;
-    if(shadersOnly)onShader(asset.linked.find(link=>link.kind==='shader')?.id,asset.path);
+    if(asset.kind==='shader'){onShader(asset.linked.find(link=>link.kind==='shader')?.id,asset.path);return;}
+    const links=asset.linked.filter(link=>link.kind===asset.kind&&['sprite','tile','font'].includes(link.kind));
+    if(links.length===1)onOpen(links[0]);
+    else if(links.length>1)destinations={asset,links};
+    else edit(asset);
   }
   const icons={shader:Code,font:Type,sound:AudioLines,music:AudioLines,soundfont:AudioLines,
     sprite:Image,tile:Image,background:Image,cover:Image,source:Image};
@@ -111,14 +138,42 @@
     sound:'Sound effect',music:'Music',soundfont:'SoundFont',shader:'SPIR-V shader',source:'Source image'};
 </script>
 
-<section class="card library" class:shader-library={shadersOnly} aria-label={shadersOnly?'Shader library':undefined}>
-  <header class="row heading"><h2>{shadersOnly?'Shaders':'Assets'}</h2>
-    <button type="button" class:primary={shadersOnly} onclick={()=>onShader()}><Plus size={15}/>New shader…</button>
+{#snippet thumbnail(asset)}
+  {@const Icon=icons[asset.kind]??File}
+  {@const url=previewFor(asset)}
+  <span class="thumbnail" aria-hidden="true">
+    {#if url}<img src={url} alt="" loading="lazy" decoding="async">{:else}<Icon size={17}/>{/if}
+  </span>
+{/snippet}
+{#snippet actions(asset)}
+  <button type="button" class="icon-button asset-actions" aria-label={'Edit details for '+asset.name} title="Edit name and tags" onclick={()=>edit(asset)}>
+    <Ellipsis size={17}/>
+  </button>
+{/snippet}
+{#snippet assetName(asset)}
+  {@render thumbnail(asset)}
+  <span class="asset-label">
+    <strong>{asset.name}</strong><small>{asset.path.split('/').at(-1)}</small>
+    {#if !shadersOnly}<small class="mobile-kind">{assetLabels[asset.kind]??asset.kind}</small>{/if}
+  </span>
+{/snippet}
+{#snippet empty()}
+  <p class="empty muted">{shadersOnly?(catalog.length?'No shaders match the filters.':'No project shaders yet.'):(catalog.length?'No assets match the filters.':'Load an asset to start the library.')}</p>
+{/snippet}
+
+<section class="card library" class:shader-library={shadersOnly} aria-label={shadersOnly?'Shader library':'Asset library'}>
+  <header class="row heading">
+    <h2>{shadersOnly?'Shaders':'Assets'}</h2>
+    {#if shadersOnly}
+      <button type="button" class="primary" onclick={()=>onShader()}><Plus size={15}/>New shader…</button>
+    {:else}
+      <button type="button" aria-pressed={type==='font'} onclick={()=>type=type==='font'?'':'font'}><Type size={15}/>Bitfonts</button>
+    {/if}
   </header>
   <div role="region" aria-label={shadersOnly?'Shader drop zone':'Asset drop zone'} class="dropzone" class:dragging
     ondragover={acceptDrop} ondragleave={event=>{if(!event.currentTarget.contains(event.relatedTarget))dragging=false;}} ondrop={loadDrop}>
-    {#if !shadersOnly}<Upload size={20} aria-hidden="true"/><span>Drop asset files here</span>{/if}
-    <button class:primary={!shadersOnly} onclick={()=>pick()} disabled={saving}>{loadLabel}…</button>
+    {#if !shadersOnly}<Upload size={18} aria-hidden="true"/><span>Drop files to import</span>{/if}
+    <button class:primary={!shadersOnly} onclick={()=>pick(type||initialKind)} disabled={saving}>{loadLabel}…</button>
     <input hidden type="file" multiple {accept} bind:this={picker} aria-label={shadersOnly?'Shader files':'Asset files'}
       onchange={event=>{enqueue(event.currentTarget.files);event.currentTarget.value='';}}>
   </div>
@@ -136,64 +191,105 @@
       </select>
     {/if}
   </div>
-  <div class="content" class:details={active&&(!shadersOnly||!project.shaders?.[shaderId]?.graph)}>
-    <div class="assets">
-      {#each Object.entries(groups) as [kind,assets]}
-        {#if !shadersOnly}<h3>{assetLabels[kind]??kind}</h3>{/if}
-        {#each assets as asset (asset.path)}
-          {@const Icon=icons[asset.kind]??File}
-          <button class="asset" aria-pressed={active?.path===asset.path} type="button" onclick={()=>activate(asset)}>
-            <Icon size={16} aria-hidden="true"/>
-            <span><strong>{asset.name}</strong><small>{asset.path.split('/').at(-1)}</small></span>
-            {#if asset.tags.length}<span class="tag-summary">{asset.tags.join(', ')}</span>{/if}
+  {#if shadersOnly}
+    <div class="shader-list">
+      {#each filtered as asset (asset.path)}
+        <div class="shader-entry">
+          <button type="button" class="asset" aria-pressed={selectedPath===asset.path} onclick={()=>activate(asset)}>
+            {@render assetName(asset)}
           </button>
-        {/each}
-      {:else}
-        <p class="muted">{shadersOnly?(catalog.length?'No shaders match the filters.':'No project shaders yet.'):(catalog.length?'No assets match the filters.':'Load an asset to start the library.')}</p>
+          {@render actions(asset)}
+        </div>
+      {:else}{@render empty()}{/each}
+    </div>
+  {:else}
+    {@render fontTools?.(type==='font')}
+    {#if filtered.length}
+      <table aria-label="Project assets">
+        <colgroup><col><col class="kind-column"><col class="tags-column"><col class="action-column"></colgroup>
+        <thead><tr>
+          <th scope="col" aria-sort={sortDirection('name')}><button type="button" class="sort" onclick={()=>changeSort('name')}>Asset
+            {#if sortBy==='name'}{#if descending}<ChevronDown size={13}/>{:else}<ChevronUp size={13}/>{/if}{/if}
+          </button></th>
+          <th scope="col" class="kind-cell" aria-sort={sortDirection('kind')}><button type="button" class="sort" onclick={()=>changeSort('kind')}>Type
+            {#if sortBy==='kind'}{#if descending}<ChevronDown size={13}/>{:else}<ChevronUp size={13}/>{/if}{/if}
+          </button></th>
+          <th scope="col" class="tag-cell">Tags</th>
+          <th scope="col" aria-label="Actions"></th>
+        </tr></thead>
+        <tbody>
+          {#each visible as asset (asset.path)}
+            <tr class:chosen={selected===asset.path&&asset.kind==='tile'}>
+              <td><button type="button" class="asset" onclick={()=>activate(asset)}>{@render assetName(asset)}</button></td>
+              <td class="kind-cell">{assetLabels[asset.kind]??asset.kind}</td>
+              <td class="tag-cell">
+                <div class="tag-summary">
+                  {#each asset.tags as value}
+                    <button type="button" class="chip" aria-label={'Filter by tag '+value} aria-pressed={tag===value}
+                      onclick={()=>tag=tag===value?'':value}>{value}</button>
+                  {/each}
+                </div>
+              </td>
+              <td>{@render actions(asset)}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+      {#if pageCount>1}
+        <div class="pager row">
+          <small>{pageIndex*pageSize+1}–{Math.min((pageIndex+1)*pageSize,filtered.length)} of {filtered.length} assets</small>
+          <button type="button" class="icon-button" aria-label="Previous assets" disabled={!pageIndex} onclick={()=>page=pageIndex-1}><ChevronLeft size={15}/></button>
+          <button type="button" class="icon-button" aria-label="Next assets" disabled={pageIndex+1>=pageCount} onclick={()=>page=pageIndex+1}><ChevronRight size={15}/></button>
+        </div>
+      {/if}
+    {:else}{@render empty()}{/if}
+  {/if}
+</section>
+
+{#if details}
+  <Modal title="Asset details" onClose={()=>details=null}>
+    <form onsubmit={applyMetadata}>
+      <div class="metadata-heading">
+        {@render thumbnail(details)}
+        <small class="file-path">{details.path}</small>
+      </div>
+      <label>Name<input aria-label="Asset name" bind:value={editName} maxlength="100" required></label>
+      <TagInput value={editTags} onChange={value=>editTags=value}/>
+      {#if shader}
+        <h3>Shader parameters</h3>
+        <dl class="uniforms">
+          {#each shader.parameters as parameter}
+            <dt>{parameter.name}</dt><dd>{parameter.automatic?'Automatic':parameter.kind+(parameter.lanes>1?' × '+parameter.lanes:'')}</dd>
+          {:else}<dd>No uniforms</dd>{/each}
+        </dl>
+      {/if}
+      <div class="dialog-actions"><button type="button" onclick={()=>details=null}>Cancel</button>
+        <button class="primary" disabled={!editName.trim()}>Save details</button></div>
+    </form>
+  </Modal>
+{/if}
+{#if destinations}
+  <Modal title={'Open '+destinations.asset.name} onClose={()=>destinations=null}>
+    <div class="destinations">
+      {#each destinations.links as link}
+        <button type="button" onclick={()=>{destinations=null;onOpen(link);}}>{link.label}</button>
       {/each}
     </div>
-    {#if active&&(!shadersOnly||!project.shaders?.[shaderId]?.graph)}{#key active.path}
-      <section class="asset-details" aria-label="Asset details">
-        <label>Name<input aria-label="Asset name" value={active.name} maxlength="100"
-          onchange={event=>onEdit(active,'name',event.currentTarget.value.trim()||active.name)}></label>
-        <label>Tags<input aria-label="Asset tags" value={active.tags.join(', ')} placeholder="Add comma-separated tags"
-          onchange={event=>onEdit(active,'tags',tagList(event.currentTarget.value.split(',')))}></label>
-        <p class="file-path">{active.path}</p>
-        {#if active.tags.length}<div class="tags">
-          {#each active.tags as value}
-            <button type="button" aria-pressed={tag===value} onclick={()=>tag=tag===value?'':value}><Tag size={13} aria-hidden="true"/>{value}</button>
-          {/each}
-        </div>{/if}
-        {#if shader}
-          {#if project.shaders?.[shaderId]?.graph}
-            <button type="button" onclick={()=>onShader(shaderId,active.path)}>Edit shader…</button>
-          {/if}
-          <h3>Shader parameters</h3>
-          <dl class="uniforms">
-            {#each shader.parameters as parameter}
-              <dt>{parameter.name}</dt><dd>{parameter.automatic?'Automatic':parameter.kind+(parameter.lanes>1?' × '+parameter.lanes:'')}</dd>
-            {:else}<dd>No uniforms</dd>{/each}
-          </dl>
-        {/if}
-        {#each active.linked.filter(link=>['sprite','tile','font'].includes(link.kind)) as link}
-          <button onclick={()=>onOpen(link)}>{link.kind==='tile'?'Edit tile '+link.label:link.kind==='font'?'Edit bitfont':'Open entity'}</button>
-        {/each}
-      </section>
-    {/key}{/if}
-  </div>
-</section>
+    <div class="dialog-actions"><button type="button" onclick={()=>destinations=null}>Cancel</button></div>
+  </Modal>
+{/if}
 
 {#if file}
   <Modal title={loadLabel} busy={saving} onClose={()=>{file=null;queue=[];}}>
     <form onsubmit={event=>{event.preventDefault();save();}}>
       <small>{file.name}{queue.length?' · '+queue.length+' more queued':''}</small>
       {#if !shadersOnly}
-        <label>Asset type<select bind:value={kind} disabled={saving}>
+        <label>Asset type<select aria-label="Asset type" bind:value={kind} disabled={saving}>
           {#each choices as value}<option {value}>{singular[value]}</option>{/each}
         </select></label>
       {/if}
       <label>Name<input bind:value={name} required maxlength="100" disabled={saving}></label>
-      <label>Tags<input bind:value={tags} placeholder="Comma-separated tags" disabled={saving}></label>
+      <TagInput value={tags} onChange={value=>tags=value} disabled={saving}/>
       {#if kind==='tile'}
         <small>Tile size is {project.tileSize??24} × {project.tileSize??24} px.</small>
         <label class="check"><input type="checkbox" bind:checked={tileCollision}>Enable collision</label>
@@ -220,39 +316,61 @@
 {/if}
 
 <style>
-  .library{display:grid;gap:.65rem;padding:.7rem;min-width:0}
-  .dropzone{display:flex;align-items:center;justify-content:center;gap:.65rem;flex-wrap:wrap;
-    padding:.65rem;border:1px dashed var(--line);background:var(--well);color:var(--muted)}
+  .library{display:grid;gap:.65rem;padding:.7rem;min-width:0;align-content:start}
+  .heading{justify-content:space-between}
+  h2{font-size:1rem;margin:0}
+  .dropzone{display:flex;align-items:center;gap:.55rem;flex-wrap:wrap;
+    padding:.45rem .6rem;border:1px dashed var(--line);background:var(--well);color:var(--muted)}
   .dropzone.dragging{border-color:var(--accent);color:var(--accent)}
+  .library:not(.shader-library) .dropzone button{margin-left:auto}
   .filters{display:grid;grid-template-columns:minmax(0,1fr) repeat(2,minmax(0,10rem));gap:.45rem}
   .shader-filters{grid-template-columns:minmax(0,1fr)}
-  .shader-library{align-content:start;min-height:0;overflow:auto}
-  .shader-library .content.details{grid-template-columns:minmax(0,1fr)}
-  .shader-library .dropzone{justify-content:start;padding:.35rem}
-  .shader-library .asset{grid-template-columns:auto minmax(0,1fr)}
-  .shader-library .tag-summary{display:none}
   .filter-search{display:flex;align-items:center;gap:.4rem;min-width:0}
   .filter-search input{width:100%;min-width:0}
-  .content{display:grid;grid-template-columns:minmax(0,1fr);gap:.8rem}
-  .content.details{grid-template-columns:minmax(0,1fr) minmax(13rem,.54fr)}
-  .assets{display:grid;align-content:start;gap:.25rem;min-width:0}
-  h3{font-size:.76rem;color:var(--muted);margin:.45rem 0 .1rem}
-  .asset{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(0,auto);gap:.55rem;align-items:center;text-align:left;min-width:0}
-  .asset span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-  .asset span:first-of-type{display:grid}
-  .asset small,.file-path,.tag-summary,small{color:var(--muted)}
-  .asset small{overflow:hidden;text-overflow:ellipsis;font-size:.69rem}
-  .tag-summary{font-size:.72rem}
-  .asset-details{display:grid;gap:.45rem;align-content:start;min-width:0; padding:.55rem;border:1px solid var(--line)}
-  .asset-details label,.pair label{display:grid;gap:.25rem;color:var(--muted);min-width:0}
-  .file-path{overflow-wrap:anywhere;font-size:.72rem}
-  .tags{display:flex;flex-wrap:wrap;gap:.3rem}
-  .tags button{display:flex;align-items:center;gap:.25rem}
-  .uniforms{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.25rem;font-size:.75rem}
+  table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:.8rem}
+  .kind-column{width:20%}.tags-column{width:31%}.action-column{width:2.7rem}
+  td,th{overflow-wrap:anywhere;text-align:left;vertical-align:middle;border-bottom:1px solid var(--line)}
+  td{padding:.25rem .4rem}
+  td:first-child{padding:.15rem}
+  th{padding:.28rem .4rem;color:var(--muted);font-size:.74rem;background:var(--well)}
+  th:first-child{padding-left:.25rem}
+  tbody tr{position:relative}
+  tbody tr:hover,tbody tr:focus-within,.chosen{background:#252437}
+  .sort{border:0;background:none;min-height:1.55rem;padding:.1rem .3rem;color:inherit}
+  .asset{display:grid;grid-template-columns:auto minmax(0,1fr);gap:.55rem;align-items:center;text-align:left;justify-content:start;width:100%;min-width:0;border-color:transparent;background:transparent;padding:.22rem}
+  .asset:hover{border-color:var(--line)}
+  td>.asset::after{position:absolute;inset:0;content:''}
+  .asset[aria-pressed=true]{color:var(--accent);background:var(--well)}
+  .asset-label{display:grid;min-width:0}
+  .asset strong,.asset small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .asset small,.file-path,small{color:var(--muted);font-size:.72rem}
+  .thumbnail{width:2.6rem;height:2.6rem;display:grid;place-items:center;background:var(--well);border:1px solid var(--line);color:var(--muted)}
+  .thumbnail img{width:100%;height:100%;object-fit:contain;image-rendering:pixelated}
+  .mobile-kind{display:none}
+  .tag-summary{display:flex;gap:.25rem;flex-wrap:wrap}
+  .chip{min-height:1.45rem;max-width:100%;padding:.11rem .45rem;border-radius:1rem;display:block;overflow:hidden;text-overflow:ellipsis;font-size:.69rem}
+  .chip,.asset-actions{position:relative}
+  .asset-actions{padding:.2rem}
+  .shader-library .dropzone{padding:.35rem}
+  .shader-entry{display:grid;min-width:0;grid-template-columns:minmax(0,1fr) auto;align-items:center}
+  .shader-entry .asset{gap:.28rem}
+  .shader-entry .thumbnail{background:transparent;border:0;width:1.15rem;height:1.45rem}
+  .shader-entry .asset-actions{width:1.65rem}
+  .pager{justify-content:flex-end}
+  .empty{padding:.9rem;text-align:center}
+  .metadata-heading{display:flex;align-items:center;gap:.5rem}
+  .file-path{overflow-wrap:anywhere}
+  .destinations{display:grid;gap:.3rem}
+  h3{font-size:.82rem;margin:0}
+  .uniforms{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.25rem;font-size:.75rem;margin:0}
   .uniforms dt{overflow-wrap:anywhere}
   .uniforms dd{color:var(--muted);margin:0}
   .pair{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
+  .pair label{display:grid;gap:.25rem;color:var(--muted);min-width:0}
   label.check{display:flex;align-items:center;gap:.45rem}
-  @media(max-width:700px){.content.details{grid-template-columns:minmax(0,1fr)}}
+  @media(max-width:560px){
+    .kind-column,.kind-cell,.tags-column,.tag-cell{display:none}
+    .mobile-kind{display:block}
+  }
   @media(max-width:440px){.filters{grid-template-columns:1fr 1fr}.filter-search{grid-column:1/-1}.shader-filters{grid-template-columns:minmax(0,1fr)}}
 </style>

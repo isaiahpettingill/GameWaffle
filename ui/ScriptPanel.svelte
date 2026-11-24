@@ -16,10 +16,10 @@
   let preset=$state('platformer'),dynamic=$state(false),replaceLegacy=$state(false),dialogError=$state('');
   const endpoint=()=>selected?'./api/module/'+encodeURIComponent(selected):isGame?'./api/game-script':isTile?'./api/tile-script/'+encodeURIComponent(sprite)+'/'+variant:(isRoom?'./api/room-script/':'./api/script/')+encodeURIComponent(sprite);
   let textHost,textEditor,original;
-  let { sprite, isRoom=false, isGame=false, isTile=false, variant=0, title=sprite, tileScripts=[], roomScripts, entityScripts, onSelectFile, sprites, actorDefinition, animations, newActor, items, textKeys, menus, references, actions, onBeforeSave, hasLegacyMovement, initialMovement, onMovementPreset, dirty = $bindable(false), status=$bindable(''), mode=$bindable('blocks'), onSave,onFileEdit,onNewEvent,onNewField } = $props();
+  let { sprite, isRoom=false, isGame=false, isTile=false, variant=0, title=sprite, tileScripts=[], roomScripts, entityScripts, onSelectFile, sprites, actorDefinition, animations, newActor, items, textKeys, localization, menus, references, actions, onBeforeSave, hasLegacyMovement, initialMovement, onMovementPreset, dirty = $bindable(false), status=$bindable(''), mode=$bindable('blocks'), onSave,onFileEdit,onNewEvent,onNewField } = $props();
   const baseFile=$derived(isGame?'game':isTile?'tile:'+sprite+':'+variant:(isRoom?'room:':'entity:')+sprite);
   const currentFile=$derived(selected?'module:'+selected:baseFile);
-  const registry=()=>({shaders:references.shaders,collections:validateCollections(references.collections),propertyAliases:references.propertyAliases,fonts:references.fontsLabels,events:references.eventsLabels,constants:references.gameConstants,gameScript:isGame&&!selected,tileScript:isTile&&!selected,roomScript:selected?undefined:isRoom||isGame,tiles:Object.fromEntries((references.tiles??[]).map(id=>[id,true])),sounds:Object.fromEntries(references.sounds.map(id=>[id,true])),sprites:Object.fromEntries(sprites.map(id=>[id,true])),items:Object.fromEntries(items.map(id=>[id,true])),controls:Object.fromEntries(actions.map(id=>[id,true])),text:Object.fromEntries(textKeys.map(id=>[id,true])),menus:Object.fromEntries(menus.map(id=>[id,true])),flags:Object.fromEntries(references.flags.map(id=>[id,true]))});
+  const registry=()=>({localization,shaders:references.shaders,collections:validateCollections(references.collections),propertyAliases:references.propertyAliases,fonts:references.fontsLabels,events:references.eventsLabels,constants:references.gameConstants,gameScript:isGame&&!selected,tileScript:isTile&&!selected,roomScript:selected?undefined:isRoom||isGame,tiles:Object.fromEntries((references.tiles??[]).map(id=>[id,true])),sounds:Object.fromEntries(references.sounds.map(id=>[id,true])),sprites:Object.fromEntries(sprites.map(id=>[id,true])),items:Object.fromEntries(items.map(id=>[id,true])),controls:Object.fromEntries(actions.map(id=>[id,true])),text:Object.fromEntries(textKeys.map(id=>[id,true])),menus:Object.fromEntries(menus.map(id=>[id,true])),flags:Object.fromEntries(references.flags.map(id=>[id,true]))});
   let timer,pendingSave,editNumber=0,saving=$state(false);
   let draft,recovered=$state(false);
   function changed(){
@@ -60,7 +60,7 @@
       if(next==='text'){
         const unit=blockEditor.save();
         const source=original?.source && formatScript(original)===formatScript(unit)?original.source:formatScript(unit);
-        mode=next;await tick();textEditor=mountText(textHost,source,changed,selected,registry());textEditor.focus();
+        mode=next;await tick();textEditor=mountText(textHost,source,changed,selected,registry);textEditor.focus();
       }else{
         const source=textEditor.source(),unit=await validateText(source,selected,registry());
         unit.layout=original?.layout;original={...unit,source};blockEditor.load(unit);
@@ -93,7 +93,7 @@
       mode=previous?.mode??mode;
       if(mode==='text'){
         await tick();if(current!==version)return;
-        textEditor=mountText(textHost,previous?.source??data.source??formatScript(data),changed,selected,registry());
+        textEditor=mountText(textHost,previous?.source??data.source??formatScript(data),changed,selected,registry);
       }else if(previous)blockEditor.restoreDraft(previous.workspace);
       ready=true;
       if(recovered){clearTimeout(timer);timer=setTimeout(flush,650);}

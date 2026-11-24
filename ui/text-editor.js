@@ -7,13 +7,14 @@ import {StreamLanguage,syntaxHighlighting,HighlightStyle} from '@codemirror/lang
 import {tags} from '@lezer/highlight';
 import {compileScript} from '../src/script.mjs';
 import {parseScript,locations} from '../src/wafflescript.mjs';
+import {resourceTables} from '../src/resource-tables.mjs';
 
 const language=StreamLanguage.define({token(stream){
   if(stream.eatSpace())return null;
   if(stream.match(/#.*/))return 'comment';
   if(stream.match(/"(?:\\.|[^"\\])*"?/))return 'string';
   if(stream.match(/\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/))return 'number';
-  if(stream.match(/(?:on|clone|end|if|elif|else|while|repeat|change|by|return|proc|def|const|use|input|menu|not|and|or)\b/))return 'keyword';
+  if(stream.match(/(?:on|clone|end|if|elif|else|while|repeat|change|by|return|proc|def|const|use|input|menu|resource|not|and|or)\b/))return 'keyword';
   if(stream.match(/(?:true|false|none)\b/))return 'atom';
   if(stream.match(/[a-zA-Z_]\w*(?=\s*\()/))return 'variableName.function';
   if(stream.match(/[a-zA-Z_]\w*/))return 'variableName';
@@ -54,10 +55,14 @@ export async function validateText(source,moduleName,registry){
     modules=await res.json();if(!res.ok)throw Error(modules.error);
   }
   try{
-    const references=registry?.gameScript?{...registry,collections:validateCollections(unit.collections),
-      propertyAliases:propertyAliases(unit.declarations?.globals,unit.declarations?.flags,registry.items),
-      controls:{...registry.controls,...unit.declarations?.controls},menus:{...registry.menus,...unit.declarations?.menus},
-      events:{...registry.events,...unit.declarations?.events},flags:{...registry.flags,...unit.declarations?.flags}}:registry;
+    let references=registry;
+    if(registry?.gameScript){
+      const {locale,tables}=resourceTables(registry.localization,unit.declarations?.resources);
+      references={...registry,collections:validateCollections(unit.collections),
+        propertyAliases:propertyAliases(unit.declarations?.globals,unit.declarations?.flags,registry.items),
+        controls:{...registry.controls,...unit.declarations?.controls},menus:{...registry.menus,...unit.declarations?.menus},
+        events:{...registry.events,...unit.declarations?.events},flags:{...registry.flags,...unit.declarations?.flags},text:tables[locale]??{}};
+    }
     compileScript(unit,modules,undefined,references);
   }catch(err){Object.assign(err,locations.get(err.node));throw err;}
   return unit;
@@ -71,7 +76,7 @@ export function mountText(parent,source,changed,moduleName,registry){
     EditorView.updateListener.of(update=>{if(update.docChanged)changed();}),
     linter(async view=>{
       const doc=view.state.doc;
-      try{await validateText(doc.toString(),moduleName,registry);return [];}catch(err){
+      try{await validateText(doc.toString(),moduleName,registry());return [];}catch(err){
         const from=Math.min(doc.length,err.from??0);
         return [{from,to:Math.min(doc.length,err.to??doc.lineAt(from).to),severity:'error',message:err.message}];
       }

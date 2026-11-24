@@ -172,6 +172,12 @@ end
 
 **Operators** includes arithmetic, rounding, trig, clamp, interpolation, and seeded random numbers. `math.mod(-5, 3)` returns `1` and `-5 % 3` returns `-2`. **Text** includes joining, length, letter, slice, search, replacement, case conversion, trimming, and numeric formatting. Letter positions and inclusive slice bounds start at 1 and count Unicode code points. A missing letter returns an empty string and a missing substring position returns 0.
 
+## Text resources
+
+Open **Resources** to add text, choose languages, and edit translations. In the **Game** script, declare a key and its fallback text with `resource greeting = "Hello"` or the **Declare text resource** block in **Text**. Each declaration uses a string literal. A translation for the exported language takes precedence over the fallback.
+
+Use `text.greeting` or the searchable **Text key** block when the key is known. Use `text.lookup(local_string.key)` or **Look up text for** when the script computes the key. An unknown computed key returns an empty string. Each playable export includes the selected language and its fallbacks.
+
 ## Export a game
 
 In Studio, open **File → Export…** and choose **Standalone web game**. Studio saves the project and downloads one HTML file. The file contains the game cartridge and the WebAssembly runtime. Open it in a browser or put it on a static web server. The game can run offline. On Android, use a browser that supports WebAssembly and use the touch controls.
@@ -195,7 +201,7 @@ Standalone players open without a cartridge. Open a `.waffle` file to start a ga
 
 In Studio, select **File → Export… → Web player** to get a separate copy. Run `npm run build:player` to build only the web player. Open `web-built/standalone/gamewaffle-player.html` in a browser. Select **Open cartridge**. The player can run offline.
 
-Set cover art in **Game → Project assets → Cartridge cover art** before exporting. Drag the image or use the position and zoom sliders to frame it in a 512 × 512 px square. **Fit** shows the complete image with transparent padding as needed. **Edit crop…** reopens the original image for adjustments. Each exported cartridge includes the same crop, including separate language editions.
+Set cover art in **Game → Project settings… → Cartridge cover** before exporting. Drag the image or use the position and zoom sliders to frame it in a 512 × 512 px square. **Fit** shows the complete image with transparent padding as needed. **Edit crop…** reopens the original image for adjustments. Each exported cartridge includes the same crop, including separate language editions.
 
 ### Desktop
 
@@ -272,7 +278,7 @@ The runtime uses [Rapier2D](https://rapier.rs/) with four-lane SIMD, enhanced de
 
 ## Edit a project
 
-Open a folder to work on its source files. Select **Entities → New entity**, **Assets → Tiles → New tile set**, or **Assets → Sounds → New sound**. Choose a project file, or select **Browse device**. Check the name and select **Create**. Studio reuses an identical source file. If two source files have the same name and different contents, Studio gives the new file a separate path. Existing entities and tiles keep their IDs. A PNG supplies one frame.
+Open **Assets** to browse thumbnails, sort by name or type, and filter by tags. Click a sprite to open its entity. Use the row’s details button to rename the file in the library or edit its tags. Press Enter after typing a tag to add it. To import a file, drop it on the library or select **Load asset…** and choose its type. Studio reuses an identical source file and gives different files separate paths. Existing entities and tiles keep their IDs. A PNG supplies one frame.
 
 Open **Tools → Updates** to check Studio and the desktop runtime. Studio detects the installed versions and the host platform.
 
@@ -328,7 +334,7 @@ Use a camera block to follow an instance, show a position, or follow a selected 
 
 Use **Collections** to declare an inventory, add objects, and read or update their fields. Use **Looks & sound** to show a counter, message, or game menu. Press A to advance dialogue.
 
-Import a custom font in **Game → Bitfonts**. Use **Set HUD font** or pick a font on a text block to change it from a script.
+Import a custom font in **Assets → Bitfonts**. Use **Set HUD font** or pick a font on a text block to change it from a script.
 
 On desktop, press **F4** to map a controller. Press each control in order. The player saves the mapping for that controller model. Press **F5** to save, **F6** to select a slot, or **F9** to load. Android has save slots in **Game menu**. The web player has a slot selector.
 
@@ -460,7 +466,7 @@ end
 
 Open **Game script** from the **Game** tab or the script picker. The starter script declares globals, flags, events, and constants. Its **On game startup** stack sets display resolution, camera behavior, the minimap, and the first gamepad's player slot. Keyboard input belongs to Player 1. Use **Controller connected?** or Game script events such as `on controller connected 2` and `on controller disconnected 2`. Removing a gamepad leaves the other gamepads in their slots. Use **Assign player** or **Set entity visible** to control who can play an entity and when it appears.
 
-**Game → Room defaults** supplies values for new rooms. Studio copies them into each room's **On init** stack when it creates the room. Edit that stack to change an existing room's camera, background, borders, gravity, music, ambience, or shader. The background picker edits the same stack. An **On init** stack runs once per entity or tile instance and again when a fresh room is created during play. Use **On tick** for behavior that should repeat each frame.
+**Game → Room defaults…** supplies values for new rooms. Studio copies them into each room's **On init** stack when it creates the room. Edit that stack to change an existing room's camera, background, borders, gravity, music, ambience, or shader. The background picker edits the same stack. An **On init** stack runs once per entity or tile instance and again when a fresh room is created during play. Use **On tick** for behavior that should repeat each frame.
 
 Tile scripts are selectable by variant. Aseprite tags marked `:animated:` seed an animation command in the tile script. The script can select a frame, advance frames, set playback, change friction, and respond to an entity contacting the tile. Event handlers can read the sender and an optional entity payload. **Every** and **After** timers take seconds.
 
