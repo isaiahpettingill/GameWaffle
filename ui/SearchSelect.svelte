@@ -1,6 +1,6 @@
 <script>
   import {ChevronDown} from '@lucide/svelte';
-  let {label,value,options,onChange,placeholder='Choose…',disabled=false,showLabel=true}=$props();
+  let {label,value,options,onChange,placeholder='Choose…',disabled=false}=$props();
   let expanded=$state(false),query=$state(''),box=$state(''),button,search,list;
   const matches=$derived(options.filter(option=>option.label.toLowerCase().includes(query.trim().toLowerCase())));
   const selected=$derived(options.find(option=>option.value===value));
@@ -46,7 +46,7 @@
 </script>
 <svelte:window onpointerdown={outside} onresize={()=>close()}/>
 <div class="search-select">
-  {#if showLabel}<span>{label}</span>{/if}
+  <span>{label}</span>
   <button type="button" bind:this={button} aria-label={label} aria-expanded={expanded} aria-haspopup="dialog" {disabled} onclick={open}
     onkeydown={event=>{if(event.key==='ArrowDown'&&!expanded){event.preventDefault();open();}}}>
     <span>{selected?.label??placeholder}</span><ChevronDown size={13}/>

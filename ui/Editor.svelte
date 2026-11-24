@@ -8,6 +8,7 @@
   import {propertyAliases} from '../src/collections.mjs';
   import PagedList from './PagedList.svelte';
   import AssetLibrary from './AssetLibrary.svelte';
+  import ShaderWorkspace from './ShaderWorkspace.svelte';
   import {tileAssetTitle} from '../src/asset-types.mjs';
   let projectPath=$state(''),filter=$state(''),instanceFilter=$state('');
   import Sections from './Sections.svelte';
@@ -51,6 +52,8 @@
   let tileArt=$state.raw({}), spriteArt=$state.raw({}), previewModes=$state.raw({});
   let historyVersion=$state(0), selectedEntity=$state(-1), roomPanel=$state('layers');
   let scriptPanel=$state(),assetLibrary=$state(),projectTimer,projectWrite;
+  let shaderTarget=$state.raw(null),shaderSession=0;
+  const shaderDrafts=new Map();
   let savedProject=$state(''), currentProject='';
   let previewEntries=new Map(), previewImages=new Map(), previewKey;
   const previewImage=url=>previewImages.get(url);
@@ -601,6 +604,15 @@
     error='';tab=id;
     if(id==='blocks'||id==='room')requestAnimationFrame(()=>document.querySelector(id==='blocks'?'.code-pane':'.map-pane')?.focus({preventScroll:true}));
   }
+  function openShaderWorkspace(id,path){
+    if(path&&!id)id=Object.keys(project.shaders??{}).find(key=>project.shaders[key].source===path);
+    if(!path&&id)path=project.shaders?.[id]?.source;
+    if(path!==shaderTarget?.path||!path)shaderTarget=path?{session:++shaderSession,id,path}:null;
+    openTab('shaders');
+  }
+  function useShaderTemplate(template){
+    shaderTarget={session:++shaderSession,template};
+  }
   async function selectSprite(id){
     if(!gameCode&&!activeTileCode&&!activeRoomCode&&spriteId===id&&scriptPanel&&!await scriptPanel.selectBase())return false;
     if((gameCode||activeTileCode||activeRoomCode||spriteId!==id) && !await finishScript())return false;
@@ -940,15 +952,18 @@
     busy=true;
     try{
       const response=await fetch('./api/assets',{method:'POST',body:encodeCbor(data)});
-      return await applyLibraryAsset(response,'import of '+data.name,'Asset loaded');
+      return (await applyLibraryAsset(response,'import of '+data.name,'Asset loaded')).path;
     }finally{busy=false;}
   }
-  async function saveLibraryShader(data){
+  async function saveLibraryShader(data,session){
     if(!await saveEdits())throw Error('Save the current project or script before saving the shader');
     busy=true;
     try{
       const response=await fetch('./api/shaders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
-      return await applyLibraryAsset(response,'shader edit in '+data.name,'Shader saved');
+      const result=await applyLibraryAsset(response,'shader edit in '+data.name,'Shader saved');
+      shaderDrafts.delete(session.id??'template:'+session.template);
+      if(shaderTarget?.session===session.session)shaderTarget={session:session.session,id:result.id,path:result.path};
+      return result;
     }finally{busy=false;}
   }
   async function applyLibraryAsset(response,label,message){
@@ -962,7 +977,7 @@
     recordFile(result.edit,label);
     await updatePreviews(result.previewKey);
     status=message;
-    return result.path;
+    return result;
   }
   function editLibraryAsset(asset,field,value){
     const info=(project.assetInfo??={})[asset.path]??={kind:asset.kind,name:asset.name,tags:asset.tags};
@@ -1065,7 +1080,7 @@
   </section>
 {:else if project}
   <div class="mobile-tabs"><Sections labels={hasInspector?['Editor','Project','Settings']:['Editor','Project']} bind:value={mobilePane}/></div>
-  <main class:coding={tab==='blocks'} class:wide={['game','world','shaders'].includes(tab)||(tab==='assets'&&['audio','source'].includes(assetKind))} data-pane={mobilePane}>
+  <main class:coding={tab==='blocks'} class:shader-mode={tab==='shaders'} class:wide={['game','world','shaders'].includes(tab)||(tab==='assets'&&['audio','source'].includes(assetKind))} data-pane={mobilePane}>
     <aside class="project card">
       <div class="heading row"><h2>Project</h2></div>
       <small class="project-path">{projectPath}</small>
@@ -1240,12 +1255,13 @@
             </div>
           {/if}
         </section>
-      {:else if tab==='assets'||tab==='shaders'}
-        {#key tab}
-          <AssetLibrary bind:this={assetLibrary} {project} files={assets} {shaderDefinitions} room={roomId}
-            shadersOnly={tab==='shaders'} initialKind={assetKind==='tile'&&tab==='assets'?'tile':''}
-            onUpload={uploadLibraryAsset} onEdit={editLibraryAsset} onOpen={openLibraryAsset} onSaveShader={saveLibraryShader}/>
-        {/key}
+      {:else if tab==='shaders'}
+        <ShaderWorkspace {project} files={assets} {shaderDefinitions} room={roomId} target={shaderTarget} drafts={shaderDrafts}
+          onUpload={uploadLibraryAsset} onEdit={editLibraryAsset} onOpen={openLibraryAsset} onShader={openShaderWorkspace}
+          onTemplate={useShaderTemplate} onSaveShader={saveLibraryShader}/>
+      {:else if tab==='assets'}
+        <AssetLibrary bind:this={assetLibrary} {project} files={assets} {shaderDefinitions} initialKind={assetKind==='tile'?'tile':''}
+          onUpload={uploadLibraryAsset} onEdit={editLibraryAsset} onOpen={openLibraryAsset} onShader={openShaderWorkspace}/>
       {:else if tab==='actors'}
         <section class="card asseteditor">
           <div class="row heading"><h2>Entities</h2><button onclick={openEntityForm}><Plus size={16}/>New entity…</button></div>
@@ -1539,6 +1555,8 @@
   .instance-source small{flex-basis:100%;font-size:.72rem;}
   .mobile-tabs{display:none;}
   main.wide{grid-template-columns:minmax(155px,185px) minmax(0,1fr);}
+  main.shader-mode{grid-template-columns:minmax(0,1fr)}
+  main.shader-mode[data-pane="Editor"]>.project{display:none}
   .pair{grid-template-columns:repeat(2,minmax(0,1fr));}
   option,label,.asseteditor p{overflow-wrap:anywhere}
   .project,.inspector{min-width:0;}.item span{overflow-wrap:anywhere;}

@@ -58,6 +58,7 @@ export const shaderNodes={
   length:node('Length','float',[port('Vector','vector',[0,0])],args=>'length('+args.join(', ')+')'),
   normalize:node('Normalize','vec2',[vector('Vector',[1,0])],args=>'normalize('+args.join(', ')+')'),
   dot:node('Dot product','float',[vector('A'),vector('B')],args=>'dot('+args.join(', ')+')'),
+  luminance:node('Luminance','float',[color('Color')],([value])=>'dot('+value+'.rgb, vec3(0.2126, 0.7152, 0.0722))'),
   noise:node('Soft noise','float',[vector('UV','uv')],args=>'waffle_noise('+args.join(', ')+')'),
   less:node('Less than','bool',[scalar('A'),scalar('B',0.5)],([a,b])=>`(${a} < ${b})`),
   select:node('Select','number',[port('If','bool',false),numeric('Then',1),numeric('Else')],([test,a,b])=>`(${test} ? ${a} : ${b})`),
@@ -193,7 +194,15 @@ export function shaderSource(graph){
   return {source:[...source,...body].join('\n'),previewSource:[...previewSource,...body].join('\n'),defaults};
 }
 
-export const shaderStarters={empty:'Screen color',crt:'Moving scanlines',mist:'Drifting mist',day:'Day and night'};
+export const shaderTemplates={
+  empty:{title:'Screen color',description:'Start with the unfiltered room and build your own effect.'},
+  crt:{title:'Moving scanlines',description:'Animate CRT scanlines and soften the corners. Adjust speed, strength, and vignette.'},
+  mist:{title:'Drifting mist',description:'Layer animated noise over the lower part of the screen. Adjust density, wind speed, and mist color.'},
+  day:{title:'Day and night',description:'Cycle between daylight and a cool night tint. Adjust the cycle speed and night color.'},
+  heat:{title:'Heat shimmer',description:'Ripple the lower part of the scene while the horizon stays steady. Set speed and distortion.'},
+  pixelate:{title:'Pixelate',description:'Sample the scene in square blocks for a low-resolution effect. Adjust the block size in pixels.'},
+  duotone:{title:'Duotone',description:'Map the scene’s brightness to two colors. Pick shadow and highlight colors and blend with the original.'},
+};
 export function starterShader(kind) {
   const nodes=[];
   const add=(kind,inputs=[],value,name)=>{
@@ -212,7 +221,11 @@ export function starterShader(kind) {
     const phase=add('multiply',[add('add',[rows,motion]),add('float',[],3.14159265)]);
     const wave=add('multiply',[add('add',[add('cos',[phase]),add('float',[],1)]),add('float',[],0.5)]);
     const dark=add('multiply',[screen,add('subtract',[add('float',[],1),add('parameter',[],0.22,'strength')])]);
-    output=add('mix',[screen,dark,wave]);
+    const scanlines=add('mix',[screen,dark,wave]);
+    const distance=add('length',[add('subtract',[add('uv'),add('vec2',[],[0.5,0.5])])]);
+    const corners=add('smoothstep',[add('float',[],0.25),add('float',[],0.73),distance]);
+    const edgeLight=add('subtract',[add('float',[],1),add('multiply',[corners,add('parameter',[],0.32,'vignette')])]);
+    output=add('multiply',[scanlines,edgeLight]);
   }else if(kind==='mist'){
     const scroll=add('multiply',[add('time'),add('parameter',[],0.18,'speed')]);
     const coords=add('add',[add('multiply',[add('uv'),add('vec2',[],[5,4])]),add('combine',[scroll])]);
@@ -224,6 +237,22 @@ export function starterShader(kind) {
     const darkness=add('multiply',[add('add',[add('cos',[angle]),add('float',[],1)]),add('float',[],0.5)]);
     const night=add('multiply',[screen,add('color_parameter',[],'#5270a6','night_color')]);
     output=add('mix',[screen,night,darkness]);
+  }else if(kind==='heat'){
+    const uv=add('uv'),y=add('y',[uv]);
+    const phase=add('add',[add('multiply',[y,add('float',[],28)]),
+      add('multiply',[add('time'),add('parameter',[],3.5,'speed')])]);
+    const lower=add('smoothstep',[add('float',[],0.22),add('float',[],0.92),y]);
+    const offset=add('multiply',[add('multiply',[add('sin',[phase]),lower]),add('parameter',[],0.009,'distortion')]);
+    nodes.find(node=>node.id===screen).inputs=[add('add',[uv,add('combine',[offset])])];
+  }else if(kind==='pixelate'){
+    const size=add('max',[add('parameter',[],4,'block_size'),add('float',[],1)]);
+    const grid=add('max',[add('floor',[add('divide',[add('resolution'),size])]),add('float',[],1)]);
+    const pixel=add('floor',[add('multiply',[add('uv'),grid])]);
+    nodes.find(node=>node.id===screen).inputs=[add('divide',[add('add',[pixel,add('float',[],0.5)]),grid])];
+  }else if(kind==='duotone'){
+    const ramp=add('mix',[add('color_parameter',[],'#221b3a','shadows'),
+      add('color_parameter',[],'#ffd889','highlights'),add('luminance',[screen])]);
+    output=add('mix',[screen,ramp,add('parameter',[],1,'strength')]);
   }
   return {version:1,nodes,output};
 }

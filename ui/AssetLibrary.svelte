@@ -7,7 +7,7 @@
   import {DEFAULT_COVER_CROP} from '../src/cover.mjs';
   import {assetCatalog,assetKinds,assetLabels,tagList} from '../src/asset-types.mjs';
 
-  let {project,files,shaderDefinitions,room,onUpload,onEdit,onOpen,onSaveShader,initialKind='',shadersOnly=false}=$props();
+  let {project,files,shaderDefinitions,onUpload,onEdit,onOpen,onShader,selectedPath='',initialKind='',shadersOnly=false}=$props();
   let query=$state(''), type=$state(''), tag=$state(''), selected=$state('');
   let picker=$state(), dragging=$state(false), queue=$state.raw([]), file=$state.raw(null);
   let suggestedKind='';
@@ -15,13 +15,12 @@
   let soundFont=$state(''), compress=$state(true), tileCollision=$state(true);
   let width=$state(6), height=$state(8), assignments=$state({}), preview=$state('');
   let coverCrop=$state({...DEFAULT_COVER_CROP}), coverUpload=$state.raw(null);
-  let shaderEditor=$state(null);
   const catalog=$derived(assetCatalog(project,files).filter(asset=>!shadersOnly||asset.kind==='shader'));
   const tagChoices=$derived([...new Set(catalog.flatMap(asset=>asset.tags))].sort((a,b)=>a.localeCompare(b)));
   const filtered=$derived(catalog.filter(asset=>(!type||asset.kind===type)&&(!tag||asset.tags.includes(tag))
     &&[asset.name,asset.path,...asset.tags].some(value=>value.toLowerCase().includes(query.trim().toLowerCase()))));
   const groups=$derived(Object.groupBy(filtered,asset=>asset.kind));
-  const active=$derived(catalog.find(asset=>asset.path===selected));
+  const active=$derived(catalog.find(asset=>asset.path===(shadersOnly?selectedPath:selected)));
   const shaderId=$derived(active?.linked.find(link=>link.kind==='shader')?.id);
   const shader=$derived(shaderDefinitions[shaderId]);
   function uploadKinds(name){
@@ -79,6 +78,7 @@
         ...(kind==='cover'?{coverCrop:$state.snapshot(coverCrop)}:{}),
         ...(sheet?{font:{glyphWidth:width,glyphHeight:height,assignments:$state.snapshot(assignments)}}:{})});
       type=kind;query='';tag='';selected=path;
+      if(shadersOnly)onShader(undefined,path);
       nextFile();
     }catch(err){error=err.message;}finally{saving=false;}
   }
@@ -101,12 +101,9 @@
   export function select(path) {
     query='';tag='';selected=path;
   }
-  async function saveShader(data){
-    const path=await onSaveShader(data);
-    type='shader';query='';tag='';selected=path;shaderEditor=null;
-  }
-  function openShader(id){
-    shaderEditor={id,module:import('./ShaderEditor.svelte')};
+  function activate(asset){
+    selected=asset.path;
+    if(shadersOnly)onShader(asset.linked.find(link=>link.kind==='shader')?.id,asset.path);
   }
   const icons={shader:Code,font:Type,sound:AudioLines,music:AudioLines,soundfont:AudioLines,
     sprite:Image,tile:Image,background:Image,cover:Image,source:Image};
@@ -114,14 +111,13 @@
     sound:'Sound effect',music:'Music',soundfont:'SoundFont',shader:'SPIR-V shader',source:'Source image'};
 </script>
 
-<section class="card library">
+<section class="card library" class:shader-library={shadersOnly} aria-label={shadersOnly?'Shader library':undefined}>
   <header class="row heading"><h2>{shadersOnly?'Shaders':'Assets'}</h2>
-    <button type="button" class:primary={shadersOnly} onclick={()=>openShader()}><Plus size={15}/>New shader…</button>
+    <button type="button" class:primary={shadersOnly} onclick={()=>onShader()}><Plus size={15}/>New shader…</button>
   </header>
   <div role="region" aria-label={shadersOnly?'Shader drop zone':'Asset drop zone'} class="dropzone" class:dragging
     ondragover={acceptDrop} ondragleave={event=>{if(!event.currentTarget.contains(event.relatedTarget))dragging=false;}} ondrop={loadDrop}>
-    <Upload size={20} aria-hidden="true"/>
-    <span>{shadersOnly?'Drop SPIR-V files here':'Drop asset files here'}</span>
+    {#if !shadersOnly}<Upload size={20} aria-hidden="true"/><span>Drop asset files here</span>{/if}
     <button class:primary={!shadersOnly} onclick={()=>pick()} disabled={saving}>{loadLabel}…</button>
     <input hidden type="file" multiple {accept} bind:this={picker} aria-label={shadersOnly?'Shader files':'Asset files'}
       onchange={event=>{enqueue(event.currentTarget.files);event.currentTarget.value='';}}>
@@ -134,17 +130,19 @@
         {#each Object.entries(assetLabels) as [value,label]}<option {value}>{label}</option>{/each}
       </select>
     {/if}
-    <select aria-label="Asset tag filter" bind:value={tag}><option value="">All tags</option>
-      {#each tagChoices as value}<option {value}>{value}</option>{/each}
-    </select>
+    {#if !shadersOnly||tagChoices.length}
+      <select aria-label="Asset tag filter" bind:value={tag}><option value="">All tags</option>
+        {#each tagChoices as value}<option {value}>{value}</option>{/each}
+      </select>
+    {/if}
   </div>
-  <div class="content" class:details={active}>
+  <div class="content" class:details={active&&(!shadersOnly||!project.shaders?.[shaderId]?.graph)}>
     <div class="assets">
       {#each Object.entries(groups) as [kind,assets]}
         {#if !shadersOnly}<h3>{assetLabels[kind]??kind}</h3>{/if}
         {#each assets as asset (asset.path)}
           {@const Icon=icons[asset.kind]??File}
-          <button class="asset" aria-pressed={selected===asset.path} type="button" onclick={()=>selected=asset.path}>
+          <button class="asset" aria-pressed={active?.path===asset.path} type="button" onclick={()=>activate(asset)}>
             <Icon size={16} aria-hidden="true"/>
             <span><strong>{asset.name}</strong><small>{asset.path.split('/').at(-1)}</small></span>
             {#if asset.tags.length}<span class="tag-summary">{asset.tags.join(', ')}</span>{/if}
@@ -154,7 +152,7 @@
         <p class="muted">{shadersOnly?(catalog.length?'No shaders match the filters.':'No project shaders yet.'):(catalog.length?'No assets match the filters.':'Load an asset to start the library.')}</p>
       {/each}
     </div>
-    {#if active}{#key active.path}
+    {#if active&&(!shadersOnly||!project.shaders?.[shaderId]?.graph)}{#key active.path}
       <section class="asset-details" aria-label="Asset details">
         <label>Name<input aria-label="Asset name" value={active.name} maxlength="100"
           onchange={event=>onEdit(active,'name',event.currentTarget.value.trim()||active.name)}></label>
@@ -168,7 +166,7 @@
         </div>{/if}
         {#if shader}
           {#if project.shaders?.[shaderId]?.graph}
-            <button type="button" onclick={()=>openShader(shaderId)}>Edit shader…</button>
+            <button type="button" onclick={()=>onShader(shaderId,active.path)}>Edit shader…</button>
           {/if}
           <h3>Shader parameters</h3>
           <dl class="uniforms">
@@ -184,21 +182,6 @@
     {/key}{/if}
   </div>
 </section>
-
-{#if shaderEditor}
-  {@const close=()=>shaderEditor=null}
-  {@const title=shaderEditor.id?'Edit shader':'New shader'}
-  {#await shaderEditor.module}
-    <Modal {title} onClose={close}><p role="status">Loading shader editor…</p></Modal>
-  {:then {default:ShaderEditor}}
-    <ShaderEditor id={shaderEditor.id} shader={project.shaders?.[shaderEditor.id]} {room} onSave={saveShader} onClose={close}/>
-  {:catch error}
-    <Modal {title} onClose={close}>
-      <p role="alert" class="error">{error.message}</p>
-      <div class="dialog-actions"><button type="button" onclick={close}>Close</button></div>
-    </Modal>
-  {/await}
-{/if}
 
 {#if file}
   <Modal title={loadLabel} busy={saving} onClose={()=>{file=null;queue=[];}}>
@@ -242,7 +225,12 @@
     padding:.65rem;border:1px dashed var(--line);background:var(--well);color:var(--muted)}
   .dropzone.dragging{border-color:var(--accent);color:var(--accent)}
   .filters{display:grid;grid-template-columns:minmax(0,1fr) repeat(2,minmax(0,10rem));gap:.45rem}
-  .shader-filters{grid-template-columns:minmax(0,1fr) minmax(0,10rem)}
+  .shader-filters{grid-template-columns:minmax(0,1fr)}
+  .shader-library{align-content:start;min-height:0;overflow:auto}
+  .shader-library .content.details{grid-template-columns:minmax(0,1fr)}
+  .shader-library .dropzone{justify-content:start;padding:.35rem}
+  .shader-library .asset{grid-template-columns:auto minmax(0,1fr)}
+  .shader-library .tag-summary{display:none}
   .filter-search{display:flex;align-items:center;gap:.4rem;min-width:0}
   .filter-search input{width:100%;min-width:0}
   .content{display:grid;grid-template-columns:minmax(0,1fr);gap:.8rem}

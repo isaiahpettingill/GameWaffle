@@ -10,7 +10,8 @@ import {projectStore} from '../src/project-store.mjs';
 import {fileHistory} from '../src/file-history.mjs';
 import {compileShader} from '../src/shader-assets.mjs';
 import {compileShaderGraph} from '../src/compile-shader-graph.mjs';
-import {starterShader} from '../src/shader-graph.mjs';
+import {shaderNodes,shaderTemplates,starterShader} from '../src/shader-graph.mjs';
+import {shaderPalette} from '../ui/shader-palette.js';
 import {compileScript} from '../src/script.mjs';
 import {parseScript,formatScript} from '../src/wafflescript.mjs';
 import {Runtime,initSync,room_gradient_pixels} from '../web-built/runtime/runtime.js';
@@ -28,7 +29,9 @@ try{
   assert.match(definition.wgsl,/@fragment/);
   assert.match(definition.msl,/fragment /);
   await assert.rejects(compileShader(bytes.subarray(0,18)),/SPIR-V binary/);
-  for(const kind of ['empty','crt','mist','day']){
+  assert.deepEqual(shaderPalette.map(({kind})=>kind).sort(),Object.keys(shaderNodes).sort());
+  assert.ok(shaderPalette.every(({description})=>description.length>0));
+  for(const kind of Object.keys(shaderTemplates)){
     const graph=starterShader(kind), result=await compileShaderGraph(graph);
     assert.match(result.wgsl,/@fragment/,kind);
     assert.match(result.msl,/fragment /,kind);

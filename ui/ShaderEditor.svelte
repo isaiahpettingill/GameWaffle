@@ -1,21 +1,25 @@
 <script>
   import {untrack} from 'svelte';
-  import {Copy,Redo2,Trash2,Undo2} from '@lucide/svelte';
+  import {Copy,LayoutGrid,Plus,Redo2,Trash2,Undo2} from '@lucide/svelte';
   import {Background,Controls,SvelteFlow} from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
-  import Modal from './Modal.svelte';
-  import SearchSelect from './SearchSelect.svelte';
+  import ShaderNodePicker from './ShaderNodePicker.svelte';
   import ShaderNode from './ShaderNode.svelte';
   import ShaderPreview from './ShaderPreview.svelte';
-  import {acceptsShaderType,analyzeShaderGraph,makeShaderNode,MAX_SHADER_NODES,shaderNodes,shaderStarters,starterShader} from '../src/shader-graph.mjs';
+  import {acceptsShaderType,analyzeShaderGraph,makeShaderNode,MAX_SHADER_NODES,shaderNodes} from '../src/shader-graph.mjs';
   import {fragmentOutput,nodeWidth,shaderDocument,shaderFlow,shaderWire,wireChange} from './shader-flow.js';
 
-  let {id,shader,room,onClose,onSave}=$props();
+  let {id,name:initialName,document:sourceGraph,initialDraft,room,onSave,onDraft}=$props();
   const nodeTypes={shader:ShaderNode,fragment:ShaderNode};
-  const palette=Object.entries(shaderNodes).map(([value,{label}])=>({value,label})).sort((a,b)=>a.label.localeCompare(b.label));
-  const initial=untrack(()=>shaderFlow(shader?.graph??starterShader('empty'),nodeData));
+  const initial=untrack(()=>shaderFlow(initialDraft?.graph??sourceGraph,nodeData));
   let nodes=$state.raw(initial.nodes),edges=$state.raw(initial.edges),viewport=$state(),canvas,workspace;
-  let name=$state(untrack(()=>shader?.title??''));
+  let name=$state(untrack(()=>initialDraft?.name??initialName));
+  let saved=$state(untrack(()=>{
+    if(!id)return '';
+    const {nodes,edges}=shaderFlow(sourceGraph,nodeData);
+    return JSON.stringify({name:initialName,graph:shaderDocument(nodes,edges,{layout:true})});
+  }));
+  let picker=$state.raw(null),showPreview=$state(true);
   let canvasKey=$state(0),saving=$state(false),saveError=$state(''),compileError=$state('');
   let compiled=$state.raw(null),undoSteps=$state.raw([]),redoSteps=$state.raw([]);
   let keyboardSource=$state(''),reconnecting=null,dragStart,clipboard;
@@ -29,6 +33,10 @@
   });
   const hasSelectedNodes=$derived(nodes.some(node=>node.selected&&node.id!==fragmentOutput));
   const hasSelection=$derived(hasSelectedNodes||edges.some(edge=>edge.selected));
+  const working=$derived({name,graph:snapshot()});
+  const dirty=$derived(JSON.stringify(working)!==saved);
+
+  $effect(()=>{onDraft(dirty?working:null);});
 
   $effect(()=>{
     const payload=semantic, invalid=validation;
@@ -95,11 +103,30 @@
   function flowNode(entry,position){
     return {id:entry.id,type:'shader',position,data:nodeData(entry),selected:true,dragHandle:'.shader-node-title'};
   }
+  function openPicker(event,source){
+    event?.preventDefault();
+    if(nodes.length-1>=MAX_SHADER_NODES)return;
+    const point=event?.changedTouches?.[0]??event;
+    const bounds=canvas.getBoundingClientRect();
+    const {x=0,y=0,zoom=1}=viewport??{};
+    picker={source,sourceType:source?inspection.definitions.get(source)?.type:null,
+      position:point?{x:(point.clientX-bounds.left-x)/zoom,y:(point.clientY-bounds.top-y)/zoom}:null};
+  }
+  function connectionEnded(event,{fromHandle,toHandle}){
+    if(reconnecting||fromHandle?.type!=='source'||toHandle||!(event.target instanceof Element)||
+      !canvas.contains(event.target)||event.target.closest('.svelte-flow__node,.svelte-flow__edge,.svelte-flow__panel'))return;
+    openPicker(event,fromHandle.nodeId);
+  }
   function addNode(kind){
     if(!kind||nodes.length-1>=MAX_SHADER_NODES)return;
     checkpoint();
     const entry=makeShaderNode('n'+nextIndex(),kind);
-    nodes=[...nodes.map(node=>({...node,selected:false})),flowNode(entry,positionNewNode())];
+    nodes=[...nodes.map(node=>({...node,selected:false})),flowNode(entry,picker?.position??positionNewNode())];
+    if(picker?.source&&picker.sourceType){
+      const index=shaderNodes[kind].ports.findIndex(({type})=>acceptsShaderType(type,picker.sourceType));
+      if(index>=0)edges=[...edges,shaderWire(picker.source,entry.id,String(index))];
+    }
+    picker=null;
   }
   function update(id,changes){
     const prior=nodes.find(node=>node.id===id);
@@ -141,11 +168,9 @@
     nodes=[...nodes.map(node=>({...node,selected:false})),...added];
     edges=[...edges.map(edge=>({...edge,selected:false})),...elements.edges.map(edge=>shaderWire(ids.get(edge.source),ids.get(edge.target),edge.targetHandle))];
   }
-  function applyStarter(kind){
-    if(!kind)return;
+  function arrange(){
     checkpoint();
-    if(!name.trim())name=shaderStarters[kind];
-    restore(starterShader(kind));
+    restore(graph);
     viewport=undefined;
     canvasKey++;
   }
@@ -186,7 +211,7 @@
     if(keyboardSource)connect({source:keyboardSource,sourceHandle:'result',target:id,targetHandle:handle});
   }
   function keys(event){
-    if(!(event.target instanceof Element)||!workspace?.contains(event.target))return;
+    if(picker||!(event.target instanceof Element)||!workspace?.contains(event.target))return;
     const command=event.ctrlKey||event.metaKey,key=event.key.toLowerCase();
     if(command&&key==='s'){
       event.preventDefault();
@@ -207,41 +232,45 @@
       event.preventDefault();paste(selectedGraph());
     }else if((key==='delete'||key==='backspace')&&hasSelection){
       event.preventDefault();removeSelection();
+    }else if(!command&&key==='a'){
+      event.preventDefault();openPicker();
     }else if(key==='escape'&&keyboardSource){
       event.preventDefault();keyboardSource='';
     }
   }
   async function save(){
-    if(saving||validation||!name.trim())return;
+    if(saving||validation||!name.trim()||!dirty)return;
+    const previousName=name, data={name:name.trim(),graph:snapshot()};
     saving=true;saveError='';
-    try{await onSave({id,name:name.trim(),graph:snapshot()});}
+    try{
+      await onSave({id,...data});
+      saved=JSON.stringify(data);
+      if(name===previousName)name=data.name;
+    }
     catch(error){saveError=error.message;}finally{saving=false;}
   }
 </script>
 
 <svelte:window onkeydown={keys}/>
-<Modal title={id?'Edit shader':'New shader'} wide busy={saving} {onClose}>
-  <section class="workspace" aria-label="Shader editor" bind:this={workspace}>
+<section class="workspace card" aria-label="Shader editor" bind:this={workspace}>
     <header class="shader-toolbar">
       <input class="name" aria-label="Shader name" placeholder="Shader name" maxlength="100" bind:value={name}>
-      <select aria-label="Starter graph" onchange={event=>{applyStarter(event.currentTarget.value);event.currentTarget.value='';}}>
-        <option value="">Starter graph…</option>
-        {#each Object.entries(shaderStarters) as [value,title]}<option {value}>{title}</option>{/each}
-      </select>
       <div class="save-actions">
-        <button type="button" disabled={saving} onclick={onClose}>Cancel</button>
-        <button type="button" class="primary" onclick={save} disabled={saving||Boolean(validation)||!name.trim()}>{saving?'Saving…':'Save shader'}</button>
+        <small>{dirty?'Unsaved changes':'Saved'}</small>
+        <button type="button" class="primary" onclick={save} disabled={saving||!dirty||Boolean(validation)||!name.trim()}>{saving?'Saving…':'Save shader'}</button>
       </div>
     </header>
-    <div class="workspace-panes">
+    <div class="workspace-panes" class:with-preview={showPreview}>
       <div class="graph">
         <div class="graph-tools">
-          <SearchSelect label="Add shader node" value="" options={palette} onChange={addNode}
-            showLabel={false} placeholder="Add node…" disabled={nodes.length-1>=MAX_SHADER_NODES}/>
+          <button type="button" aria-label="Add shader node" title="Add node (A)" onclick={()=>openPicker()}
+            disabled={nodes.length-1>=MAX_SHADER_NODES}><Plus size={15}/>Add node…</button>
           <button type="button" class="icon-button" aria-label="Undo graph edit" title="Undo" disabled={!undoSteps.length} onclick={undo}><Undo2 size={16}/></button>
           <button type="button" class="icon-button" aria-label="Redo graph edit" title="Redo" disabled={!redoSteps.length} onclick={redo}><Redo2 size={16}/></button>
           <button type="button" class="icon-button" aria-label="Duplicate selected nodes" title="Duplicate" disabled={!hasSelectedNodes} onclick={()=>paste(selectedGraph())}><Copy size={15}/></button>
           <button type="button" class="icon-button" aria-label="Delete selection" title="Delete selection" disabled={!hasSelection} onclick={removeSelection}><Trash2 size={15}/></button>
+          <button type="button" class="icon-button" aria-label="Arrange shader nodes" title="Arrange nodes" onclick={arrange}><LayoutGrid size={16}/></button>
+          <button type="button" class="preview-toggle" aria-pressed={showPreview} onclick={()=>showPreview=!showPreview}>Preview</button>
         </div>
         <section class="canvas" aria-label="Shader graph" bind:this={canvas}>
           {#key canvasKey}
@@ -250,7 +279,8 @@
               deleteKey={null} onbeforeconnect={connect} isValidConnection={validWire}
               onreconnectstart={(_,edge)=>reconnecting=edge.id} onreconnectend={()=>reconnecting=null}
               onbeforereconnect={connect} onnodedragstart={beginDrag} onnodedragstop={endDrag}
-              onselectiondragstart={beginDrag} onselectiondragstop={endDrag}>
+              onselectiondragstart={beginDrag} onselectiondragstop={endDrag}
+              onpanecontextmenu={({event})=>openPicker(event)} onconnectend={connectionEnded}>
               <Background gap={20} size={1.25} color="#45475a"/>
               <Controls showLock={false}/>
             </SvelteFlow>
@@ -259,24 +289,34 @@
         {#if keyboardSource}<small role="status">Select an input to connect this output.</small>{/if}
         {#if saveError||validation||compileError}<p role="alert" class="error">{saveError||validation||compileError}</p>{/if}
       </div>
-      <aside class="preview-column" aria-label="Preview"><ShaderPreview {room} definition={compiled}/></aside>
+      {#if showPreview}<aside class="preview-column" aria-label="Preview"><ShaderPreview {room} definition={compiled}/></aside>{/if}
     </div>
   </section>
-</Modal>
+{#if picker}<ShaderNodePicker sourceType={picker.sourceType} onPick={addNode} onClose={()=>picker=null}/>{/if}
 
 <style>
-  .workspace,.graph{display:grid;gap:.55rem;min-width:0}
+  .workspace,.graph{display:flex;flex-direction:column;gap:.45rem;min-width:0;min-height:0}
+  .workspace{height:100%;min-height:25rem;padding:.45rem}
   .shader-toolbar,.graph-tools,.save-actions{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
-  .shader-toolbar input,.shader-toolbar select{min-width:0;max-width:100%}
+  .shader-toolbar input{min-width:0;max-width:100%}
   .name{flex:1 1 10rem}
   .save-actions{margin-left:auto}
-  .workspace-panes{display:grid;grid-template-columns:minmax(0,2.4fr) minmax(13rem,1fr);gap:.7rem;align-items:start}
+  .workspace-panes{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr);gap:.55rem}
+  .workspace-panes.with-preview{grid-template-columns:minmax(0,1fr) minmax(12rem,.38fr)}
   .graph-tools{padding:.25rem;background:var(--panel)}
-  .canvas{height:clamp(19rem,66dvh,50rem);min-width:0;overflow:hidden;border:1px solid var(--line);background:#181825}
+  .canvas{flex:1;min-height:21rem;min-width:0;overflow:hidden;border:1px solid var(--line);background:#181825}
+  .preview-column{min-width:0}
+  .preview-toggle{margin-left:auto}
   .canvas :global(.svelte-flow){--xy-background-color:#181825;--xy-edge-stroke:#a6adc8;--xy-edge-stroke-selected:#cba6f7;--xy-connectionline-stroke:#cba6f7}
   .canvas :global(.svelte-flow__edge-path){stroke-width:2}
   .canvas :global(.svelte-flow__controls-button){width:29px;height:29px;padding:5px}
   .error{margin:0}
   small{color:var(--muted)}
-  @media(max-width:730px){.workspace-panes{grid-template-columns:minmax(0,1fr)}.preview-column{max-width:26rem}.canvas{height:53dvh}}
+  @media(max-width:900px){
+    .workspace{height:auto;min-height:100%}
+    .workspace-panes{flex:none}
+    .workspace-panes.with-preview{grid-template-columns:minmax(0,1fr)}
+    .preview-column{max-width:27rem}
+    .canvas{flex:none;height:53dvh}
+  }
 </style>
