@@ -63,7 +63,7 @@ Use a collidable layer for walls. Top-down enemies use four-direction A* on the 
 
 Use **Assets → New shader…** to build a fragment shader from nodes. Start with moving scanlines, drifting mist, a day/night cycle, or a screen sample. Connect node inputs using their menus and choose a color node as the fragment output. Number, vector, and color parameter nodes expose defaults that can be overridden from a Shader pass block.
 
-The preview runs the selected room. Choose Room or Display to test the effect before or after the HUD, pause the preview, or toggle the effect to compare it with the scene. On a WebGPU-capable device, Studio compiles graph changes in the background and keeps the last working preview while you edit. Saving creates a shader asset you can reopen and use in either script pipeline.
+The preview runs the selected room. Choose Room or Display to test the effect before or after the HUD, pause the preview, or toggle the effect to compare it with the scene. Studio uses WebGPU or WebGL 2 for this preview and keeps the last working effect while you edit. Saving creates a shader asset you can reopen and use in either script pipeline.
 
 Load a `.spv` or `.spirv` fragment shader in **Assets → Load asset**. The asset view lists the uniforms that Studio found. You can also use the bundled shader presets.
 

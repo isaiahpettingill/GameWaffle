@@ -17,7 +17,7 @@ const upscale = {title:'Scale display', samplesScreen:true, wgsl:`
   return textureSample(screen, nearest, uv);
 }`};
 
-let deviceState;
+let deviceState, recoveries=0;
 function getDevice() {
   if (deviceState) return deviceState;
   const state = deviceState = {status:'Compiling shaders…'};
@@ -35,7 +35,12 @@ function getDevice() {
     state.programs = new WeakMap();
     state.status = '';
     device.lost.then(() => {
-      if (deviceState === state) deviceState = undefined;
+      if(deviceState!==state)return;
+      if(recoveries++===0)deviceState=undefined;
+      else{
+        state.device=undefined;
+        state.status='The WebGPU device was lost.';
+      }
     });
   })().catch(error => state.status = error.message);
   return state;
@@ -166,7 +171,8 @@ export function runShaderPipeline(owner, kind, source, shaders, passes, tick, si
   }
   try {
     const stage = stageFor(owner,kind,gpu,width,height,source,passes.length>1);
-    device.queue.copyExternalImageToTexture({source},{texture:stage.input??stage.textures[0]},[source.width,source.height]);
+    if(pipeline[0].definition.samplesScreen)
+      device.queue.copyExternalImageToTexture({source},{texture:stage.input??stage.textures[0]},[source.width,source.height]);
     const encoder = device.createCommandEncoder();
     for (const [index,{definition,program,uniforms}] of pipeline.entries()) {
       const from = (index-Number(scaling)) % 2;

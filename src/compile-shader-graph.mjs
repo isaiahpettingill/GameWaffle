@@ -45,10 +45,10 @@ function compileSource(source){
   return fresh;
 }
 
-export async function compileShaderGraph(graph) {
-  const {source,defaults}=shaderSource(graph);
+export async function compileShaderGraph(graph,{preview=false}={}) {
+  const {source,previewSource,defaults}=shaderSource(graph);
   const result=await compileShader(await compileSource(source));
   const parameters=result.parameters.map(parameter=>Object.hasOwn(defaults,parameter.name)
     ? {...parameter,defaults:defaults[parameter.name]}:parameter);
-  return {...result,parameters};
+  return {...result,parameters,...(preview?{previewSource}:{})};
 }

@@ -173,12 +173,15 @@ export function shaderSource(graph){
   if(uniforms.reduce((size,member)=>size+(member.startsWith('vec4')?16:member.startsWith('vec2')?8:4),0)>224)
     throw Error('Use fewer shader parameters');
   const source=['#version 450','layout(location=1) in vec2 uv;', 'layout(location=0) out vec4 fragment_color;'];
+  const previewSource=['#version 300 es','precision highp float;','in vec2 uv;', 'out vec4 fragment_color;'];
   if(types.has('screen'))source.push('layout(set=2, binding=0) uniform sampler2D screen;');
+  if(types.has('screen'))previewSource.push('uniform sampler2D screen;');
   if(uniforms.length)source.push('layout(std140, set=3, binding=0) uniform Parameters {',...uniforms.map(line=>'  '+line),'} params;');
-  if(types.has('noise'))source.push(noise);
-  source.push('void main() {',...order.map(({type,reference,expression})=>`  ${type} ${reference} = ${expression};`),
-    '  fragment_color = '+output.reference+';','}');
-  return {source:source.join('\n'),defaults};
+  if(uniforms.length)previewSource.push('struct Parameters {',...uniforms.map(line=>'  '+line),'};','uniform Parameters params;');
+  const body=[...(types.has('noise')?[noise]:[]),'void main() {',
+    ...order.map(({type,reference,expression})=>`  ${type} ${reference} = ${expression};`),
+    '  fragment_color = '+output.reference+';','}'];
+  return {source:[...source,...body].join('\n'),previewSource:[...previewSource,...body].join('\n'),defaults};
 }
 
 export const shaderStarters={empty:'Screen color',crt:'Moving scanlines',mist:'Drifting mist',day:'Day and night'};

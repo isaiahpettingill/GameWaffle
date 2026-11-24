@@ -190,8 +190,8 @@ const server = createServer(async (req, res) => {
       }
       if(url.pathname==='/api/shaders/preview'&&req.method==='POST'){
         const graph=await jsonBody(req,65536);
-        const {wgsl,uniformSize,parameters,samplesScreen,fingerprint}=await compileShaderGraph(graph);
-        return send(res,200,{wgsl,uniformSize,parameters,samplesScreen,fingerprint,title:'Shader preview'});
+        const {wgsl,previewSource,uniformSize,parameters,samplesScreen,fingerprint}=await compileShaderGraph(graph,{preview:true});
+        return send(res,200,{wgsl,previewSource,uniformSize,parameters,samplesScreen,fingerprint,title:'Shader preview'});
       }
       if(url.pathname==='/api/shaders'&&req.method==='POST'){
         const {id,name,graph}=await jsonBody(req,65536);

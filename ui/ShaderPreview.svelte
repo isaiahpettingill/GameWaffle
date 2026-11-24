@@ -4,19 +4,34 @@
   import {unpack} from '../src/cartridge.mjs';
   import {createRuntime} from './runtime.js';
   import {drawRoom,loadAtlas} from './render.js';
-  import {previewShaderStatus} from './shader-pipeline.js';
+  import {previewShaderStatus,runShaderPipeline} from './shader-pipeline.js';
+  import {createShaderPreviewGL} from './shader-preview-gl.js';
 
   let {room,definition}=$props();
   let canvas,presentation,stage;
   let scope=$state('room'),playing=$state(true),effect=$state(true),status=$state('Loading room…'),loadError=$state('');
   let runtime,cart,lastGood,uniforms=[],candidate,snapshot,raf,last=0,elapsed=0,needsPaint=true;
+  let previewGL, rejected, useGL=false;
   const atlases={};
+  const previewKey=':studio_preview';
+
+  function prepareGL(shader){
+    if(previewGL===undefined)previewGL=createShaderPreviewGL();
+    return previewGL?.prepare(shader);
+  }
 
   function prepare(shader){
-    if(!shader||shader===candidate)return;
+    if(!shader||shader===candidate||shader===rejected)return;
     if(shader.fingerprint!==lastGood?.fingerprint){
       const building=previewShaderStatus(shader);
-      if(building){status=building;return;}
+      if(building){
+        status=building;
+        if(building==='Compiling shaders…')return;
+        try{
+          if(!prepareGL(shader)){rejected=shader;return;}
+        }catch(error){rejected=shader;status='Shader preview — '+error.message;return;}
+      }
+      useGL=Boolean(building);
       lastGood=shader;
     }
     candidate=shader;
@@ -27,6 +42,18 @@
     uniforms=words;
     needsPaint=true;
     status='';
+  }
+
+  function runPasses(owner,kind,source,shaders,passes,tick,size){
+    const studioPass=passes?.[0]?.shader===previewKey;
+    if(studioPass&&useGL)return previewGL.run(source,uniforms,tick,size);
+    const result=runShaderPipeline(owner,kind,source,shaders,passes,tick,size);
+    if(studioPass&&result.status==='The WebGPU device was lost.'&&lastGood!==rejected){
+      try{useGL=Boolean(prepareGL(lastGood));}catch{useGL=false;}
+      if(useGL)return previewGL.run(source,uniforms,tick,size);
+      rejected=lastGood;
+    }
+    return result;
   }
 
   function tick(now){
@@ -42,13 +69,13 @@
         needsPaint=true;
       }else if(!playing)elapsed=0;
       if(needsPaint&&atlases[snapshot.room]?.image){
-        const pass=effect&&lastGood?[{shader:':studio_preview',uniforms}]:[];
+        const pass=effect&&lastGood?[{shader:previewKey,uniforms}]:[];
         const frame=scope==='display'
           ? {...snapshot,gameSettings:{...snapshot.gameSettings,postprocessing:pass}}
           : {...snapshot,roomSettings:{...snapshot.roomSettings,shaderPipeline:pass},
             gameSettings:{...snapshot.gameSettings,postprocessing:[]}};
         const assets=Object.fromEntries(Object.entries(atlases).map(([id,entry])=>[id,entry.image]));
-        const error=drawRoom(canvas,{...cart,shaders:{...cart.shaders,':studio_preview':lastGood}},frame,assets,false,presentation);
+        const error=drawRoom(canvas,{...cart,shaders:{...cart.shaders,[previewKey]:lastGood}},frame,assets,false,presentation,runPasses);
         if(error)status=error;
         needsPaint=false;
       }else if(!atlases[snapshot.room])prefetch(snapshot.room);
@@ -85,7 +112,7 @@
       prefetch(snapshot.room);status='';
       raf=requestAnimationFrame(tick);
     })().catch(error=>{if(!abort.signal.aborted)loadError=String(error.message??error);});
-    return ()=>{abort.abort();resize.disconnect();cancelAnimationFrame(raf);runtime?.free();runtime=null;};
+    return ()=>{abort.abort();resize.disconnect();cancelAnimationFrame(raf);runtime?.free();previewGL?.dispose();runtime=null;};
   });
 </script>
 

@@ -8,7 +8,7 @@
   let {id,shader,room,onClose,onSave}=$props();
   const initialGraph=()=>shader?.graph?JSON.parse(JSON.stringify(shader.graph)):starterShader('empty');
   let graph=$state.raw(initialGraph()),name=$state(untrack(()=>shader?.title??''));
-  let starter=$state(''),addKind=$state(''),saving=$state(false),saveError=$state(''),compileError=$state('');
+  let saving=$state(false),saveError=$state(''),compileError=$state('');
   let compiled=$state.raw(null);
   let analysis=$derived.by(()=>{
     try{return {data:analyzeShaderGraph(graph)};}
@@ -38,7 +38,6 @@
     if(!kind||graph.nodes.length>=MAX_SHADER_NODES)return;
     const index=Math.max(0,...graph.nodes.map(node=>Number(node.id.slice(1))))+1;
     graph={...graph,nodes:[...graph.nodes,makeShaderNode('n'+index,kind)]};
-    addKind='';
   }
   function update(node,edit){graph={...graph,nodes:graph.nodes.map(entry=>entry.id===node.id?{...entry,...edit}:entry)};}
   function setInput(node,index,source){
@@ -56,7 +55,6 @@
     if(!kind)return;
     if(!name.trim())name=shaderStarters[kind];
     graph=starterShader(kind);
-    starter='';
   }
   function nodeType(node){return analysis.data?.definitions.get(node.id)?.type??shaderNodes[node.kind].type;}
   function connects(source,target){
@@ -95,7 +93,7 @@
   <form onsubmit={event=>{event.preventDefault();save();}}>
     <div class="toolbar">
       <label class="name">Name<input aria-label="Shader name" maxlength="100" bind:value={name} required></label>
-      <label>Starter graph<select aria-label="Starter graph" value={starter} onchange={event=>applyStarter(event.currentTarget.value)}>
+      <label>Starter graph<select aria-label="Starter graph" onchange={event=>{applyStarter(event.currentTarget.value);event.currentTarget.value='';}}>
         <option value="">Choose starter…</option>
         {#each Object.entries(shaderStarters) as [value,title]}<option {value}>{title}</option>{/each}
       </select></label>
@@ -110,8 +108,8 @@
               <option value={node.id}>{label(node)}</option>
             {/each}
           </select></label>
-          <label class="add"><span><Plus size={13}/>Node</span><select aria-label="Add shader node" value={addKind} disabled={graph.nodes.length>=MAX_SHADER_NODES}
-            onchange={event=>addNode(event.currentTarget.value)}>
+          <label class="add"><span><Plus size={13}/>Node</span><select aria-label="Add shader node" disabled={graph.nodes.length>=MAX_SHADER_NODES}
+            onchange={event=>{addNode(event.currentTarget.value);event.currentTarget.value='';}}>
             <option value="">Add node…</option>
             {#each Object.entries(shaderNodes).sort((a,b)=>a[1].label.localeCompare(b[1].label)) as [kind,spec]}
               <option value={kind}>{spec.label}</option>

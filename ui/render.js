@@ -122,7 +122,7 @@ function drawMinimap(ctx,map,snapshot,width,height){
   }
 }
 
-export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false, presentation) {
+export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false, presentation, runPasses=runShaderPipeline) {
   const room = cart?.rooms[snapshot?.room];
   const atlas = cart?.atlases[snapshot?.room];
   if (!room || !atlas) return;
@@ -265,10 +265,10 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false, pr
     }
   }
   drawShapes(ctx,snapshot.shapes,false,[x,y]);
-  const roomResult=runShaderPipeline(canvas,'room',scene,cart.shaders,roomPipeline,snapshot.tick);
+  const roomResult=runPasses(canvas,'room',scene,cart.shaders,roomPipeline,snapshot.tick);
   if(roomResult.image){
     ctx.drawImage(roomResult.image,0,0);
-    roomResult.image.close();
+    roomResult.image.close?.();
   }
   if(scale===2){
     const gpu=postprocess(scene,width,height,hd);
@@ -363,8 +363,8 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false, pr
   const physicalScale=Math.min(box.width/displayWidth,box.height/displayHeight)*(globalThis.devicePixelRatio??1);
   const outputScale=Math.min(physicalScale,4096/Math.max(displayWidth,displayHeight));
   const outputSize=presentation?[displayWidth,displayHeight].map(axis=>Math.max(1,Math.round(axis*outputScale))):undefined;
-  const displayResult=runShaderPipeline(canvas,'display',canvas,cart.shaders,displayPipeline,snapshot.tick,outputSize);
-  const bitmap=displayResult.image&&presentation?.getContext('bitmaprenderer');
+  const displayResult=runPasses(canvas,'display',canvas,cart.shaders,displayPipeline,snapshot.tick,outputSize);
+  const bitmap=typeof ImageBitmap!=='undefined'&&displayResult.image instanceof ImageBitmap&&presentation?.getContext('bitmaprenderer');
   if(presentation)presentation.hidden=!bitmap;
   if(displayResult.image){
     const image=displayResult.image;
@@ -376,7 +376,7 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false, pr
       const display=canvas.getContext('2d');
       display.setTransform(1,0,0,1,0,0);
       display.drawImage(image,0,0,displayWidth,displayHeight);
-      image.close();
+      image.close?.();
     }
   }
   return roomResult.status??displayResult.status??'';
