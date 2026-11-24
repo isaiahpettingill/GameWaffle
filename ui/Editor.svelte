@@ -166,8 +166,8 @@
     const labels=local?project.entityFields:project.variableLabels?.[scope];
     const values=scope==='flag'?gameFlags:local?undefined:gameGlobals;
     const id=resourceName(title,kind,[values??{},labels??{}]);
-    if(scope==='flag')return defineInGame('flags',id,false);
-    if(!local)return defineInGame('globals',id,scope.endsWith('_real')?{real:0}:scope.endsWith('_bool')?false:scope.endsWith('_string')?'':0);
+    if(scope==='flag')await defineInGame('flags',id,false);
+    else if(!local)await defineInGame('globals',id,scope.endsWith('_real')?{real:0}:scope.endsWith('_bool')?false:scope.endsWith('_string')?'':0);
     const next={...labels,[id]:title};
     if(local)project.entityFields=next;
     else project.variableLabels={...project.variableLabels,[scope]:next};
