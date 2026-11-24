@@ -2,6 +2,7 @@ import {registerShaderBlocks, encodeShaderPipeline, decodeShaderPipeline} from '
 import * as Blockly from 'blockly/core';
 import * as English from 'blockly/msg/en';
 import './block-picker.js';
+import {installBlockSelection} from './block-selection.js';
 import {branchBody,branchCondition} from './conditional-block.js';
 import { Events, Blocks, buttons, inputEvent, receivedEvent, timerEvent, controllerEvent, messageInputs, entityQueries, reporters, roomCommands, gradientCommands, gameCommands, tileCommands, drawingCommands, collectionCommands, commandScopeError, valueInput } from '../src/schema.mjs';
 import {roomShaders} from '../src/room-shaders.mjs';
@@ -140,6 +141,7 @@ Blockly.common.defineBlocksWithJsonArray([
 ]);
 const registries = new WeakMap();
 const buttonLabels = {a:'A',b:'B',x:'X',menu:'Start'};
+const tileSideLabels={any:'any side',top:'the top face',bottom:'the bottom face',left:'the left side',right:'the right side'};
 function menu(field, values, empty, labels = {}, create) {
   return {type:'field_search_dropdown',name:field,options:()=>{
     const options = values();
@@ -156,13 +158,16 @@ function registry(block) {
 }
 for(const [name,[style,message0,result,parameters]] of Object.entries(reporters)){
   const type=reporterBlockType(name);
+  const tileContact=name.startsWith('tile.');
   Blockly.Blocks[type]={init(){
     const data=registry(this);
     this.jsonInit({type,style,message0,output:'WaffleValue',inputsInline:true,
       ...(result==='boolean'?{outputShape:conditionShape}:{}),
       args0:parameters.map(([kind],index)=>{
         const name=argumentInput(index);
-        if(Array.isArray(kind))return {type:'field_dropdown',name,options:kind.map(value=>[value.replaceAll('_',' '),value])};
+        if(Array.isArray(kind))return {type:'field_dropdown',name,options:kind.map(value=>[
+          tileContact&&index===2?tileSideLabels[value]:value.replaceAll('_',' '),value,
+        ])};
         if(kind==='tile')return menu(name,()=>data.tiles??[],'Choose tile',()=>data.tileLabels);
         return {type:'input_value',name,check:'WaffleValue'};
       })});
@@ -421,6 +426,7 @@ const toolbox = (isRoom,isGame=false,isTile=false,isModule=false) => {
   }))]),
   category('entities',[
     ...(!isTile?[block('last_clone'),...(!isRoom?[block('actor_condition',{actor:'is_clone'})]:[])]:[]),
+    ...(!isRoom?[block('self')]:[]),
     ...Object.entries(entityQueries).filter(([id])=>id!=='on_tile_top'||isTile||isModule).map(([id,[,,params]])=>({
       ...block('entity_'+id),
       inputs:Object.fromEntries(params.map(([,value],index)=>{
@@ -483,6 +489,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
   });
   const data={sprites,items,actions,animations:[...animations],keys,menus,...references,fields:[],roomScript:isRoom,gameScript:isGame,tileScript:isTile,createEvent,createField};
   registries.set(workspace,data);
+  const blockSelection=installBlockSelection(node,workspace);
   let constants={};
   let importsDuringLoad;
   const encodeValue=(value,fallback)=>slot(value,fallback,importsDuringLoad);
@@ -703,6 +710,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
   node.addEventListener('wheel',controlWheel,{capture:true,passive:false});
   observer.observe(node);
   function load(script) {
+    blockSelection.clear();
     data.collectionDefinitions=script.collections;
     refreshGameConfiguration(script.declarations);
     refreshResourceKeys(data.gameScript?Object.keys(script.declarations?.resources??{}):[]);
@@ -959,6 +967,10 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
 
   function upgradeBlock(block){
     if(!block||typeof block!=='object')return;
+    if(block.type==='waffle_actor'&&block.fields?.actor==='id'){
+      block.type='waffle_self';
+      delete block.fields.actor;
+    }
     if(block.type==='waffle_declare'&&block.fields?.kind==='resources'){
       block.type=legacyResourceDeclaration;
       delete block.fields.kind;
@@ -997,7 +1009,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
         if(block.type==='waffle_shader_pass')block.configureShader(block.getFieldValue('shader'));
       }
     },draft:()=>({...Blockly.serialization.workspaces.save(workspace),scriptConstants:constants,collectionDefinitions:data.collectionDefinitions}),
-    restoreDraft(value){Blockly.Events.disable();try{
+    restoreDraft(value){blockSelection.clear();Blockly.Events.disable();try{
       const draft=structuredClone(value);
       if(draft.scriptConstants)setConstants(draft.scriptConstants);
       if(draft.collectionDefinitions)data.collectionDefinitions=draft.collectionDefinitions;
@@ -1010,5 +1022,5 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
       checkImports();
       updateDetachedAppearance();
     }finally{Blockly.Events.enable();}},
-    dispose:()=>{observer.disconnect();node.removeEventListener('pointerleave',hideTooltip);node.removeEventListener('wheel',controlWheel,true);hideTooltip();cancelAnimationFrame(resizeFrame);workspace.dispose();}};
+    dispose:()=>{blockSelection.dispose();observer.disconnect();node.removeEventListener('pointerleave',hideTooltip);node.removeEventListener('wheel',controlWheel,true);hideTooltip();cancelAnimationFrame(resizeFrame);workspace.dispose();}};
 }

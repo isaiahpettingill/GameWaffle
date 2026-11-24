@@ -340,6 +340,8 @@
   .workspace{flex:1 1 0;width:100%;min-height:0;overflow:hidden;border-top:1px solid var(--line)}
   .workspace[hidden]{display:none}
   .block-workspace :global(.gw-detached){opacity:.55}
+  .block-workspace :global(.gw-block-selected){opacity:1}
+  .block-workspace :global(.gw-block-selected>.blocklyPath){stroke:#89dceb;stroke-width:3px}
   .block-workspace :global(.blocklyScrollbarHorizontal){display:none}
   .block-workspace :global(.blocklyToolboxCategory){margin:1px 0;padding-inline-end:.35rem}
   .block-workspace :global(.blocklyToolboxCategoryLabel){font-size:.75rem;font-weight:600}

@@ -63,6 +63,7 @@ const definitions = {
     'entity_'+id, ['entities',entityLabels[id]??label,params.map((_,index)=>input('arg'+index)),result==='boolean'?'condition':'value'],
   ])),
   instance_ref:['entities','%1',[text('value','')],'value'],
+  self:['entities','This entity',[],'value','The entity running this script.'],
   component_ref:['entities','%1',[text('value','')],'value'],
   entity_field_ref:['entities','%1',[text('value','')],'value'],
   function_call:['routines','%1 %2 %3',[text('name','score'),input('a'),input('b')],'value'],
@@ -173,6 +174,7 @@ export function readValue(block) {
     case 'last_clone': return {actor:'last_clone'};
     case 'event_sender': return {actor:'event_sender'};
     case 'pressed': return {pressed:field('pressed')};
+    case 'self': return {actor:'id'};
     case 'released': return {released:field('released')};
     case 'action': return {action:field('action')};
     case 'item': return {item:field('item')};
@@ -215,6 +217,7 @@ export function writeValue(value,imports) {
   if (typeof value === 'number') return {type:prefix+(Number.isInteger(value)?'whole':'real'),fields:{value}};
   if (value.real!==undefined) return {type:prefix+'real',fields:{value:value.real}};
   if (value.text!==undefined) return {type:prefix+'localized',fields:{key:value.text}};
+  if(value.actor==='id')return {type:prefix+'self'};
   if(value.actor==='event_sender')return {type:prefix+'event_sender'};
   if(value.actor==='grounded')return {type:prefix+'grounded'};
   if(value.actor==='last_clone')return {type:prefix+'last_clone'};

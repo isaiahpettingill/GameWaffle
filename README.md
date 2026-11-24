@@ -157,7 +157,7 @@ WaffleScript has integers, reals, booleans, and strings. Use an explicit convers
 
 ## Viewport, tiles, math, and text
 
-Use **Input & sensing** to test whether an entity overlaps the viewport, reaches a viewport edge, reaches a room edge, or touches a tile. The viewport reporters give the visible rectangle in room pixels after camera zoom and clamping. Tile checks can match an asset from the project or a behavior such as solid, one-way, ladder, fluid, sensor, breakable, or decorative. The direction describes the tile face, so **top** checks for an entity standing on the tile.
+Use **Input & sensing** to test whether an entity overlaps the viewport, reaches a viewport edge, reaches a room edge, or touches a tile. The viewport reporters give the visible rectangle in room pixels after camera zoom and clamping. Tile checks can match an asset from the project or a behavior such as solid, one-way, ladder, fluid, sensor, breakable, or decorative. **This entity** means the entity running the script. Select **the top face** to check for an entity standing on the tile.
 
 ```wafflescript
 on tick
@@ -412,6 +412,8 @@ To test the packages without publishing a release, run **Build GameWaffle** on a
 Studio writes a recovery file when you change the project, a block workspace, or a text script. Open the same project path after a restart. Select **Recover edits** or **Discard draft** for a project draft. Open the same sprite or module to recover its script. Studio saves valid project and script edits automatically. A draft can contain incomplete text or disconnected blocks.
 
 Use **Edit → Undo project edit** or **Redo project edit** for room edits, game settings, asset definitions, file imports, and saved script or module changes. Studio keeps the last 50 project edits in the current session. Blockly and the text editor have their own edit histories.
+
+In Blockly, Ctrl-click, Command-click, or Shift-click to toggle blocks in a selection. Copy and paste the selection with the usual keyboard shortcuts. Consecutive selected statements stay connected, and selected blocks keep their inputs. Escape clears the selection.
 
 ## Debug a room
 

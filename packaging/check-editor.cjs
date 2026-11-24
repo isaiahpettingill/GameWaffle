@@ -814,9 +814,51 @@ await copiedHint.waitFor({state:'attached'});
 assert.equal(await copiedHint.isVisible(),false);
 await authoring.keyboard.press('Control+v');
 await until('Pasted block',async()=> await clipboardBlock.count()===2);
+const zoomBlock=roomWorkspace.locator('.blocklyBlockCanvas .waffle_camera_zoom > .blocklyPath[role=figure]');
+const shaderBlock=roomWorkspace.locator('.blocklyBlockCanvas .waffle_set_room_shader > .blocklyPath[role=figure]');
+const drawTextBlock=roomWorkspace.locator('.waffle_received_event .waffle_draw_text > .blocklyPath[role=figure]');
+const groupedBlocks=roomWorkspace.locator('.blocklyBlockCanvas .gw-block-selected');
+// Locate the body of the block without clicking a field or a block on top of it.
+async function clickBlock(path,modifiers=[]){
+  const position=await path.evaluate(element=>{
+    const rect=element.getBoundingClientRect();
+    for(const row of [.5,.75,.3])for(const column of [.1,.8,.3,.6]){
+      const x=rect.width*column,y=rect.height*row;
+      const hit=document.elementFromPoint(rect.left+x,rect.top+y);
+      if(hit?.closest('g[data-id]')===element.parentElement&&!hit.closest('.blocklyEditableField'))return {x,y};
+    }
+    return null;
+  });
+  assert.ok(position,'Block body is visible and clickable');
+  await path.click({force:true,position,modifiers});
+}
+await authoring.getByRole('button',{name:'Fit blocks',exact:true}).click();
+await clickBlock(zoomBlock);
+await clickBlock(shaderBlock,['Control']);
+await clickBlock(drawTextBlock,['Shift']);
+await until('Modifier selection',async()=>await groupedBlocks.count()===3);
+await clickBlock(drawTextBlock,['Control']);
+await until('Toggle a block out of selection',async()=>await groupedBlocks.count()===2);
+await clickBlock(drawTextBlock,['Shift']);
+await until('Add a block back to selection',async()=>await groupedBlocks.count()===3);
+await authoring.keyboard.press('Control+c');
+await authoring.keyboard.press('Control+v');
+const pastedStack=roomWorkspace.locator('.blocklyBlockCanvas .waffle_camera_zoom.gw-detached');
+await pastedStack.locator('.waffle_set_room_shader').waitFor();
+assert.equal(await pastedStack.locator('.waffle_emit_event').count(),0,'Unselected statements are left out');
+const pastedDrawText=roomWorkspace.locator('.blocklyBlockCanvas .waffle_draw_text.gw-detached');
+await pastedDrawText.waitFor();
+await authoring.keyboard.press('Control+z');
+await pastedStack.waitFor({state:'detached'});
+assert.equal(await pastedDrawText.count(),0,'Undo removes the whole pasted group');
 await scriptFile.selectOption('tile:water:0');
 await until('Tile script picker',async()=>await scriptFile.inputValue()==='tile:water:0');
-await authoring.locator('.blocklyBlockCanvas .waffle_init').waitFor();
+await clickBlock(authoring.locator('.blocklyBlockCanvas .waffle_init > .blocklyPath[role=figure]'));
+await authoring.keyboard.press('Control+v');
+await authoring.locator('.blocklyBlockCanvas .waffle_camera_zoom.gw-detached .waffle_set_room_shader').waitFor();
+await authoring.locator('.blocklyBlockCanvas .waffle_draw_text.gw-detached').waitFor();
+await authoring.keyboard.press('Escape');
+assert.equal(await authoring.locator('.blocklyBlockCanvas .gw-block-selected').count(),0);
 await authoring.getByRole('button',{name:'Text',exact:true}).click();
 await authoring.locator('.cm-content').fill('on init\n  set_tile_playback("still")\nend\n');
 await until('Tile playback saved',async()=>{
@@ -851,6 +893,9 @@ await authoring.getByRole('button',{name:'Blocks',exact:true}).click();
 const canvas=authoring.locator('.blocklyBlockCanvas');
 for(const type of ['camera_touching_edge','tile_touching','string_letter','string_join','math_mod'])
   await canvas.locator('.waffle_reporter_'+type).waitFor();
+const tileContact=canvas.locator('.waffle_reporter_tile_touching');
+await tileContact.locator('.waffle_self').getByText('This entity',{exact:true}).waitFor();
+await tileContact.locator('.blocklyDropdownText').filter({hasText:/any\s+side/}).waitFor();
 await authoring.getByRole('button',{name:'Fit blocks',exact:true}).click();
 await canvas.locator('.waffle_reporter_tile_touching .blocklyDropdownText').filter({hasText:/water/i}).click();
 await authoring.getByLabel('Search options',{exact:true}).fill('water');
