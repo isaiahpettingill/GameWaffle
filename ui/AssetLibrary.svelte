@@ -8,7 +8,7 @@
   import {DEFAULT_COVER_CROP} from '../src/cover.mjs';
   import {assetCatalog,assetKinds,assetLabels,tagList} from '../src/asset-types.mjs';
 
-  let {project,files,shaderDefinitions,room,onUpload,onEdit,onOpen,onSaveShader,initialKind=''}=$props();
+  let {project,files,shaderDefinitions,room,onUpload,onEdit,onOpen,onSaveShader,initialKind='',shadersOnly=false}=$props();
   let query=$state(''), type=$state(''), tag=$state(''), selected=$state('');
   let picker=$state(), dragging=$state(false), queue=$state.raw([]), file=$state.raw(null);
   let suggestedKind='';
@@ -17,7 +17,7 @@
   let width=$state(6), height=$state(8), assignments=$state({}), preview=$state('');
   let coverCrop=$state({...DEFAULT_COVER_CROP}), coverUpload=$state.raw(null);
   let shaderEditor=$state(null);
-  const catalog=$derived(assetCatalog(project,files));
+  const catalog=$derived(assetCatalog(project,files).filter(asset=>!shadersOnly||asset.kind==='shader'));
   const tagChoices=$derived([...new Set(catalog.flatMap(asset=>asset.tags))].sort((a,b)=>a.localeCompare(b)));
   const filtered=$derived(catalog.filter(asset=>(!type||asset.kind===type)&&(!tag||asset.tags.includes(tag))
     &&[asset.name,asset.path,...asset.tags].some(value=>value.toLowerCase().includes(query.trim().toLowerCase()))));
@@ -25,12 +25,17 @@
   const active=$derived(catalog.find(asset=>asset.path===selected));
   const shaderId=$derived(active?.linked.find(link=>link.kind==='shader')?.id);
   const shader=$derived(shaderDefinitions[shaderId]);
-  const uploadKinds=name=>/\.(jpe?g|webp)$/i.test(name)?['cover']:assetKinds(name);
+  function uploadKinds(name){
+    const kinds=/\.(jpe?g|webp)$/i.test(name)?['cover']:assetKinds(name);
+    return shadersOnly?kinds.filter(kind=>kind==='shader'):kinds;
+  }
   const choices=$derived(file?uploadKinds(file.name):[]);
   const soundFonts=$derived(catalog.filter(asset=>asset.kind==='soundfont').map(asset=>({value:asset.path,label:asset.name})));
   const midi=$derived(/\.midi?$/i.test(file?.name??''));
   const sheet=$derived(kind==='font'&&/\.png$/i.test(file?.name??''));
-  const accept='.png,.jpg,.jpeg,.webp,.ase,.aseprite,.yaff,.wav,.ogg,.oga,.opus,.qoa,.mid,.midi,.sf2,.spv,.spirv';
+  const accept=$derived(shadersOnly?'.spv,.spirv':'.png,.jpg,.jpeg,.webp,.ase,.aseprite,.yaff,.wav,.ogg,.oga,.opus,.qoa,.mid,.midi,.sf2,.spv,.spirv');
+  const searchLabel=$derived(shadersOnly?'Search shaders':'Search assets');
+  const loadLabel=$derived(shadersOnly?'Load shader':'Load asset');
 
   $effect(()=>{type=initialKind;});
   $effect(()=>{
@@ -53,7 +58,7 @@
   function enqueue(items) {
     const supported=Array.from(items).filter(file=>uploadKinds(file.name).length);
     supported.sort((a,b)=>Number(/\.sf2$/i.test(b.name))-Number(/\.sf2$/i.test(a.name)));
-    if(!supported.length){error='Choose an image, font, audio, SoundFont, or SPIR-V file.';return;}
+    if(!supported.length){error=shadersOnly?'Choose a .spv or .spirv file.':'Choose an image, font, audio, SoundFont, or SPIR-V file.';return;}
     queue=supported.slice(1);
     selectFile(supported[0]);
   }
@@ -108,23 +113,25 @@
 </script>
 
 <section class="card library">
-  <header class="row heading"><h2>Assets</h2>
-    <button type="button" onclick={()=>shaderEditor={}}><Plus size={15}/>New shader…</button>
+  <header class="row heading"><h2>{shadersOnly?'Shaders':'Assets'}</h2>
+    <button type="button" class:primary={shadersOnly} onclick={()=>shaderEditor={}}><Plus size={15}/>New shader…</button>
   </header>
-  <div role="region" aria-label="Asset drop zone" class="dropzone" class:dragging
+  <div role="region" aria-label={shadersOnly?'Shader drop zone':'Asset drop zone'} class="dropzone" class:dragging
     ondragover={acceptDrop} ondragleave={event=>{if(!event.currentTarget.contains(event.relatedTarget))dragging=false;}} ondrop={loadDrop}>
     <Upload size={20} aria-hidden="true"/>
-    <span>Drop asset files here</span>
-    <button class="primary" onclick={()=>pick()} disabled={saving}>Load asset…</button>
-    <input hidden type="file" multiple {accept} bind:this={picker} aria-label="Asset files"
+    <span>{shadersOnly?'Drop SPIR-V files here':'Drop asset files here'}</span>
+    <button class:primary={!shadersOnly} onclick={()=>pick()} disabled={saving}>{loadLabel}…</button>
+    <input hidden type="file" multiple {accept} bind:this={picker} aria-label={shadersOnly?'Shader files':'Asset files'}
       onchange={event=>{enqueue(event.currentTarget.files);event.currentTarget.value='';}}>
   </div>
   {#if error&&!file}<p class="error" role="alert">{error}</p>{/if}
-  <div class="filters">
-    <label class="filter-search"><Search size={15} aria-hidden="true"/><input aria-label="Search assets" type="search" placeholder="Search assets" bind:value={query}></label>
-    <select aria-label="Asset type filter" bind:value={type}><option value="">All types</option>
-      {#each Object.entries(assetLabels) as [value,label]}<option {value}>{label}</option>{/each}
-    </select>
+  <div class="filters" class:shader-filters={shadersOnly}>
+    <label class="filter-search"><Search size={15} aria-hidden="true"/><input aria-label={searchLabel} type="search" placeholder={searchLabel} bind:value={query}></label>
+    {#if !shadersOnly}
+      <select aria-label="Asset type filter" bind:value={type}><option value="">All types</option>
+        {#each Object.entries(assetLabels) as [value,label]}<option {value}>{label}</option>{/each}
+      </select>
+    {/if}
     <select aria-label="Asset tag filter" bind:value={tag}><option value="">All tags</option>
       {#each tagChoices as value}<option {value}>{value}</option>{/each}
     </select>
@@ -132,7 +139,7 @@
   <div class="content" class:details={active}>
     <div class="assets">
       {#each Object.entries(groups) as [kind,assets]}
-        <h3>{assetLabels[kind]??kind}</h3>
+        {#if !shadersOnly}<h3>{assetLabels[kind]??kind}</h3>{/if}
         {#each assets as asset (asset.path)}
           {@const Icon=icons[asset.kind]??File}
           <button class="asset" aria-pressed={selected===asset.path} type="button" onclick={()=>selected=asset.path}>
@@ -142,7 +149,7 @@
           </button>
         {/each}
       {:else}
-        <p class="muted">{catalog.length?'No assets match the filters.':'Load an asset to start the library.'}</p>
+        <p class="muted">{shadersOnly?(catalog.length?'No shaders match the filters.':'No project shaders yet.'):(catalog.length?'No assets match the filters.':'Load an asset to start the library.')}</p>
       {/each}
     </div>
     {#if active}{#key active.path}
@@ -181,12 +188,14 @@
 {/if}
 
 {#if file}
-  <Modal title="Load asset" busy={saving} onClose={()=>{file=null;queue=[];}}>
+  <Modal title={loadLabel} busy={saving} onClose={()=>{file=null;queue=[];}}>
     <form onsubmit={event=>{event.preventDefault();save();}}>
       <small>{file.name}{queue.length?' · '+queue.length+' more queued':''}</small>
-      <label>Asset type<select bind:value={kind} disabled={saving}>
-        {#each choices as value}<option {value}>{singular[value]}</option>{/each}
-      </select></label>
+      {#if !shadersOnly}
+        <label>Asset type<select bind:value={kind} disabled={saving}>
+          {#each choices as value}<option {value}>{singular[value]}</option>{/each}
+        </select></label>
+      {/if}
       <label>Name<input bind:value={name} required maxlength="100" disabled={saving}></label>
       <label>Tags<input bind:value={tags} placeholder="Comma-separated tags" disabled={saving}></label>
       {#if kind==='tile'}
@@ -208,7 +217,7 @@
       {/if}
       {#if error}<p class="error" role="alert">{error}</p>{/if}
       <div class="dialog-actions"><button type="button" disabled={saving} onclick={nextFile}>{queue.length?'Skip file':'Cancel'}</button>
-        <button class="primary" disabled={saving||!name.trim()||midi&&!soundFont||sheet&&!Object.keys(assignments).length||kind==='cover'&&!coverUpload}>{saving?'Loading…':'Load asset'}</button>
+        <button class="primary" disabled={saving||!name.trim()||midi&&!soundFont||sheet&&!Object.keys(assignments).length||kind==='cover'&&!coverUpload}>{saving?'Loading…':loadLabel}</button>
       </div>
     </form>
   </Modal>
@@ -220,6 +229,7 @@
     padding:.65rem;border:1px dashed var(--line);background:var(--well);color:var(--muted)}
   .dropzone.dragging{border-color:var(--accent);color:var(--accent)}
   .filters{display:grid;grid-template-columns:minmax(0,1fr) repeat(2,minmax(0,10rem));gap:.45rem}
+  .shader-filters{grid-template-columns:minmax(0,1fr) minmax(0,10rem)}
   .filter-search{display:flex;align-items:center;gap:.4rem;min-width:0}
   .filter-search input{width:100%;min-width:0}
   .content{display:grid;grid-template-columns:minmax(0,1fr);gap:.8rem}
@@ -243,5 +253,5 @@
   .pair{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
   label.check{display:flex;align-items:center;gap:.45rem}
   @media(max-width:700px){.content.details{grid-template-columns:minmax(0,1fr)}}
-  @media(max-width:440px){.filters{grid-template-columns:1fr 1fr}.filter-search{grid-column:1/-1}}
+  @media(max-width:440px){.filters{grid-template-columns:1fr 1fr}.filter-search{grid-column:1/-1}.shader-filters{grid-template-columns:minmax(0,1fr)}}
 </style>

@@ -61,11 +61,11 @@ Use a collidable layer for walls. Top-down enemies use four-direction A* on the 
 
 ## Shader pipelines
 
-Use **Assets → New shader…** to build a fragment shader from nodes. Start with moving scanlines, drifting mist, a day/night cycle, or a screen sample. Connect node inputs using their menus and choose a color node as the fragment output. Number, vector, and color parameter nodes expose defaults that can be overridden from a Shader pass block.
+Use **Shaders → New shader…** to build a fragment shader from nodes. Start with moving scanlines, drifting mist, a day/night cycle, or a screen sample. Connect node inputs using their menus and choose a color node as the fragment output. Number, vector, and color parameter nodes expose defaults that can be overridden from a Shader pass block.
 
 The preview runs the selected room. Choose Room or Display to test the effect before or after the HUD, pause the preview, or toggle the effect to compare it with the scene. Studio uses WebGPU or WebGL 2 for this preview and keeps the last working effect while you edit. Saving creates a shader asset you can reopen and use in either script pipeline.
 
-Load a `.spv` or `.spirv` fragment shader in **Assets → Load asset**. The asset view lists the uniforms that Studio found. You can also use the bundled shader presets.
+Use **Shaders → Load shader…** to import a `.spv` or `.spirv` fragment shader. The shader details list the uniforms that Studio found. You can also use the bundled shader presets.
 
 Open a **Room script**, add **Apply room shaders in order** under **On init**, and put **Shader pass** blocks inside it. The first pass receives the room scene, and each later pass receives the last pass's output. The HUD is drawn over the finished room. Use **Apply display shaders in order** in the **Game script** to process the composited, scaled display, including the HUD. A pipeline replaces the previous one in its scope. An empty pipeline clears it. You can set a pipeline from initialization, timers, or other events. Each pipeline supports up to eight passes.
 

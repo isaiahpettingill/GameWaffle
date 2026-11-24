@@ -1,8 +1,8 @@
 <script>
   import productIcon from '../packaging/gamewaffle.svg?inline';
-  import {Network,Blocks,Images,Settings2,Play,DoorOpen as RoomIcon,Layers3,Search,SquareUserRound,Plus} from '@lucide/svelte';
+  import {Network,Blocks,Images,Settings2,Play,DoorOpen as RoomIcon,Layers3,Search,SquareUserRound,Plus,Sparkles} from '@lucide/svelte';
   import {roomShaders} from '../src/room-shaders.mjs';
-  const viewIcons={world:Network,room:RoomIcon,actors:SquareUserRound,blocks:Blocks,assets:Images,game:Settings2};
+  const viewIcons={world:Network,room:RoomIcon,actors:SquareUserRound,blocks:Blocks,assets:Images,shaders:Sparkles,game:Settings2};
   import { buttons, platformGravity } from '../src/schema.mjs';
   import {roomSettingKeys} from '../src/room-script.mjs';
   import {propertyAliases} from '../src/collections.mjs';
@@ -71,7 +71,7 @@
   let stageFilter=$state(''),placeAs=$state('');
   let nameDialog=$state.raw(null),newName=$state('');
   let gameSection=$state('Game script'),instanceSection=$state('Placement'),mobilePane=$state('Editor');
-  const tabs=[['world','World'],['room','Room'],['actors','Entities'],['blocks','Code'],['assets','Assets'],['game','Game']];
+  const tabs=[['world','World'],['room','Room'],['actors','Entities'],['blocks','Code'],['assets','Assets'],['shaders','Shaders'],['game','Game']];
 
   const historyStatus=$derived.by(()=>{
     const revision=historyVersion;
@@ -1065,7 +1065,7 @@
   </section>
 {:else if project}
   <div class="mobile-tabs"><Sections labels={hasInspector?['Editor','Project','Settings']:['Editor','Project']} bind:value={mobilePane}/></div>
-  <main class:coding={tab==='blocks'} class:wide={tab==='game'||tab==='world'||(tab==='assets'&&['audio','source'].includes(assetKind))} data-pane={mobilePane}>
+  <main class:coding={tab==='blocks'} class:wide={['game','world','shaders'].includes(tab)||(tab==='assets'&&['audio','source'].includes(assetKind))} data-pane={mobilePane}>
     <aside class="project card">
       <div class="heading row"><h2>Project</h2></div>
       <small class="project-path">{projectPath}</small>
@@ -1240,9 +1240,12 @@
             </div>
           {/if}
         </section>
-      {:else if tab==='assets'}
-        <AssetLibrary bind:this={assetLibrary} {project} files={assets} {shaderDefinitions} room={roomId} initialKind={assetKind==='tile'?'tile':''}
-          onUpload={uploadLibraryAsset} onEdit={editLibraryAsset} onOpen={openLibraryAsset} onSaveShader={saveLibraryShader}/>
+      {:else if tab==='assets'||tab==='shaders'}
+        {#key tab}
+          <AssetLibrary bind:this={assetLibrary} {project} files={assets} {shaderDefinitions} room={roomId}
+            shadersOnly={tab==='shaders'} initialKind={assetKind==='tile'&&tab==='assets'?'tile':''}
+            onUpload={uploadLibraryAsset} onEdit={editLibraryAsset} onOpen={openLibraryAsset} onSaveShader={saveLibraryShader}/>
+        {/key}
       {:else if tab==='actors'}
         <section class="card asseteditor">
           <div class="row heading"><h2>Entities</h2><button onclick={openEntityForm}><Plus size={16}/>New entity…</button></div>
