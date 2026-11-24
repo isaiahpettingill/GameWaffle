@@ -1,4 +1,5 @@
 mod camera;
+pub mod cartridge;
 mod collections;
 mod jit;
 pub mod drawing;
@@ -278,10 +279,10 @@ impl Runtime {
         bytes: &[u8], room: Option<String>, connected: u8, gamepads: Option<u8>,
         width: u32, height: u32, seams: bool,
     ) -> Result<Runtime, String> {
-        if bytes.len() < 111 || bytes.len() > 256 * 1024 * 1024 {
+        if bytes.len() < 111 || bytes.len() > cartridge::MAX_CARTRIDGE {
             return Err("Invalid cartridge size".into());
         }
-        let (bytes, signature) = bytes.split_at(bytes.len() - 96);
+        let (bytes, signature) = bytes.split_at(bytes.len() - cartridge::SIGNATURE_SIZE);
         let key = ed25519_dalek::VerifyingKey::from_bytes(signature[..32].try_into().unwrap())
             .map_err(|_| "Invalid cartridge signing key")?;
         key.verify_strict(
@@ -289,25 +290,8 @@ impl Runtime {
             &ed25519_dalek::Signature::from_bytes(signature[32..].try_into().unwrap()),
         )
         .map_err(|_| "Invalid cartridge signature")?;
-        let game = if bytes.starts_with(b"GWAF\x00\x02") && bytes.len() >= 14 {
-            let packed = u32::from_le_bytes(bytes[6..10].try_into().unwrap()) as usize;
-            let size = u32::from_le_bytes(bytes[10..14].try_into().unwrap()) as usize;
-            let end = 14usize
-                .checked_add(packed)
-                .ok_or("Invalid cartridge size")?;
-            if packed == 0 || size == 0 || size > 32 * 1024 * 1024 || end >= bytes.len() {
-                return Err("Invalid cartridge section lengths".into());
-            }
-            let data = miniz_oxide::inflate::decompress_to_vec_with_limit(&bytes[14..end], size)
-                .map_err(|_| "Cannot decompress simulation data")?;
-            if data.len() != size {
-                return Err("Invalid simulation data length".into());
-            }
-            let game: Game = ciborium::from_reader(&data[..]).map_err(|error| error.to_string())?;
-            game
-        } else {
-            return Err("Unsupported cartridge format".into());
-        };
+        let data = cartridge::Sections::read(bytes)?.simulation()?;
+        let game: Game = ciborium::from_reader(data.as_slice()).map_err(|error| error.to_string())?;
         Self::from_game_with_controllers(game, room, connected, gamepads, [width, height], seams)
     }
 

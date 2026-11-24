@@ -332,9 +332,33 @@ for(const width of [1280,800,390,320]){
     await page.getByRole('button',{name:'Project assets',exact:true}).click();
     const coverChooser=page.waitForEvent('filechooser');
     await page.getByRole('button',{name:'Choose cover image…'}).click();
-    await (await coverChooser).setFiles({name:'Cover art.png',mimeType:'image/png',buffer:await fs.readFile('demo/assets/sprites/key.png')});
+    const {PNG}=require('pngjs');
+    const wideCover=new PNG({width:80,height:40});
+    for(let y=0;y<40;y++)for(let x=0;x<80;x++)
+      wideCover.data.writeUInt32BE(x<40?0xff0000ff:0x0000ffff,(y*80+x)*4);
+    await (await coverChooser).setFiles({name:'Cover art.png',mimeType:'image/png',buffer:PNG.sync.write(wideCover)});
+    const coverDialog=page.getByRole('dialog',{name:'Crop cover art'});
+    const coverCanvas=coverDialog.getByLabel('Cover crop preview');
+    const coverPixel=()=>coverCanvas.evaluate(canvas=>Array.from(canvas.getContext('2d').getImageData(0,0,1,1).data));
+    await coverDialog.getByRole('button',{name:'Fit',exact:true}).click();
+    assert.deepEqual(await coverPixel(),[0,0,0,0]);
+    await coverDialog.getByRole('button',{name:'Fill',exact:true}).click();
+    const square=await coverCanvas.boundingBox();
+    await page.mouse.move(square.x+square.width/2,square.y+square.height/2);
+    await page.mouse.down();
+    await page.mouse.move(square.x+4,square.y+square.height/2,{steps:4});
+    await page.mouse.up();
+    assert.ok(Number(await coverDialog.getByLabel('Horizontal position').inputValue())>.9);
+    await coverDialog.getByRole('button',{name:'Save cover'}).click();
     await until('Cartridge cover',async()=> (await getProject()).coverImage==='assets/covers/cover-art.png',page);
     await page.getByAltText('Cartridge cover art').waitFor();
+    await page.getByRole('button',{name:'Edit crop…'}).click();
+    await coverDialog.getByLabel('Zoom').press('End');
+    await coverDialog.getByLabel('Horizontal position').press('Home');
+    assert.deepEqual(await coverPixel(),[255,0,0,255]);
+    await coverDialog.getByRole('button',{name:'Save cover'}).click();
+    await coverDialog.waitFor({state:'hidden'});
+    assert.deepEqual((await getProject()).coverCrop,{x:0,y:.5,zoom:8});
 
     const fileMenu=page.locator('summary').filter({hasText:/^File$/});
     await fileMenu.focus();
@@ -353,7 +377,9 @@ for(const width of [1280,800,390,320]){
     assert.equal(published.locale,'es');
     assert.equal(published.text.greeting,'¡Hola!');
     assert.ok(published.fontGlyphs['¡']>=96);
-    assert.deepEqual([...published.coverArt.slice(0,8)],[137,80,78,71,13,10,26,10]);
+    const publishedCover=PNG.sync.read(Buffer.from(published.coverArt));
+    assert.deepEqual([publishedCover.width,publishedCover.height],[512,512]);
+    assert.deepEqual([...publishedCover.data.subarray(0,4)],[255,0,0,255]);
     await dialog.waitFor({state:'hidden'});
     assert.equal(await fileMenu.evaluate(el=>el===document.activeElement),true);
     await page.keyboard.press('ArrowDown');

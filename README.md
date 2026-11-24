@@ -191,7 +191,7 @@ Standalone players open without a cartridge. Open a `.waffle` file to start a ga
 
 In Studio, select **File → Export… → Web player** to get a separate copy. Run `npm run build:player` to build only the web player. Open `web-built/standalone/gamewaffle-player.html` in a browser. Select **Open cartridge**. The player can run offline.
 
-Set cover art in **Game → Project assets → Cartridge cover art** before exporting. The image is embedded in each exported cartridge, including separate language editions.
+Set cover art in **Game → Project assets → Cartridge cover art** before exporting. Drag the image or use the position and zoom sliders to frame it in a 512 × 512 px square. **Fit** shows the complete image with transparent padding as needed. **Edit crop…** reopens the original image for adjustments. Each exported cartridge includes the same crop, including separate language editions.
 
 ### Desktop
 

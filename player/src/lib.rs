@@ -49,7 +49,7 @@ impl Game {
     }
     fn from_cartridge(bytes: &[u8], connected: u8, gamepads: Option<u8>, window: [u32; 2]) -> Result<Self, Error> {
         std::hint::black_box(
-            b"GAMEWAFFLE_RUNTIME_ABI_3\0GAMEWAFFLE_RUNTIME_ABI_4\0GAMEWAFFLE_RUNTIME_ABI_5\0GAMEWAFFLE_RUNTIME_ABI_6\0GAMEWAFFLE_RUNTIME_ABI_7\0GAMEWAFFLE_RUNTIME_ABI_8\0GAMEWAFFLE_RUNTIME_ABI_9\0GAMEWAFFLE_RUNTIME_ABI_10\0GAMEWAFFLE_RUNTIME_ABI_11\0GAMEWAFFLE_RUNTIME_ABI_12\0GAMEWAFFLE_RUNTIME_ABI_13\0GAMEWAFFLE_RUNTIME_ABI_14\0GAMEWAFFLE_RUNTIME_ABI_15\0GAMEWAFFLE_RUNTIME_ABI_16\0",
+            b"GAMEWAFFLE_CARTRIDGE_3\0GAMEWAFFLE_RUNTIME_ABI_3\0GAMEWAFFLE_RUNTIME_ABI_4\0GAMEWAFFLE_RUNTIME_ABI_5\0GAMEWAFFLE_RUNTIME_ABI_6\0GAMEWAFFLE_RUNTIME_ABI_7\0GAMEWAFFLE_RUNTIME_ABI_8\0GAMEWAFFLE_RUNTIME_ABI_9\0GAMEWAFFLE_RUNTIME_ABI_10\0GAMEWAFFLE_RUNTIME_ABI_11\0GAMEWAFFLE_RUNTIME_ABI_12\0GAMEWAFFLE_RUNTIME_ABI_13\0GAMEWAFFLE_RUNTIME_ABI_14\0GAMEWAFFLE_RUNTIME_ABI_15\0GAMEWAFFLE_RUNTIME_ABI_16\0",
         );
         let mut runtime = Runtime::from_cartridge_with_view(bytes, None, connected, gamepads, window[0], window[1], false)?;
         runtime.set_seed(
@@ -57,7 +57,7 @@ impl Game {
                 .duration_since(std::time::UNIX_EPOCH)?
                 .subsec_nanos(),
         );
-        let media = Media::read(&bytes[..bytes.len() - 96])?;
+        let media = Media::read(&bytes[..bytes.len() - gamewaffle_runtime::cartridge::SIGNATURE_SIZE])?;
         for name in media.rooms.keys() {
             if !media.atlases.contains_key(name) {
                 return Err(format!("Missing atlas for {name}").into());

@@ -1,4 +1,4 @@
-use gamewaffle_runtime::Camera;
+use gamewaffle_runtime::{Camera, cartridge::Sections};
 use sdl3::{
     pixels::PixelFormat,
     rect::Rect,
@@ -11,6 +11,7 @@ type Error = Box<dyn std::error::Error>;
 
 #[derive(Deserialize)]
 pub struct Media {
+    #[serde(default)]
     pub name: String,
     #[serde(default, rename = "runtimeAbi")]
     pub runtime_abi: u32,
@@ -125,20 +126,21 @@ pub struct Sound {
 
 impl Media {
     pub fn read(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() > 256 * 1024 * 1024 {
-            return Err("Cartridge exceeds 256 MiB".into());
+        #[derive(Deserialize)]
+        struct Card {
+            name: String,
+            #[serde(rename = "runtimeAbi")]
+            runtime_abi: u32,
         }
-        let offset = match bytes.get(..6) {
-            Some(b"GWAF\x00\x02") if bytes.len() >= 14 => {
-                14usize.saturating_add(u32::from_le_bytes(bytes[6..10].try_into()?) as usize)
-            }
-            _ => return Err("Unsupported cartridge".into()),
-        };
-        Ok(ciborium::from_reader(
-            bytes
-                .get(offset..)
-                .ok_or("Invalid cartridge section lengths")?,
-        )?)
+
+        let sections = Sections::read(bytes)?;
+        let mut media: Self = ciborium::from_reader(sections.media()?.as_ref())?;
+        if let Some(card) = sections.card {
+            let card: Card = ciborium::from_reader(card)?;
+            media.name = card.name;
+            media.runtime_abi = card.runtime_abi;
+        }
+        Ok(media)
     }
 }
 

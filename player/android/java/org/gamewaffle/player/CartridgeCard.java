@@ -6,10 +6,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
-/** Reads the display fields at the front of a cartridge's media section. */
+/** Reads the display fields without inflating the simulation or media. */
 final class CartridgeCard {
     static final int MAX_CARTRIDGE = 256 * 1024 * 1024;
     private static final int MAX_COVER = 2 * 1024 * 1024;
+    private static final int MAX_CARD = MAX_COVER + 8192;
     final String title;
     final String locale;
     final boolean hasCover;
@@ -24,13 +25,25 @@ final class CartridgeCard {
 
     static CartridgeCard read(InputStream stream, boolean loadCover) throws IOException {
         DataInputStream in = new DataInputStream(stream);
-        if (in.readInt() != 0x47574146 || in.readUnsignedShort() != 2)
+        if (in.readInt() != 0x47574146)
+            throw new IOException("This is not a supported GameWaffle cartridge");
+        int version = in.readUnsignedShort();
+        if (version != 2 && version != 3)
             throw new IOException("This is not a supported GameWaffle cartridge");
         int compressed = Integer.reverseBytes(in.readInt());
         int plain = Integer.reverseBytes(in.readInt());
         if (compressed <= 0 || compressed >= MAX_CARTRIDGE - 110 || plain <= 0 || plain > 32 * 1024 * 1024)
             throw new IOException("Invalid cartridge header");
-        skip(in, compressed);
+        if (version == 2) {
+            skip(in, compressed);
+        } else {
+            int card = Integer.reverseBytes(in.readInt());
+            int media = Integer.reverseBytes(in.readInt());
+            if (card <= 0 || card > MAX_CARD || media < 0 || media > MAX_CARTRIDGE
+                    || 22L + card + compressed + 96 >= MAX_CARTRIDGE)
+                throw new IOException("Invalid cartridge header");
+            in = new DataInputStream(new CardInput(in, card));
+        }
         long entries = length(in, 5);
         String title = "", locale = "";
         boolean hasCover = false;
@@ -80,6 +93,31 @@ final class CartridgeCard {
                 count = 1;
             }
             remaining -= count;
+        }
+    }
+
+    private static final class CardInput extends InputStream {
+        private final InputStream stream;
+        private int remaining;
+
+        CardInput(InputStream stream, int remaining) {
+            this.stream = stream;
+            this.remaining = remaining;
+        }
+
+        @Override public int read() throws IOException {
+            if (remaining == 0) return -1;
+            int value = stream.read();
+            if (value >= 0) remaining--;
+            return value;
+        }
+
+        @Override public int read(byte[] buffer, int offset, int length) throws IOException {
+            if (length == 0) return 0;
+            if (remaining == 0) return -1;
+            int count = stream.read(buffer, offset, Math.min(length, remaining));
+            if (count > 0) remaining -= count;
+            return count;
         }
     }
 }

@@ -11,7 +11,7 @@ process.env.LOCALAPPDATA=temp;
 const {update,exportDesktop,checkUpdate,runtimeAsset,nativeTarget}=await import('../src/desktop.mjs');
 try{
   for(const platform of ['linux-x64','windows-x64']){
-    const data=Buffer.from(platform+'GAMEWAFFLE_RUNTIME_ABI_9\0'),name=runtimeAsset(platform);
+    const data=Buffer.from(platform+'GAMEWAFFLE_RUNTIME_ABI_9\0GAMEWAFFLE_CARTRIDGE_3\0'),name=runtimeAsset(platform);
     const info={tag_name:'v2.1.0',assets:[{name,digest:'sha256:'+createHash('sha256').update(data).digest('hex'),
       browser_download_url:'https://github.com/isaiahpettingill/GameWaffle/releases/download/v2.1.0/'+name}]};
     const request=async url=>url.startsWith('https://api.')?Response.json(info):new Response(data);
@@ -31,7 +31,7 @@ try{
     assert.deepEqual(Buffer.from(zip['game.waffle']),cartridge);
     assert.deepEqual(Buffer.from(zip[platform==='linux-x64'?'gamewaffle-player':'gamewaffle-player.exe']),data);
     if(platform!==nativeTarget){
-      await writeFile(installed.path,'legacy-player');
+      await writeFile(installed.path,'legacy-player GAMEWAFFLE_RUNTIME_ABI_9\0');
       await assert.rejects(exportDesktop(cartridge,platform,request),/compatible with this cartridge/);
     }
   }

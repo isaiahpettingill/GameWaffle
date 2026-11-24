@@ -2,17 +2,53 @@ import assert from 'node:assert/strict';
 import {readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
+import {generateKeyPairSync,randomBytes,sign} from 'node:crypto';
+import {PNG} from 'pngjs';
 import {Runtime,initSync} from '../web-built/runtime/runtime.js';
 import {projectStore} from '../src/project-store.mjs';
 import {compileProject} from '../src/compiler.mjs';
 import {pack} from '../src/pack.mjs';
-import {unpack} from '../src/cartridge.mjs';
+import {decodeCbor,encodeCbor,unpack} from '../src/cartridge.mjs';
+import {encodePng} from '../src/png.mjs';
 import {readBitfont} from '../src/font.mjs';
 import {drawRoom} from '../ui/render.js';
 import {cameraView} from '../ui/camera.js';
 initSync({module:await readFile('web-built/runtime/runtime_bg.wasm')});
 const bytes=await readFile('web-built/demo.waffle');
 const cart=unpack(bytes);
+assert.equal(bytes[5],3);
+assert.ok(bytes.readUInt32LE(18)>0);
+for(const {png} of Object.values(cart.atlases))assert.equal(png[25],3);
+for(const [colors,depth] of [[2,1],[4,2],[16,4],[256,8],[257,8]]){
+  const pixels=Buffer.alloc(17*17*4);
+  for(let i=0;i<pixels.length/4;i++){
+    const color=i%colors;
+    pixels.writeUInt32BE(color*65536+(color*37%256),i*4);
+  }
+  const png=encodePng(17,17,pixels);
+  assert.equal(png[24],depth);
+  assert.equal(png[25],colors<=256?3:6);
+  assert.deepEqual(PNG.sync.read(png).data,pixels);
+}
+const wrongSize=Buffer.from(bytes);
+wrongSize.writeUInt32LE(bytes.readUInt32LE(18)-1,18);
+assert.throws(()=>unpack(wrongSize),/expanded cartridge section length/);
+const mediaStored=pack({name:'Stored media',start:'room',rooms:{room:{}},atlases:{room:{png:randomBytes(32768)}}});
+assert.equal(new DataView(mediaStored.buffer).getUint32(18,true),0);
+assert.equal(unpack(mediaStored).name,'Stored media');
+
+// Reassemble a signed v2 cartridge from the same simulation and media.
+const simulationStart=22+bytes.readUInt32LE(14);
+const simulationEnd=simulationStart+bytes.readUInt32LE(6);
+const legacyHeader=Buffer.from(bytes.subarray(0,14));
+legacyHeader[5]=2;
+const card=decodeCbor(bytes.subarray(22,simulationStart));
+const legacyPayload=Buffer.concat([legacyHeader,bytes.subarray(simulationStart,simulationEnd),encodeCbor({...card,...cart})]);
+const {privateKey,publicKey}=generateKeyPairSync('ed25519');
+const legacy=Buffer.concat([legacyPayload,publicKey.export({format:'der',type:'spki'}).subarray(-32),sign(null,legacyPayload,privateKey)]);
+assert.deepEqual(unpack(legacy),cart);
+Runtime.from_cartridge(legacy).free();
+
 assert.equal(cart.camera.min_width,128);
 assert.equal(cart.camera.min_height,128);
 const emptyAtlas={entries:{}};

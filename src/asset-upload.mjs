@@ -4,6 +4,7 @@ import {initialTileScript,tileScriptPath,tileStartsAnimated} from './tile-script
 import {encodeCbor} from './cartridge.mjs';
 import {inspectBitfont,previewRoomArt,previewTiles} from './compiler.mjs';
 import {readAseprite} from './ase.mjs';
+import {normalizeCoverCrop} from './cover.mjs';
 
 const safeName=/^[^\\/\x00-\x1f]+\.[a-z0-9]+$/i;
 const stem=filename=>filename.replace(/\.[^.]+$/,'');
@@ -73,6 +74,7 @@ export async function prepareAssetUpload(project, store, upload) {
     shaders[resourceName(title,'shader',[shaders])]={source:path,title};
   }else if(kind==='cover'){
     project.coverImage=path;
+    project.coverCrop=normalizeCoverCrop(upload.coverCrop);
   }
   if(['source','cover','background'].includes(kind))await previewRoomArt(path,read);
   pending.set('project.json',Buffer.from(JSON.stringify(project,null,2)+'\n'));

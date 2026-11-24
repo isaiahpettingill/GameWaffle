@@ -4,6 +4,8 @@
   import GlyphGrid from './GlyphGrid.svelte';
   import SearchSelect from './SearchSelect.svelte';
   import ShaderEditor from './ShaderEditor.svelte';
+  import CoverCrop from './CoverCrop.svelte';
+  import {DEFAULT_COVER_CROP} from '../src/cover.mjs';
   import {assetCatalog,assetKinds,assetLabels,tagList} from '../src/asset-types.mjs';
 
   let {project,files,shaderDefinitions,room,onUpload,onEdit,onOpen,onSaveShader,initialKind=''}=$props();
@@ -13,6 +15,7 @@
   let name=$state(''), tags=$state(''), kind=$state(''), error=$state(''), saving=$state(false);
   let soundFont=$state(''), compress=$state(true), tileCollision=$state(true);
   let width=$state(6), height=$state(8), assignments=$state({}), preview=$state('');
+  let coverCrop=$state({...DEFAULT_COVER_CROP}), coverUpload=$state.raw(null);
   let shaderEditor=$state(null);
   const catalog=$derived(assetCatalog(project,files));
   const tagChoices=$derived([...new Set(catalog.flatMap(asset=>asset.tags))].sort((a,b)=>a.localeCompare(b)));
@@ -22,11 +25,12 @@
   const active=$derived(catalog.find(asset=>asset.path===selected));
   const shaderId=$derived(active?.linked.find(link=>link.kind==='shader')?.id);
   const shader=$derived(shaderDefinitions[shaderId]);
-  const choices=$derived(file?assetKinds(file.name):[]);
+  const uploadKinds=name=>/\.(jpe?g|webp)$/i.test(name)?['cover']:assetKinds(name);
+  const choices=$derived(file?uploadKinds(file.name):[]);
   const soundFonts=$derived(catalog.filter(asset=>asset.kind==='soundfont').map(asset=>({value:asset.path,label:asset.name})));
   const midi=$derived(/\.midi?$/i.test(file?.name??''));
   const sheet=$derived(kind==='font'&&/\.png$/i.test(file?.name??''));
-  const accept='.png,.ase,.aseprite,.yaff,.wav,.ogg,.oga,.opus,.qoa,.mid,.midi,.sf2,.spv,.spirv';
+  const accept='.png,.jpg,.jpeg,.webp,.ase,.aseprite,.yaff,.wav,.ogg,.oga,.opus,.qoa,.mid,.midi,.sf2,.spv,.spirv';
 
   $effect(()=>{type=initialKind;});
   $effect(()=>{
@@ -38,15 +42,16 @@
 
   function selectFile(next) {
     file=next;
-    const types=assetKinds(next.name);
+    const types=uploadKinds(next.name);
     kind=types.includes(suggestedKind)?suggestedKind:types[0];
     name=next.name.replace(/\.[^.]+$/,'');
     tags='';soundFont=soundFonts.length===1?soundFonts[0].value:'';compress=true;tileCollision=true;
     width=6;height=8;assignments={};error='';
+    coverCrop={...DEFAULT_COVER_CROP};coverUpload=null;
   }
 
   function enqueue(items) {
-    const supported=Array.from(items).filter(file=>assetKinds(file.name).length);
+    const supported=Array.from(items).filter(file=>uploadKinds(file.name).length);
     supported.sort((a,b)=>Number(/\.sf2$/i.test(b.name))-Number(/\.sf2$/i.test(a.name)));
     if(!supported.length){error='Choose an image, font, audio, SoundFont, or SPIR-V file.';return;}
     queue=supported.slice(1);
@@ -61,11 +66,13 @@
   }
 
   async function save() {
-    if(!file||!name.trim()||saving)return;
+    const source=kind==='cover'?coverUpload:file;
+    if(!source||!name.trim()||saving)return;
     saving=true;error='';
     try{
-      const path=await onUpload({filename:file.name,data:new Uint8Array(await file.arrayBuffer()),kind,
+      const path=await onUpload({filename:source.name,data:new Uint8Array(await source.arrayBuffer()),kind,
         name:name.trim(),tags:tagList(tags.split(',')),soundFont,compress,tileCollision,
+        ...(kind==='cover'?{coverCrop:$state.snapshot(coverCrop)}:{}),
         ...(sheet?{font:{glyphWidth:width,glyphHeight:height,assignments:$state.snapshot(assignments)}}:{})});
       type=kind;query='';tag='';selected=path;
       nextFile();
@@ -185,6 +192,8 @@
       {#if kind==='tile'}
         <small>Tile size is {project.tileSize??24} × {project.tileSize??24} px.</small>
         <label class="check"><input type="checkbox" bind:checked={tileCollision}>Enable collision</label>
+      {:else if kind==='cover'}
+        <CoverCrop {file} bind:crop={coverCrop} bind:upload={coverUpload} disabled={saving}/>
       {:else if sheet}
         <div class="pair">
           <label>Glyph width (px)<input type="number" min="1" max="64" bind:value={width} required></label>
@@ -199,7 +208,7 @@
       {/if}
       {#if error}<p class="error" role="alert">{error}</p>{/if}
       <div class="dialog-actions"><button type="button" disabled={saving} onclick={nextFile}>{queue.length?'Skip file':'Cancel'}</button>
-        <button class="primary" disabled={saving||!name.trim()||midi&&!soundFont||sheet&&!Object.keys(assignments).length}>{saving?'Loading…':'Load asset'}</button>
+        <button class="primary" disabled={saving||!name.trim()||midi&&!soundFont||sheet&&!Object.keys(assignments).length||kind==='cover'&&!coverUpload}>{saving?'Loading…':'Load asset'}</button>
       </div>
     </form>
   </Modal>

@@ -26,6 +26,8 @@
   let bitfontsPanel=$state();
   import Bitfonts from './Bitfonts.svelte';
   import Modal from './Modal.svelte';
+  import CoverCrop from './CoverCrop.svelte';
+  import {normalizeCoverCrop} from '../src/cover.mjs';
   import SearchSelect from './SearchSelect.svelte';
   import RespawnSettings from './RespawnSettings.svelte';
   import {resourceName} from '../src/resource-name.mjs';
@@ -60,7 +62,8 @@
   let revision=-1, checking=false;
   let sourceError=$state('');
   let backgroundPicker=$state(), importingBackground=$state(false), roomBackgrounds=$state({});
-  let coverPicker=$state(), importingCover=$state(false);
+  let coverPicker=$state(), coverEdit=$state.raw(null), coverCrop=$state(normalizeCoverCrop());
+  let coverUpload=$state.raw(null), coverReady=$state(false), coverSaving=$state(false), coverError=$state(''), coverPreview=$state('');
   let room=$derived(project?.rooms[roomId]), roomBackground=$derived(roomBackgrounds[roomId]??room?.backgroundImage), layer=$derived(room?.layers?.[layerIndex]);
   let sprite=$derived(project?.sprites?.[spriteId]), tile=$derived(project?.tiles?.[tileId]);
   let inspector=$derived(assetKind==='tile' ? tile : sprite);
@@ -255,6 +258,7 @@
       [id,data.variants.map((bytes,index)=>png('tile/'+id+'/'+index,bytes))]));
     const nextModes=Object.fromEntries(Object.entries(tiles).map(([id,data])=>[id,data.mode]));
     const nextSprites=Object.fromEntries(Object.entries(next.spritePreviews??{}).map(([id,bytes])=>[id,png('sprite/'+id,bytes)]));
+    const nextCover=next.coverArt?png('cover',next.coverArt):'';
     await Promise.allSettled(created.map(({image})=>image.decode()));
     if(version!==previewVersion){
       for(const {url} of created)URL.revokeObjectURL(url);
@@ -268,6 +272,7 @@
     if(JSON.stringify(tileArt)!==JSON.stringify(nextTiles))tileArt=nextTiles;
     if(JSON.stringify(previewModes)!==JSON.stringify(nextModes))previewModes=nextModes;
     if(JSON.stringify(spriteArt)!==JSON.stringify(nextSprites))spriteArt=nextSprites;
+    coverPreview=nextCover;
     await tick();
     for(const url of retired)URL.revokeObjectURL(url);
   }
@@ -446,31 +451,37 @@
       if(project.rooms[id])await setRoomBackground(id,result.path);
     }catch(err){error=err.message;}finally{importingBackground=false;}
   }
-  async function importCover(input){
+  function chooseCover(input){
     const file=input.files[0];
     input.value='';
-    if(!file||importingCover||busy)return;
-    importingCover=true;error='';
+    if(file&&!busy)openCover({file});
+  }
+  function openCover(source){
+    coverCrop=normalizeCoverCrop(source.path?project.coverCrop:undefined);
+    coverUpload=null;coverReady=false;coverError='';coverEdit=source;
+  }
+  async function saveCover(){
+    if(!coverReady||coverSaving)return;
+    coverSaving=true;coverError='';
     try{
-      let name=file.name,body=file;
-      if(/\.(jpe?g|webp)$/i.test(name)){
-        const image=await createImageBitmap(file);
-        try{
-          const scale=Math.min(1,512/Math.max(image.width,image.height));
-          const canvas=document.createElement('canvas');
-          canvas.width=Math.max(1,Math.round(image.width*scale));
-          canvas.height=Math.max(1,Math.round(image.height*scale));
-          canvas.getContext('2d').drawImage(image,0,0,canvas.width,canvas.height);
-          body=await new Promise((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(Error('Could not convert the cover image')),'image/png'));
-          name=name.replace(/\.[^.]+$/,'.png');
-        }finally{image.close();}
+      const crop=$state.snapshot(coverCrop);
+      if(coverEdit.file){
+        const name=coverEdit.file.name.replace(/\.[^.]+$/,'').trim().slice(0,100)||'Cover art';
+        await uploadLibraryAsset({kind:'cover',filename:coverUpload.name,name,coverCrop:crop,
+          data:new Uint8Array(await coverUpload.arrayBuffer())});
+      }else{
+        project.coverCrop=crop;
+        mark('cover crop');
+        if(!await saveProject())throw Error(error||'Could not save the cover crop');
+        await checkAssets();
       }
-      const r=await fetch('./api/import?kind=cover&name='+encodeURIComponent(name),{method:'POST',body});
-      const result=await r.json();
-      if(!r.ok)throw Error(result.error);
-      recordFile(result.edit,'cover art import');
-      set(project,'coverImage',result.path);
-    }catch(err){error=err.message;}finally{importingCover=false;}
+      coverEdit=null;
+    }catch(err){coverError=err.message;}finally{coverSaving=false;}
+  }
+  function removeCover(){
+    delete project.coverImage;
+    delete project.coverCrop;
+    mark('cover removal');
   }
   async function setView(view){
     if(view===roomView||!await saveEdits())return;
@@ -1011,6 +1022,19 @@
     </div></details>
 </nav>
 <ExportDialog bind:this={exportDialog} basename={exportName} localization={project?.localization} onSave={saveEdits} onClose={()=>fileMenu.querySelector('summary').focus()}/>
+{#if coverEdit}
+  <Modal title="Crop cover art" busy={coverSaving} onClose={()=>coverEdit=null}>
+    <form onsubmit={event=>{event.preventDefault();saveCover();}}>
+      <CoverCrop file={coverEdit.file} path={coverEdit.path} bind:crop={coverCrop}
+        bind:upload={coverUpload} bind:ready={coverReady} disabled={coverSaving}/>
+      {#if coverError}<p class="error" role="alert">{coverError}</p>{/if}
+      <div class="dialog-actions">
+        <button type="button" disabled={coverSaving} onclick={()=>coverEdit=null}>Cancel</button>
+        <button class="primary" disabled={!coverReady||coverSaving}>{coverSaving?'Saving…':'Save cover'}</button>
+      </div>
+    </form>
+  </Modal>
+{/if}
 {#if nameDialog}
   {@const kind=nameDialog.kind}
   {@const label=kind[0].toUpperCase()+kind.slice(1)}
@@ -1194,11 +1218,14 @@
             <div class="stack cover-setting">
               <span>Cartridge cover art</span>
               <div class="row">
-                {#if project.coverImage}<img class="cover-preview" src={'./api/room-art?path='+encodeURIComponent(project.coverImage)} alt="Cartridge cover art">{/if}
-                <button disabled={busy||importingCover} onclick={()=>coverPicker.click()}>Choose cover image…</button>
-                {#if project.coverImage}<button disabled={busy||importingCover} onclick={()=>set(project,'coverImage','')}>Remove cover</button>{/if}
+                {#if project.coverImage&&coverPreview}<img class="cover-preview" src={coverPreview} alt="Cartridge cover art">{/if}
+                <button disabled={busy} onclick={()=>coverPicker.click()}>Choose cover image…</button>
+                {#if project.coverImage}
+                  <button disabled={busy} onclick={()=>openCover({path:project.coverImage})}>Edit crop…</button>
+                  <button disabled={busy} onclick={removeCover}>Remove cover</button>
+                {/if}
                 <input hidden type="file" aria-label="Cartridge cover image file" accept=".png,.jpg,.jpeg,.webp,.ase,.aseprite"
-                  bind:this={coverPicker} onchange={event=>importCover(event.currentTarget)}>
+                  bind:this={coverPicker} onchange={event=>chooseCover(event.currentTarget)}>
               </div>
             </div>
             <div class="row"><span>Project tile size</span><strong>{project.tileSize??24} × {project.tileSize??24} px</strong>

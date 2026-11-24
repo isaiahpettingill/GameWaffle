@@ -89,17 +89,22 @@ Call `reset()` to restore the starting room and initial values. A script error i
 
 | Offset | Size | Data |
 |---|---:|---|
-| 0 | 6 bytes | Magic bytes `47 57 41 46 00 02` |
+| 0 | 6 bytes | Magic bytes `47 57 41 46 00 03` |
 | 6 | 4 bytes | Compressed simulation size, little-endian |
 | 10 | 4 bytes | Expanded simulation size, little-endian |
-| 14 | Varies | Raw DEFLATE data for the CBOR simulation section |
-| After simulation data | Varies | CBOR media section with PNG atlases and audio |
+| 14 | 4 bytes | Display metadata size, little-endian |
+| 18 | 4 bytes | Expanded media size, little-endian. Zero means the media CBOR is stored directly. |
+| 22 | Varies | CBOR display metadata with `name`, optional `locale` and `coverArt`, and `runtimeAbi` |
+| After display metadata | Varies | Raw DEFLATE data for the CBOR simulation section |
+| After simulation data | Varies | Media section containing a CBOR map with PNG atlases and audio. Uses raw DEFLATE when the expanded media size is nonzero. |
 
 Compiled instructions use 8-bit opcodes, 8-bit registers where applicable, and little-endian 16-bit indexes. Repeated names and constants use a pool for each program. The runtime resolves each instruction handler and jump target when it loads the cartridge. Each handler calls the next handler directly. After at most 16 instructions, control returns to the scheduler loop. This limit bounds stack use on targets that keep tail-call frames.
 
-Media remains compressed in its source format. The player loads the active room atlas when necessary. The compiler puts occupied static tile chunks into the room atlas. A playable cartridge contains no editor thumbnail data.
+The compiler uses lossless indexed PNG for images with up to 256 distinct RGBA values. Cartridge covers are 512 × 512 px PNGs. Audio retains the encoding selected by the compiler. The player decodes the active room atlas when necessary. The compiler puts occupied static tile chunks into the room atlas. Editor thumbnails are included only in editor cartridges.
 
-The final 96 bytes contain a 32-byte Ed25519 public key and a 64-byte signature. The signature covers the header, simulation, and media. Set `GAMEWAFFLE_SIGNING_KEY` to the path of an Ed25519 private PEM key to sign repeat builds with the same key. By default, the compiler makes a key for the current process.
+Current readers also support version 2, which uses a 14-byte header with the same simulation length fields, followed by the compressed simulation and an uncompressed CBOR media section that includes the display metadata.
+
+The final 96 bytes contain a 32-byte Ed25519 public key and a 64-byte signature. The signature covers the header and all sections. Set `GAMEWAFFLE_SIGNING_KEY` to the path of an Ed25519 private PEM key to sign repeat builds with the same key. By default, the compiler makes a key for the current process.
 
 See the [engine command reference](blocks.md) for commands, events, and actor readings.
 Run `node packaging/sdk-reference.mjs` after you change the schema.

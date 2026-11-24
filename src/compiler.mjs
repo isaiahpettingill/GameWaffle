@@ -19,6 +19,8 @@ import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { PNG } from 'pngjs';
+import { encodePng } from './png.mjs';
+import { COVER_SIZE, coverCropRect } from './cover.mjs';
 import { encode as encodeQoa } from 'qoa-format';
 import { readAseprite, tagFrames } from './ase.mjs';
 import { decodeCbor } from './cartridge.mjs';
@@ -129,9 +131,10 @@ function atlas(images) {
     height = Math.max(height, image.height);
   }
   if (width > 4096 || y + height > 4096) throw Error('Room atlas exceeds 4096 pixels per side');
-  const image = new PNG({ width, height: Math.max(1, y + height) });
-  for (const [id, source] of list) blit(source, { width, rgba: image.data }, ...entries[id]);
-  const png=PNG.sync.write(image);
+  const atlasHeight = Math.max(1, y + height);
+  const image = {width, rgba:Buffer.alloc(width * atlasHeight * 4)};
+  for (const [id, source] of list) blit(source, image, ...entries[id]);
+  const png = encodePng(width, atlasHeight, image.rgba);
   return atlasCache.put(key,{entries,png},png.length+list.length*96);
 }
 
@@ -200,24 +203,35 @@ export async function previewRoomArt(file, read, frame=0) {
   if (!file?.startsWith('assets/') || file.split('/').includes('..') || !artFile.test(file)) throw Error('Choose a project image');
   const {width,height,frames}=await readArt(file,read);
   if(!Number.isInteger(frame)||frame<0||!frames[frame])throw Error('Choose an available image frame');
-  return PNG.sync.write({width,height,data:frames[frame].rgba});
+  return encodePng(width, height, frames[frame].rgba);
 }
 
-async function compileCover(file,read) {
+const coverCache = byteCache(8 * 1024 * 1024);
+async function compileCover(file, crop, read) {
   if(!file)return;
   if(typeof file!=='string'||!file.startsWith('assets/')||file.split('/').includes('..')||!artFile.test(file))
     throw Error('Choose a project image for the cartridge cover');
-  const {width,height,frames}=await readArt(file,read);
-  const scale=Math.min(1,512/Math.max(width,height));
-  const w=Math.max(1,Math.round(width*scale)),h=Math.max(1,Math.round(height*scale));
+  const {width,height,frames,revision}=await readArt(file,read);
+  const {left,top,side}=coverCropRect(width,height,crop);
+  const key=JSON.stringify([revision,left,top,side]);
+  const cached=coverCache.get(key);
+  if(cached)return cached;
   const source=frames[0].rgba;
-  if(w===width&&h===height)return PNG.sync.write({width,height,data:source});
-  const data=Buffer.alloc(w*h*4);
-  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
-    const offset=4*(Math.floor(y*height/h)*width+Math.floor(x*width/w));
-    source.copy(data,4*(y*w+x),offset,offset+4);
+  const data=Buffer.alloc(COVER_SIZE * COVER_SIZE * 4);
+  const step=side / COVER_SIZE;
+  const columns=Array.from({length:COVER_SIZE},(_,index)=>Math.floor(left + (index + .5) * step));
+  for(let y=0;y<COVER_SIZE;y++){
+    const row=Math.floor(top + (y + .5) * step);
+    if(row<0||row>=height)continue;
+    for(let x=0;x<COVER_SIZE;x++){
+      const column=columns[x];
+      if(column<0||column>=width)continue;
+      const pixel=source.readUInt32LE((row * width + column) * 4);
+      data.writeUInt32LE(pixel,(y * COVER_SIZE + x) * 4);
+    }
   }
-  return PNG.sync.write({width:w,height:h,data});
+  const png=encodePng(COVER_SIZE,COVER_SIZE,data);
+  return coverCache.put(key,png,png.length);
 }
 
 export async function inspectBitfont(config, read) {
@@ -259,7 +273,7 @@ export async function previewTiles(tiles,size,read) {
     result[id]={mode:tile.physics?.mode??(flags.includes('fluid')?'fluid':'static'),variants:variants.map(([index])=>{
       const base={width:ase.width,height:ase.height,rgba:ase.frames[index].rgba};
       const image=flags.length?transformed(base,flags):base;
-      return PNG.sync.write({width:image.width,height:image.height,data:image.rgba});
+      return encodePng(image.width, image.height, image.rgba);
     })};
   }
   return result;
@@ -716,13 +730,13 @@ export async function compileProject(root, { project: draft, scripts = new Map()
   if(minimap)minimap.mode=minimapMode;
   function thumbnail(frame) {
     const { width, height, rgba: data } = frames.get(frame.image);
-    return PNG.sync.write({ width, height, data });
+    return encodePng(width, height, data);
   }
   const tilePreviews = Object.fromEntries(Object.entries(tiles).map(([id, tile]) =>
     [id, { mode: tile.physics.mode, variants: tile.variants.map(clip => thumbnail(clip[0])) }]));
   const spritePreviews = Object.fromEntries(Object.entries(sprites).filter(([id])=>!id.startsWith('@')).map(([id, sprite]) =>
     [id, thumbnail((sprite.clips[sprite.animation] ?? sprite.clips.default).frames[0])]));
-  const coverArt=await compileCover(project.coverImage,read);
+  const coverArt=await compileCover(project.coverImage,project.coverCrop,read);
   const presetProgram=[...usedShaders].some(id=>id.startsWith('preset:'))
     ?await compileShader(await readFile(new URL('./shaders/presets.spv',import.meta.url))):null;
   return { runtimeAbi, controls,items,menus,events:Object.keys(events),localization,minimap,saveId:project.saveId??project.name, name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,

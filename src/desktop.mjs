@@ -4,7 +4,7 @@ import {homedir} from 'node:os';
 import {createHash,randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {zipSync} from 'fflate';
-import {unpack} from './cartridge.mjs';
+import {CARTRIDGE_VERSION,unpack} from './cartridge.mjs';
 
 const app=fileURLToPath(new URL('../',import.meta.url));
 const cache=join(process.env.LOCALAPPDATA??process.env.XDG_DATA_HOME??join(homedir(),'.local','share'),'GameWaffle','updates');
@@ -67,7 +67,10 @@ export async function update(component,t=nativeTarget,request=fetch){
 export async function exportDesktop(bytes,t=nativeTarget,request=fetch){
   runtimeAsset(t);
   const abi=unpack(bytes).runtimeAbi;
-  const compatible=player=>player && (!abi || player.includes(Buffer.from('GAMEWAFFLE_RUNTIME_ABI_'+abi+'\0')));
+  const currentFormat=bytes[5]===CARTRIDGE_VERSION;
+  const compatible=player=>player &&
+    (!abi || player.includes(Buffer.from('GAMEWAFFLE_RUNTIME_ABI_'+abi+'\0'))) &&
+    (!currentFormat || player.includes(Buffer.from('GAMEWAFFLE_CARTRIDGE_'+CARTRIDGE_VERSION+'\0')));
   const cached=await installedRuntime(t);
   const paths=cached?[cached.path]:[];
   if(t===nativeTarget)paths.push(join(app,'web-built','native',binary(t)),join(app,binary(t)));
@@ -85,5 +88,9 @@ export async function exportDesktop(bytes,t=nativeTarget,request=fetch){
     }
   }
   if(!player)throw Error('Install or build a desktop player compatible with this cartridge before exporting');
-  return zipSync({[binary(t)]:[player,{os:3,attrs:(0o100755<<16)>>>0}],'game.waffle':bytes,'LICENSE':await readFile(join(app,'LICENSE'))},{level:4});
+  return zipSync({
+    [binary(t)]:[player,{os:3,attrs:(0o100755<<16)>>>0}],
+    'game.waffle':[bytes,{level:currentFormat?0:4}],
+    'LICENSE':await readFile(join(app,'LICENSE')),
+  },{level:4});
 }

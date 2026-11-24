@@ -106,7 +106,7 @@ function explicitBehavior(project) {
 }
 
 function thumbnailKey(cart) {
-  return createHash('sha256').update(encodeCbor([cart.tilePreviews,cart.spritePreviews])).digest('hex');
+  return createHash('sha256').update(encodeCbor([cart.tilePreviews,cart.spritePreviews,cart.coverArt])).digest('hex');
 }
 
 async function recompile(project, scripts, save, sourceStore=store) {
@@ -252,6 +252,10 @@ const server = createServer(async (req, res) => {
         for await(const chunk of req){if((size+=chunk.length)>limit*1024*1024)throw Error(`File exceeds ${limit} MiB`);chunks.push(chunk);}
         const group=bitfont?'fonts':background?'backgrounds':cover?'covers':/\.(wav|ogg|oga|opus|qoa|mid|midi|sf2)$/i.test(name)?'audio':kind==='tile'?'tiles':'sprites';
         let data=Buffer.concat(chunks),fontConfig;
+        if(cover&&url.searchParams.get('preview')==='1'){
+          const extension=extname(name).toLowerCase();
+          return send(res,200,await previewRoomArt('assets/covers/preview'+extension,async()=>data),'image/png');
+        }
         if(bitfont){
           ({data,fontConfig}=decodeCbor(data));
           if(!(data instanceof Uint8Array))throw Error('Choose a bitfont file');
