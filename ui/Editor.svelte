@@ -1,9 +1,9 @@
 <script>
   import productIcon from '../packaging/gamewaffle.svg?inline';
   import {Network,Blocks,Images,Settings2,Play,DoorOpen as RoomIcon,Layers3,Search,SquareUserRound,Plus} from '@lucide/svelte';
-  import {atmospherePresets,roomShaders} from '../src/room-shaders.mjs';
+  import {roomShaders} from '../src/room-shaders.mjs';
   const viewIcons={world:Network,room:RoomIcon,actors:SquareUserRound,blocks:Blocks,assets:Images,game:Settings2};
-  import { buttons, effects, platformGravity, roomBorder } from '../src/schema.mjs';
+  import { buttons, platformGravity, roomBorder } from '../src/schema.mjs';
   import PagedList from './PagedList.svelte';
   let projectPath=$state(''),filter=$state(''),instanceFilter=$state('');
   import InputMap from './InputMap.svelte';
@@ -20,13 +20,13 @@
   import ScriptPanel from './ScriptPanel.svelte';
   import Localization from './Localization.svelte';
   import GameMenus from './GameMenus.svelte';
-  import LocalizedLabel from './LocalizedLabel.svelte';
   import ComponentPicker from './ComponentPicker.svelte';
   import Bitfonts from './Bitfonts.svelte';
   import Modal from './Modal.svelte';
   import SearchSelect from './SearchSelect.svelte';
   import RespawnSettings from './RespawnSettings.svelte';
   import {resourceName} from '../src/resource-name.mjs';
+  import {formatScript, locations, parseScript} from '../src/wafflescript.mjs';
   import ExportDialog from './ExportDialog.svelte';
   import Physics from './Physics.svelte';
   import { tileSizes } from '../src/script.mjs';
@@ -59,27 +59,21 @@
   let placementSprite=$state(''), mapTool=$state('select'), addForm=$state(false);
   let revision=-1, checking=false;
   let sourceError=$state('');
-  let backgroundPicker=$state(), importingBackground=$state(false);
+  let backgroundPicker=$state(), importingBackground=$state(false), roomBackgrounds=$state({});
   let coverPicker=$state(), importingCover=$state(false);
-  let room=$derived(project?.rooms[roomId]), layer=$derived(room?.layers?.[layerIndex]);
+  let room=$derived(project?.rooms[roomId]), roomBackground=$derived(roomBackgrounds[roomId]??room?.backgroundImage), layer=$derived(room?.layers?.[layerIndex]);
   let sprite=$derived(project?.sprites?.[spriteId]), tile=$derived(project?.tiles?.[tileId]);
   let inspector=$derived(assetKind==='tile' ? tile : sprite);
   let artFiles=$derived(assets.filter(file=>/\.(ase|aseprite|png)$/i.test(file)));
-  let audioFiles=$derived(assets.filter(file=>/\.(wav|ogg|oga|opus|qoa)$/i.test(file)));
-  let stageFilter=$state(''), newField=$state(''), newItem=$state(''),itemId=$state(''),sourceFilter=$state(''),placeAs=$state(''),sourcePicker=$state();
-  let initialNumber=$state(0),initialFlag=$state(false);
+  let audioFiles=$derived(assets.filter(file=>/\.(wav|ogg|oga|opus|qoa|mid|midi)$/i.test(file)));
+  let soundFonts=$derived(assets.filter(file=>/\.sf2$/i.test(file)));
+  let newSoundFont=$state(''), soundFontFile=$state.raw(null), soundFontPicker=$state();
+  const midiSource=$derived(createKind==='audio'&&/\.midi?$/i.test(newSource));
+  let stageFilter=$state(''), sourceFilter=$state(''),placeAs=$state(''),sourcePicker=$state();
   let nameDialog=$state.raw(null),newName=$state('');
-  let gameSection=$state('Variables'),spriteSection=$state('Appearance'),roomSection=$state('General'),instanceSection=$state('Placement'),mobilePane=$state('Editor');
+  let gameSection=$state('Game script'),instanceSection=$state('Placement'),mobilePane=$state('Editor');
   const tabs=[['world','World'],['room','Room'],['actors','Entities'],['blocks','Code'],['assets','Assets'],['game','Game']];
-  let variableId=$state(''), variableKind=$state('variables');
-  function addVariable() {
-    const label=variableId.trim();
-    if(!label)return;
-    if(variableKind==='variables'&&!Number.isSafeInteger(initialNumber)){error='Enter a whole number.';return;}
-    if(variableKind==='flags')registerScriptField('flag',label,initialFlag);
-    else registerScriptField('global',label,initialNumber);
-    variableId='';error='';
-  }
+
   const historyStatus=$derived.by(()=>{
     const revision=historyVersion;
     return { revision, undo:undo.at(-1)?.label, redo:redo.at(-1)?.label };
@@ -107,25 +101,36 @@
     (project.components??={})[id]=label;
     return id;
   }
+  let gameScript=$state.raw(null), gameCode=$state(false), codeTile=$state(''), codeVariant=$state(0);
+  let editTileVariant=$state('0');
+  const activeTileCode=$derived(Boolean(codeTile));
+  const gameFlags=$derived({...project?.flags,...gameScript?.declarations?.flags});
+  const gameGlobals=$derived({...project?.variables,...gameScript?.declarations?.globals});
+  const gameEvents=$derived({...project?.events,...gameScript?.declarations?.events});
   const blockReferences=$derived({
     names:[...new Set(Object.values(project?.rooms??{}).flatMap(room=>instanceNames(room.entities??[])))].sort(),
     componentsLabels:componentLabels,
     spritesLabels:Object.fromEntries(Object.entries(project?.sprites??{}).map(([id,sprite])=>[id,sprite.title??id])),
     itemsLabels:Object.fromEntries(Object.entries(project?.items??{}).map(([id,item])=>[id,item.label?.startsWith('text.')?textEntries[item.label.slice(5)]??id:item.label??id])),
     components:[...new Set(['transform','sprite','body','player','health','script',...Object.keys(componentLabels)])].sort(),
-    fields:[...new Set(['health','label','ready','score','speed',...Object.keys(project?.variables??{}),...Object.keys(project?.entityFields??{})])],
+    fields:[...new Set(['health','label','ready','score','speed',...Object.keys(gameGlobals),...Object.keys(project?.entityFields??{})])],
     fieldsLabels:project?.entityFields??{},variableLabels:project?.variableLabels??{},
     rooms:Object.keys(project?.rooms??{}),
     sounds:Object.keys(project?.audio??{}),
-    events:Object.keys(project?.events??{}),eventsLabels:project?.events??{},
+    backgrounds:artFiles.filter(file=>!art[file]?.error),
+    backgroundsLabels:Object.fromEntries(artFiles.map(file=>[file,file.split('/').at(-1)])),
+    collections:gameScript?.collections,
+    events:Object.keys(gameEvents),eventsLabels:gameEvents,gameConstants:gameScript?.constants??{},
     fonts:['builtin',...Object.keys(project?.bitfonts??{})],
     fontsLabels:{builtin:'Built-in',...Object.fromEntries(Object.entries(project?.bitfonts??{}).map(([id,font])=>[id,font.name??id]))},
-    flags:Object.keys(project?.flags??{}),
+    flags:Object.keys(gameFlags),
   });
   const codeRoomId=$derived(roomCode||(!spriteId?roomId:''));
   const codeRoom=$derived(project?.rooms[codeRoomId]);
-  const activeRoomCode=$derived(Boolean(codeRoom));
+  const activeRoomCode=$derived(!gameCode&&!activeTileCode&&Boolean(codeRoom));
   const roomScripts=$derived(Object.entries(project?.rooms??{}).map(([id,room])=>({id,title:room.title??id})));
+  const tileScripts=$derived(Object.entries(project?.tiles??{}).flatMap(([id,tile])=>
+    (tileArt[id]??[]).map((_,variant)=>({id,variant,title:(tile.title??tile.tag??id)+' · Variant '+(variant+1)}))));
   const entityScripts=$derived(Object.entries(project?.sprites??{}).map(([id,sprite])=>({id,title:sprite.title??id})));
   const authoringView=$derived(tab==='room'||tab==='blocks');
   const hasInspector=$derived(tab==='room'||tab==='actors'||(tab==='assets'&&assetKind==='tile'));
@@ -135,22 +140,34 @@
     nameDialog={kind,register,select};
   }
   function newEvent(query='',select){
-    askName('event',query,title=>{
-      const events=project.events??{};
-      const id=resourceName(title,'event',[events]);
-      project.events={...events,[id]:title};
-      mark('creation of '+title);
-      return id;
+    askName('event',query,async title=>{
+      const id=resourceName(title,'event',[gameEvents]);
+      return defineInGame('events',id,title);
     },select);
   }
-  function registerScriptField(scope,title,initial){
+  async function defineInGame(group,id,value){
+    if(dirty&&!await saveProject())throw Error('Save the project before adding a declaration');
+    let unit=await request('./api/game-script');
+    const definition={declarations:{[group]:{[id]:value}}};
+    unit.declarations??={};
+    (unit.declarations[group]??={})[id]=value;
+    if(unit.source!=null){
+      const source=formatScript(definition)+'\n'+unit.source;
+      unit={...unit,...parseScript(source),source};
+    }
+    const result=await request('./api/game-script','PUT',unit);
+    recordFile(result.edit,'declaration of '+id);
+    saveScript('game',false,true,unit);
+    return id;
+  }
+  async function registerScriptField(scope,title){
     const local=scope.startsWith('local');
     const kind=scope==='flag'?'flag':local?'field':'variable';
     const labels=local?project.entityFields:project.variableLabels?.[scope];
-    const values=scope==='flag'?project.flags:scope==='global'?project.variables:undefined;
+    const values=scope==='flag'?gameFlags:local?undefined:gameGlobals;
     const id=resourceName(title,kind,[values??{},labels??{}]);
-    if(scope==='flag')project.flags={...values,[id]:initial??false};
-    if(scope==='global')project.variables={...values,[id]:initial??0};
+    if(scope==='flag')return defineInGame('flags',id,false);
+    if(!local)return defineInGame('globals',id,scope.endsWith('_real')?{real:0}:scope.endsWith('_bool')?false:scope.endsWith('_string')?'':0);
     const next={...labels,[id]:title};
     if(local)project.entityFields=next;
     else project.variableLabels={...project.variableLabels,[scope]:next};
@@ -165,9 +182,11 @@
     const title=newName.trim();
     if(!title)return;
     const {register,select}=nameDialog;
-    const id=register(title);
-    nameDialog=null;
-    if(select){await tick();select(id);}
+    try{
+      const id=await register(title);
+      nameDialog=null;
+      if(select){await tick();select(id);}
+    }catch(err){error=err.message;}
   }
 
   function openExport() {
@@ -258,7 +277,7 @@
         const names=instanceNames(map.entities);
         map.entities.forEach((entity,index)=>{entity.name=names[index];});
       }
-      projectPath=value.path;project=value.project; assets=value.assets; art=value.art; revision=value.revision;
+      projectPath=value.path;project=value.project;gameScript=value.gameScript; roomBackgrounds=value.roomBackgrounds; assets=value.assets; art=value.art; revision=value.revision;
       currentProject=savedProject=JSON.stringify(value.project);
       recovery=await draft.read();
       if(recovery===savedProject){recovery=null;await draft.write(null);}
@@ -295,6 +314,7 @@
           art=current.art;
           if(!recovery)importNewTags(previousArt);
         }
+        if(JSON.stringify(roomBackgrounds)!==JSON.stringify(current.roomBackgrounds))roomBackgrounds=current.roomBackgrounds;
         if(current.previewKey!==previewKey)await updatePreviews(current.previewKey);
         revision=current.revision;
       }
@@ -369,36 +389,41 @@
     editRoom(next=>{if(value==='')delete next[key];else next[key]=value;},
       (names[key]??'settings in ')+(room.title??roomId));
   }
-  function setCameraZoom(input){
-    const zoom=input.value===''?1:input.valueAsNumber;
-    if(!input.validity.valid||!Number.isFinite(zoom)){
-      input.value=room.cameraZoom??1;
-      return;
+  async function setRoomBackground(id,path){
+    if(!await finishScript()||!await saveProject())return;
+    const endpoint='./api/room-script/'+encodeURIComponent(id);
+    const unit=await request(endpoint);
+    const parsed=unit.source!=null?parseScript(unit.source):null;
+    const init=unit.events.init??=[];
+    const existing=init.findLastIndex(block=>block.op==='set_room_background_image');
+    const block=existing>=0?{...init[existing],image:path}:{op:'set_room_background_image',image:path,scroll:1};
+    if(existing>=0)init[existing]=block;else init.push(block);
+    if(parsed){
+      const snippet=formatScript({events:{init:[block]}});
+      const source=unit.source,command=snippet.split('\n')[1];
+      const oldCommands=parsed.events.init;
+      const old=locations.get(oldCommands?.[existing]);
+      if(old)unit.source=source.slice(0,old.from)+command.trimStart()+source.slice(old.to);
+      else if(oldCommands){
+        const last=locations.get(oldCommands.at(-1));
+        const from=last?source.indexOf('\n',last.to)+1:/^\s*on[ \t]+init\b[^\n]*\n/m.exec(source)?.index;
+        const at=last?from:source.indexOf('\n',from)+1;
+        unit.source=source.slice(0,at)+command+'\n'+source.slice(at);
+      }else unit.source=source.trimEnd()+'\n\n'+snippet;
     }
-    input.value=zoom;
-    setRoom('cameraZoom',zoom===1?'':zoom);
+    const result=await request(endpoint,'PUT',unit);
+    recordFile(result.edit,'background image in '+id);
+    saveScript(id,true,false,unit,false);
+    const current=await request('./api/project');
+    roomBackgrounds=current.roomBackgrounds;
+    await updatePreviews(current.previewKey);
   }
-  function setResolutionMode(mode){
-    const {resolution,...camera}=project.camera??{};
-    if(mode==='fixed')camera.resolution=resolution??[320,240];
-    set(project,'camera',camera);
-  }
-  function setResolutionAxis(axis,input){
-    const value=input.valueAsNumber;
-    const resolution=[...project.camera.resolution];
-    if(!Number.isInteger(value)||value<64||value>512){
-      input.value=resolution[axis];
-      return;
-    }
-    resolution[axis]=value;
-    set(project.camera,'resolution',resolution);
-  }
+
   async function importBackground(input){
     const file=input.files[0], id=roomId;
     input.value='';
     if(!file||importingBackground||busy)return;
     importingBackground=true;error='';
-    const previous=project.rooms[id].backgroundImage;
     try{
       const response=await fetch('./api/import?kind=background&name='+encodeURIComponent(file.name),{method:'POST',body:file});
       const result=await response.json();
@@ -406,11 +431,7 @@
       recordFile(result.edit,'import of '+file.name);
       const current=await request('./api/project');
       assets=current.assets;art=current.art;
-      const target=project.rooms[id];
-      if(target&&target.backgroundImage===previous){
-        project.rooms[id]={...target,backgroundImage:result.path};
-        mark('background image in '+(target.title??id));
-      }
+      if(project.rooms[id])await setRoomBackground(id,result.path);
     }catch(err){error=err.message;}finally{importingBackground=false;}
   }
   async function importCover(input){
@@ -553,22 +574,33 @@
     if(id==='blocks'||id==='room')requestAnimationFrame(()=>document.querySelector(id==='blocks'?'.code-pane':'.map-pane')?.focus({preventScroll:true}));
   }
   async function selectSprite(id){
-    if(!activeRoomCode&&spriteId===id&&scriptPanel&&!await scriptPanel.selectBase())return false;
-    if((activeRoomCode||spriteId!==id) && !await finishScript())return false;
-    roomCode='';spriteId=id;assetKind='sprite';error='';
+    if(!gameCode&&!activeTileCode&&!activeRoomCode&&spriteId===id&&scriptPanel&&!await scriptPanel.selectBase())return false;
+    if((gameCode||activeTileCode||activeRoomCode||spriteId!==id) && !await finishScript())return false;
+    gameCode=false;codeTile='';roomCode='';spriteId=id;assetKind='sprite';error='';
     return true;
   }
   async function selectRoomScript(id){
-    if(!project.rooms[id] || (codeRoomId!==id && !await finishScript()))return false;
-    if(codeRoomId===id&&scriptPanel&&!await scriptPanel.selectBase())return false;
-    roomCode=id;error='';
+    if(!project.rooms[id] || ((gameCode||activeTileCode||codeRoomId!==id) && !await finishScript()))return false;
+    if(!gameCode&&!activeTileCode&&codeRoomId===id&&scriptPanel&&!await scriptPanel.selectBase())return false;
+    gameCode=false;codeTile='';roomCode=id;error='';
     return true;
   }
   async function openRoomScript(){
     if(await selectRoomScript(roomId))openTab('blocks');
   }
-  function selectScriptFile(kind,id){
-    return kind==='room'?selectRoomScript(id):selectSprite(id);
+  async function openGameScript(){
+    if(!await finishScript())return false;
+    gameCode=true;codeTile='';
+    openTab('blocks');
+    return true;
+  }
+  async function openTileScript(id,variant){
+    if(!tileArt[id]?.[variant]||!await finishScript())return false;
+    gameCode=false;codeTile=id;codeVariant=variant;
+    openTab('blocks');return true;
+  }
+  function selectScriptFile(kind,id,variant){
+    return kind==='game'?openGameScript():kind==='tile'?openTileScript(id,variant):kind==='room'?selectRoomScript(id):selectSprite(id);
   }
   function chooseDefinition(id){
     if(tab==='room'){
@@ -590,7 +622,7 @@
 
     if(adding){
       createKind=kind;
-      newId='';newSource='';importFile=null;assetError='';addForm=true;
+      newId='';newSource='';importFile=null;newSoundFont='';soundFontFile=null;assetError='';addForm=true;
     }else{
       assetKind=kind;
       openTab(kind==='sprite'?'actors':'assets');
@@ -632,7 +664,23 @@
     })().finally(()=>projectWrite=null);
     return projectWrite;
   }
-  function saveScript(id,isRoom){
+  function saveScript(id,isRoom,isGame,data,isTile){
+    if(isTile){status='Script saved';return;}
+    if(isRoom){
+      const background=data.events?.init?.findLast(row=>row.op==='set_room_background_image')?.image;
+      if(background==null)delete roomBackgrounds[id];else roomBackgrounds[id]=background;
+    }
+    if(isGame){
+      gameScript={declarations:data.declarations,constants:data.constants,collections:data.collections};
+      const baseline=JSON.parse(savedProject);
+      for(const key of ['flags','events','variables']){delete project[key];delete baseline[key];}
+      project.gameScript??='scripts/game.cbor';
+      baseline.gameScript=project.gameScript;
+      savedProject=JSON.stringify(baseline);
+      updateDirty(undefined,false);
+      status='Script saved';
+      return;
+    }
     const collection=isRoom?'rooms':'sprites';
     if(!project[collection][id].script){
       const path=`scripts/${collection}/${id}.cbor`;
@@ -745,7 +793,7 @@
     if(!title)return;
     const id=resourceName(title,'room',[project.rooms]);
     const topDown=newRoomView==='top_down';
-    project.rooms[id]={title,cols:28,rows:15,background:'#171829',view:newRoomView,
+    project.rooms[id]={title,cols:28,rows:15,view:newRoomView,
       layers:[
         {name:topDown?'Ground':'Background',order:0,collidable:false,cells:[]},
         {name:topDown?'Walls':'Terrain',order:2,collidable:true,cells:[]},
@@ -784,7 +832,7 @@
   async function createAsset(){
     if(busy)return;
     const label=newId.trim();
-    if(!newSource||!label)return;
+    if(!newSource||!label||midiSource&&!newSoundFont)return;
     const kind=createKind;
     const id=resourceName(label,kind==='sprite'?'entity':kind==='tile'?'tiles':'sound',[assetCollection()??{}]);
     busy=true;assetError='';
@@ -796,13 +844,20 @@
         recordFile(result.edit);newSource=result.path;importFile=null;
         const current=await request('./api/project');assets=current.assets;art=current.art;
       }
+      if(midiSource&&soundFontFile){
+        const response=await fetch('./api/import?name='+encodeURIComponent(soundFontFile.name)+'&kind=audio',{method:'POST',body:soundFontFile});
+        const result=await response.json();
+        if(!response.ok)throw Error(result.error);
+        recordFile(result.edit);newSoundFont=result.path;soundFontFile=null;
+        assets=(await request('./api/project')).assets;
+      }
       if(art[newSource]?.error)throw Error(art[newSource].error);
       if(kind==='tile'){
         const source=art[newSource],size=project.tileSize??24;
         if(source?.width!==size||source?.height!==size)throw Error(`Tile art must be ${size}×${size} pixels.`);
         tileId=addTags(newSource,id).first;
       }else if(kind==='audio'){
-        (project.audio??={})[id]={source:newSource,title:label};
+        (project.audio??={})[id]={source:newSource,title:label,...(midiSource?{soundFont:newSoundFont}:{})};
       }else{
         (project.sprites??={})[id]={source:newSource,title:label,physics:{},gravityMode:'room'};
         await selectSprite(id);
@@ -897,7 +952,6 @@
     </div></details>
     <details name="studio-menu" class="export-menu"><summary>Tools</summary><div class="card">
       <button onclick={()=>{gameSection='Controls';openTab('game');}}>Input map</button>
-      <button onclick={()=>{gameSection='Items';openTab('game');}}>Item registry</button>
       <button onclick={debugRoom} disabled={busy||!project}>Debug room</button>
       <button onclick={rebuild} disabled={busy||!project}>Rebuild assets</button>
         <button onclick={()=>{updatesOpen=!updatesOpen;if(updatesOpen)checkReleases();}}>Updates</button>
@@ -994,7 +1048,7 @@
         {:else if room}
         {#key roomId}
           <RoomMap {room} {roomId} {projectPath} size={project.tileSize??24} tiles={project.tiles??{}} sprites={project.sprites??{}}
-            {tileArt} {spriteArt} {previewModes} {previewImage} backgroundUrl={room.backgroundImage?'./api/room-art?path='+encodeURIComponent(room.backgroundImage)+'&revision='+(art[room.backgroundImage]?.revision??''):undefined} {layerIndex} bind:selectedEntity bind:tileId bind:spriteId={placementSprite} bind:tool={mapTool} bind:placeAs {busy}
+            {tileArt} {spriteArt} {previewModes} {previewImage} backgroundUrl={roomBackground?'./api/room-art?path='+encodeURIComponent(roomBackground)+'&revision='+(art[roomBackground]?.revision??''):undefined} {layerIndex} bind:selectedEntity bind:tileId bind:spriteId={placementSprite} bind:tool={mapTool} bind:placeAs {busy}
             undoLabel={historyStatus.undo} redoLabel={historyStatus.redo}
             onUndo={()=>restoreEdit(true)} onRedo={()=>restoreEdit(false)} onEdit={replaceRoom}
             onLayer={chooseLayer} onSprites={inspect=>{roomPanel='instances';if(inspect)mobilePane='Settings';if(actor)selectSprite(actor.sprite);}} onAssets={()=>openAssets('tile')}
@@ -1018,12 +1072,12 @@
           </section>
         {/if}
         </section>
-        <section tabindex="-1" class="code-pane" hidden={tab!=='blocks'} aria-label={activeRoomCode?'Room code':'Entity code'}>
-        {#if activeRoomCode||spriteId}
-          {#key (activeRoomCode?'room:'+codeRoomId:'entity:'+spriteId)+':'+scriptVersion}<ScriptPanel bind:this={scriptPanel} isRoom={activeRoomCode}
-            title={activeRoomCode?(codeRoom.title??codeRoomId)+' · Room script':sprite?.title??spriteId}
-            {roomScripts} {entityScripts} onSelectFile={selectScriptFile} bind:mode={scriptMode}
-            actorDefinition={activeRoomCode?null:sprite} newActor={!Object.hasOwn(JSON.parse(savedProject)[activeRoomCode?'rooms':'sprites']??{},activeRoomCode?codeRoomId:spriteId)} onBeforeSave={async()=>!dirty||await saveProject()} onFileEdit={recordFile} onNewEvent={newEvent} onNewField={newScriptField}
+        <section tabindex="-1" class="code-pane" hidden={tab!=='blocks'} aria-label={gameCode?'Game code':activeTileCode?'Tile code':activeRoomCode?'Room code':'Entity code'}>
+        {#if gameCode||activeTileCode||activeRoomCode||spriteId}
+          {#key (gameCode?'game':activeTileCode?'tile:'+codeTile+':'+codeVariant:activeRoomCode?'room:'+codeRoomId:'entity:'+spriteId)+':'+scriptVersion}<ScriptPanel bind:this={scriptPanel} isRoom={activeRoomCode} isGame={gameCode} isTile={activeTileCode} variant={codeVariant}
+            title={gameCode?'Game script':activeTileCode?(tileScripts.find(tile=>tile.id===codeTile&&tile.variant===codeVariant)?.title??codeTile):activeRoomCode?(codeRoom.title??codeRoomId)+' · Room script':sprite?.title??spriteId}
+            {roomScripts} {entityScripts} {tileScripts} onSelectFile={selectScriptFile} bind:mode={scriptMode}
+            actorDefinition={gameCode||activeTileCode||activeRoomCode?null:sprite} newActor={!gameCode&&!activeTileCode&&!Object.hasOwn(JSON.parse(savedProject)[activeRoomCode?'rooms':'sprites']??{},activeRoomCode?codeRoomId:spriteId)} onBeforeSave={async()=>!dirty||await saveProject()} onFileEdit={recordFile} onNewEvent={newEvent} onNewField={newScriptField}
             hasLegacyMovement={Object.values(project.rooms).some(room=>room.entities.some(entity=>entity.sprite===spriteId&&entity.standardMovement))}
             initialMovement={roomView} onMovementPreset={({dynamic,replaceLegacy})=>{
               if(dynamic)(sprite.physics??={}).mode='dynamic';
@@ -1031,27 +1085,21 @@
                 for(const entity of map.entities)if(entity.sprite===spriteId)delete entity.standardMovement;
               }
               updateDirty('movement settings for '+(sprite.title??spriteId));
-            }} sprite={activeRoomCode?codeRoomId:spriteId} sprites={Object.keys(project.sprites??{})} animations={[...new Set(['default',...(art[sprite?.source]?.tags??[])])]} items={Object.keys(project.items??{})} {textKeys} menus={Object.keys(project.menus??{})} references={activeRoomCode?{...blockReferences,names:instanceNames(codeRoom.entities??[])}:blockReferences} actions={[...buttons,...Object.keys(project.controls??{})]} bind:dirty={scriptDirty} bind:status={scriptStatus} onSave={saveScript} />{/key}
+            }} sprite={gameCode?'game':activeTileCode?codeTile:activeRoomCode?codeRoomId:spriteId} sprites={Object.keys(project.sprites??{})} animations={[...new Set(['default',...(art[sprite?.source]?.tags??[])])]} items={Object.keys(project.items??{})} {textKeys} menus={Object.keys(project.menus??{})} references={activeRoomCode?{...blockReferences,names:instanceNames(codeRoom.entities??[])}:blockReferences} actions={[...buttons,...Object.keys(project.controls??{})]} bind:dirty={scriptDirty} bind:status={scriptStatus} onSave={saveScript} />{/key}
         {:else}<p class="empty card">Create an entity to edit its script.</p>{/if}
         </section>
       </div>
       {#if !authoringView}<section class="aux-pane" aria-label="Project tools">
       {#if tab==='world' && room}
-        <World rooms={project.rooms} flags={Object.keys(project.flags??{})} {roomId} onSelect={id=>selectRoom(id,'stage')} onEdit={(changes,label)=>{Object.assign(project.rooms,changes);updateDirty(label);}}/>
+        <World rooms={project.rooms} flags={Object.keys(gameFlags)} {roomId} onSelect={id=>selectRoom(id,'stage')} onEdit={(changes,label)=>{Object.assign(project.rooms,changes);updateDirty(label);}}/>
       {:else if tab==='game'}
         <section class="card asseteditor">
-          <h2>Game settings</h2>
-          <Sections labels={['Variables','Controls','Events','Items','Text','Menus','Display','Bitfonts','Camera','Settings']} bind:value={gameSection}/>
-          {#if gameSection==='Controls'}
+          <h2>Game</h2>
+          <Sections labels={['Game script','Room defaults','Controls','Text','Menus','Bitfonts','Project assets']} bind:value={gameSection}/>
+          {#if gameSection==='Game script'}
+            <button class="primary" onclick={openGameScript}><Blocks size={15}/>Open Game script</button>
+          {:else if gameSection==='Controls'}
             <InputMap controls={project.controls??{}} onChange={controls=>set(project,'controls',controls)}/>
-          {:else if gameSection==='Events'}
-            <button onclick={()=>newEvent()}>New event…</button>
-            {#each Object.entries(project.events??{}) as [id,title]}
-              <label class="stack">Event name<input value={title} required maxlength="100" onchange={event=>{
-                const value=event.currentTarget.value.trim();
-                if(value)set(project.events,id,value);else event.currentTarget.value=title;
-              }}></label>
-            {/each}
           {:else if gameSection==='Menus'}
             <GameMenus menus={project.menus??{}} entries={textEntries} onChange={value=>set(project,'menus',value)}/>
           {:else if gameSection==='Bitfonts'}
@@ -1065,52 +1113,35 @@
               }}/>
           {:else if gameSection==='Text'}
             <Localization value={project.localization} onChange={value=>set(project,'localization',value)}/>
-          {:else if gameSection==='Items'}
-            <form class="record-form" onsubmit={e=>{e.preventDefault();const label=newItem.trim();if(!label)return;itemId=resourceName(label,'item',[project.items??{}]);set(project.items??={},itemId,{consumable:false,label});newItem='';}}>
-              <label>Item name<input placeholder="key" required bind:value={newItem}></label><button class="primary" disabled={!newItem.trim()}>Register item</button>
-            </form>
-            {#if Object.keys(project.items??{}).length}
-              {@const selected=itemId||Object.keys(project.items)[0]}
-              {@const item=project.items[selected]}
-              <SearchSelect label="Registered item" value={selected}
-                options={Object.entries(project.items).map(([value,item])=>({value,label:item.label?.startsWith('text.')?textEntries[item.label.slice(5)]??value:item.label??value}))}
-                onChange={value=>itemId=value}/>
-              {#if item}
-                <SearchSelect label="Icon" value={item.icon??''} options={[{value:'',label:'None'},...artFiles.map(value=>({value,label:value.split('/').at(-1)}))]}
-                  onChange={value=>set(item,'icon',value)}/>
-                <LocalizedLabel label="Display name" value={item.label??''} entries={textEntries} onChange={value=>set(item,'label',value)}/>
-                <label class="check"><input type="checkbox" checked={item.consumable} onchange={e=>set(item,'consumable',e.currentTarget.checked)}>Consume on use</label>
-                {#if item.flag}<div class="row"><small>Legacy effect sets “{item.flag}” on use.</small>
-                  <button onclick={()=>set(item,'flag','')}>Remove legacy effect</button></div>{/if}
-              {/if}
-            {/if}
-          {:else if gameSection==='Variables'}
-            <form class="record-form" onsubmit={e=>{e.preventDefault();addVariable();}}>
-              <label>Type<select bind:value={variableKind}><option value="variables">Variable</option><option value="flags">Flag</option></select></label>
-              <label>Name<input aria-label="Variable name" required placeholder={variableKind==='flags'?'door_open':'score'} bind:value={variableId}></label>
-              <label>Initial value{#if variableKind==='flags'}<select bind:value={initialFlag}><option value={false}>False</option><option value={true}>True</option></select>{:else}<input type="number" required step="1" bind:value={initialNumber}>{/if}</label>
-              <button class="primary" disabled={!variableId.trim()}>Create {variableKind==='flags'?'flag':'variable'}</button>
-            </form>
-            <form class="record-form" onsubmit={event=>{
-              event.preventDefault();
-              const label=newField.trim();
-              if(!label)return;
-              registerScriptField('local',label);newField='';
-            }}>
-              <label>Entity field name<input bind:value={newField} placeholder="Alert level" required></label><button>Add entity field</button>
-            </form>
-            {#each Object.entries(project.variables??{}) as [id,value]}
-              <label class="row variable">{project.variableLabels?.global?.[id]??id}<input type="number" step="1" {value} onchange={e=>{
-                const next=e.currentTarget.valueAsNumber;
-                if(Number.isSafeInteger(next))set(project.variables,id,next);
-                else e.currentTarget.value=value;
-              }}></label>
+          {:else if gameSection==='Room defaults'}
+            {@const defaults=project.roomDefaults??{}}
+            <p class="muted">New rooms copy these values into their On init script.</p>
+            <div class="field-row">
+              <label class="stack">Camera zoom (×)<input type="number" min="0.25" max="4" step="any" value={defaults.cameraZoom??1}
+                onchange={e=>{const input=e.currentTarget;if(input.validity.valid&&Number.isFinite(input.valueAsNumber))set(project,'roomDefaults',{...defaults,cameraZoom:input.valueAsNumber});}}></label>
+              <label class="stack">Platformer gravity<input type="number" min="-100" max="100" step="any" value={defaults.gravity??platformGravity}
+                onchange={e=>{const input=e.currentTarget;if(input.validity.valid&&Number.isFinite(input.valueAsNumber))set(project,'roomDefaults',{...defaults,gravity:input.valueAsNumber});}}></label>
+              <label class="stack">Camera bottom inset (tiles)<input type="number" min="0" max="1023" step="1" value={defaults.cameraBottomInset??0}
+                onchange={e=>{const input=e.currentTarget;if(input.validity.valid&&Number.isInteger(input.valueAsNumber))set(project,'roomDefaults',{...defaults,cameraBottomInset:input.valueAsNumber});}}></label>
+              <label class="stack">Room borders<select value={defaults.border??''}
+                onchange={e=>set(project,'roomDefaults',{...defaults,border:e.currentTarget.value||undefined})}>
+                <option value="">By room view</option><option value="sides">Side walls</option><option value="closed">All four walls</option><option value="open">Open</option>
+              </select></label>
+              <label class="stack">Background color<input type="color" value={defaults.background??'#101a23'}
+                onchange={e=>set(project,'roomDefaults',{...defaults,background:e.currentTarget.value})}></label>
+              <SearchSelect label="Shader" value={defaults.shader?.kind??'none'}
+                options={[{value:'none',label:'None'},...Object.entries(roomShaders).map(([value,label])=>({value,label}))]}
+                onChange={value=>set(project,'roomDefaults',{...defaults,shader:{kind:value}})}/>
+            </div>
+            <SearchSelect label="Background image" value={defaults.backgroundImage??''}
+              options={[{value:'',label:'None'},...artFiles.filter(file=>!art[file]?.error).map(value=>({value,label:value.split('/').at(-1)}))]}
+              onChange={value=>set(project,'roomDefaults',{...defaults,backgroundImage:value})}/>
+            {#each [['music','Music'],['ambience','Ambient sound']] as [key,label]}
+              <SearchSelect {label} value={defaults[key]??''}
+                options={[{value:'',label:'None'},...Object.keys(project.audio??{}).map(value=>({value,label:value}))]}
+                onChange={value=>set(project,'roomDefaults',{...defaults,[key]:value})}/>
             {/each}
-            {#each Object.entries(project.flags??{}) as [id,value]}
-              <label class="check"><input type="checkbox" checked={value} onchange={e=>set(project.flags,id,e.currentTarget.checked)}>{project.variableLabels?.flag?.[id]??id}</label>
-            {/each}
-
-          {:else if gameSection==='Settings'}
+          {:else if gameSection==='Project assets'}
             <div class="stack cover-setting">
               <span>Cartridge cover art</span>
               <div class="row">
@@ -1131,41 +1162,6 @@
               <label>Layer name<input value={collisionLayers[collisionLayer]} maxlength="45"
                 onchange={event=>set(project.collisionLayers??={},collisionLayer,event.currentTarget.value.trim())}></label>
             </div>
-          {:else if gameSection==='Camera'}
-            <label class="stack">Default camera target<select value={String(project.camera?.groupCamera??false)}
-              onchange={event=>set(project.camera??={},'groupCamera',event.currentTarget.value==='true')}>
-              <option value="false">Player 1</option><option value="true">All players</option>
-            </select></label>
-          {:else if gameSection==='Display'}
-            <label class="stack">Resolution<select aria-label="Resolution" value={project.camera?.resolution?'fixed':'adaptive'}
-              onchange={event=>setResolutionMode(event.currentTarget.value)}>
-              <option value="adaptive">Adapt to window</option>
-              <option value="fixed">Fixed</option>
-            </select></label>
-            {#if project.camera?.resolution}
-              <div class="pair">
-                {#each ['Width (px)','Height (px)'] as label,axis}
-                  <label class="stack">{label}<input type="number" min="64" max="512" step="1"
-                    value={project.camera.resolution[axis]} onchange={event=>setResolutionAxis(axis,event.currentTarget)}></label>
-                {/each}
-              </div>
-            {:else}
-              <div class="pair">
-                {#each [['min_width','Minimum width',128,128],['min_height','Minimum height',128,128],['max_width','Maximum width',512,128],['max_height','Maximum height',512,128],['zoom','Pixel zoom',2,1]] as [key,label,fallback,min]}
-                  {@const axis=key.split('_')[1]}
-                  {@const lower=key.startsWith('max_')?project.camera?.['min_'+axis]??128:min}
-                  {@const upper=key==='zoom'?8:key.startsWith('min_')?project.camera?.['max_'+axis]??512:512}
-                  <label class="stack">{label}<input type="number" min={lower} max={upper} value={project.camera?.[key]??fallback} onchange={e=>{
-                    const value=e.currentTarget.valueAsNumber;
-                    if(Number.isInteger(value)&&value>=lower&&value<=upper)set((project.camera??={}),key,value);
-                    else e.currentTarget.value=project.camera?.[key]??fallback;
-                  }}></label>
-                {/each}
-              </div>
-            {/if}
-            <label class="stack">HUD minimap<select value={project.minimap??'off'} onchange={event=>set(project,'minimap',event.currentTarget.value)}>
-              <option value="off">Off</option><option value="world">Whole world</option><option value="explored">Explored rooms</option>
-            </select></label>
           {/if}
         </section>
       {:else if tab==='actors'||tab==='assets'}
@@ -1181,7 +1177,7 @@
           {#if assetKind==='source'}
             <div class="field-row"><label>Find source files<input type="search" bind:value={sourceFilter}></label>
               <button onclick={()=>sourcePicker.click()}>Import file…</button>
-              <input hidden type="file" bind:this={sourcePicker} accept=".ase,.aseprite,.png,.wav,.qoa,.ogg,.opus" onchange={async e=>{
+              <input hidden type="file" bind:this={sourcePicker} accept=".ase,.aseprite,.png,.wav,.qoa,.ogg,.oga,.opus,.mid,.midi,.sf2" onchange={async e=>{
                 const input=e.currentTarget,file=input.files[0];if(!file)return;
                 try{const r=await fetch('./api/import?name='+encodeURIComponent(file.name),{method:'POST',body:file});const result=await r.json();if(!r.ok)throw Error(result.error);recordFile(result.edit);await checkAssets();}
                 catch(err){error=err.message;}finally{input.value='';}
@@ -1192,10 +1188,20 @@
             <h3>{assetKind==='audio'?'Sounds':assetKind==='tile'?'Tiles':'Entities'}</h3>
             <button onclick={()=>openAssets(assetKind,true)}><Plus size={16}/>New {assetLabel}…</button>
           </div>
+          {#if assetKind==='tile'&&tileId&&tileArt[tileId]?.length}
+            {@const variant=Math.min(Number(editTileVariant),tileArt[tileId].length-1)}
+            <div class="row">
+              <SearchSelect label="Tile script variant" value={String(variant)}
+                options={tileArt[tileId].map((_,index)=>({value:String(index),label:'Variant '+(index+1)}))}
+                onChange={value=>editTileVariant=value}/>
+              <button onclick={()=>openTileScript(tileId,variant)}>Edit tile script</button>
+            </div>
+          {/if}
           {#if assetKind==='audio'}
             {#each Object.entries(project.audio??{}) as [id,file]}
               {@const source=typeof file==='string'?file:file.source}
               <div class="audio-line row"><strong>{file.title??id}</strong> <small>{source}</small>
+                {#if file.soundFont}<small>{file.soundFont.split('/').at(-1)}</small>{/if}
                 {#if /\.wav$/i.test(source)}<label class="check"><input type="checkbox" checked={typeof file==='string'||file.compress!==false}
                   onchange={e=>toggleCompression(id,e.currentTarget.checked)}> QOA</label>{/if}
               </div>
@@ -1211,7 +1217,7 @@
             {#if inspector}
               {#if assetKind==='tile'}
               <label class="stack">Active flag<select value={inspector.flag??''} onchange={e=>set(inspector,'flag',e.currentTarget.value)}>
-                <option value="">Always active</option>{#each Object.keys(project.flags??{}) as flag}<option>{flag}</option>{/each}
+                <option value="">Always active</option>{#each Object.keys(gameFlags) as flag}<option>{flag}</option>{/each}
               </select></label>
               {#if inspector.flag}<label class="check"><input type="checkbox" checked={inspector.when??true} onchange={e=>set(inspector,'when',e.currentTarget.checked)}> Flag must be on</label>{/if}
               {/if}
@@ -1231,49 +1237,16 @@
               {:else}
                 <div class="record-form"><label>Player<select bind:value={placeAs}><option value="">Choose a player</option>{#each [0,1,2,3] as slot}<option disabled={room?.entities.some(e=>e.player===slot)} value={String(slot)}>Player {slot+1}</option>{/each}</select></label>
                 <button disabled={placeAs===''||!room||room.entities.some(e=>e.player===Number(placeAs))} onclick={()=>{placementSprite=spriteId;mapTool='spawn';openTab('room');}}>Place player in room</button></div>
-                <Sections labels={['Appearance','Lifecycle','Combat','Particles']} bind:value={spriteSection}/>
-                {#if spriteSection==='Appearance'}
-                  <div class="pair">
-                    <label class="stack">Visual layer <input type="number" value={sprite.layer??0} onchange={e=>set(sprite,'layer',e.currentTarget.valueAsNumber)}></label>
-                    <label class="stack">Starting animation <select value={sprite.animation??''} onchange={e=>set(sprite,'animation',e.currentTarget.value)}>
-                      <option value="">Default</option>
-                      {#each (art[sprite.source]?.tags??[]).filter(tag=>tag!=='default') as tag}<option value={tag}>{tag}</option>{/each}
-                    </select></label>
-                  </div>
-                {:else if spriteSection==='Lifecycle'}
-                  <SearchSelect label="Spawn when flag" value={sprite.flag??''}
-                    options={[{value:'',label:'Always'},...blockReferences.flags.map(value=>({value,label:value}))]}
-                    onChange={value=>set(sprite,'flag',value)}/>
-                  {#if sprite.flag}<label class="check"><input type="checkbox" checked={sprite.when??true}
-                    onchange={e=>set(sprite,'when',e.currentTarget.checked)}> Flag must be on</label>{/if}
-                  <RespawnSettings rule={sprite.respawn} flags={blockReferences.flags} onChange={value=>set(sprite,'respawn',value)}/>
-                  <label class="check"><input type="checkbox" checked={sprite.rememberState??false}
-                    onchange={e=>set(sprite,'rememberState',e.currentTarget.checked)}> Remember state between room visits</label>
-                  <label class="check"><input type="checkbox" checked={sprite.alwaysActive??false}
-                    onchange={e=>set(sprite,'alwaysActive',e.currentTarget.checked)}> Run scripts off camera</label>
-                  <ComponentPicker components={componentLabels} selected={sprite.components??[]} onCreate={createComponent} onChange={value=>set(sprite,'components',value)}/>
-                {:else if spriteSection==='Combat'}
-                  <div class="pair">
-                    <label class="stack">Team <input type="number" value={sprite.team??0} onchange={e=>set(sprite,'team',e.currentTarget.valueAsNumber)}></label>
-                    <label class="stack">Projectile <select value={sprite.projectile??''} onchange={e=>set(sprite,'projectile',e.currentTarget.value)}>
-                      <option value="">Default</option>{#each Object.keys(project.sprites??{}).filter(id=>id!==spriteId) as id}<option value={id}>{id}</option>{/each}
-                    </select></label>
-                  </div>
-                {:else}
-                  <label class="stack">Emitter<select value={sprite.emitter?.effect??''} onchange={e=>set(sprite,'emitter',e.currentTarget.value?{effect:e.currentTarget.value,rate:sprite.emitter?.rate??16}:'')}>
-                    <option value="">None</option>{#each effects as effect}<option>{effect}</option>{/each}
-                  </select></label>
-                  {#if sprite.emitter}<label class="stack">Particles per second<input type="number" min="1" max="240" value={sprite.emitter.rate} onchange={e=>{
-                    const n=e.currentTarget.valueAsNumber;if(Number.isInteger(n)&&n>=1&&n<=240)set(sprite,'emitter',{...sprite.emitter,rate:n});
-                  }}></label>{/if}
-                  {#if sprite.emitter}<div class="pair">
-                    {#each ['X','Y'] as axis,index}<label class="stack">Particle offset {axis}<input type="number" min="-4096" max="4096" step="any" value={sprite.emitter.offset?.[index]??0} onchange={event=>{
-                      const value=event.currentTarget.valueAsNumber;
-                      if(!Number.isFinite(value)||Math.abs(value)>4096)return;
-                      const offset=[...(sprite.emitter.offset??[0,0])];offset[index]=value;set(sprite,'emitter',{...sprite.emitter,offset});
-                    }}></label>{/each}
-                  </div>{/if}
-                {/if}
+                <SearchSelect label="Spawn when flag" value={sprite.flag??''}
+                  options={[{value:'',label:'Always'},...blockReferences.flags.map(value=>({value,label:value}))]}
+                  onChange={value=>set(sprite,'flag',value)}/>
+                {#if sprite.flag}<label class="check"><input type="checkbox" checked={sprite.when??true}
+                  onchange={e=>set(sprite,'when',e.currentTarget.checked)}> Flag must be on</label>{/if}
+                <label class="check"><input type="checkbox" checked={sprite.rememberState??false}
+                  onchange={e=>set(sprite,'rememberState',e.currentTarget.checked)}> Remember state between room visits</label>
+                <label class="check"><input type="checkbox" checked={sprite.alwaysActive??false}
+                  onchange={e=>set(sprite,'alwaysActive',e.currentTarget.checked)}> Run scripts off camera</label>
+                <ComponentPicker components={componentLabels} selected={sprite.components??[]} onCreate={createComponent} onChange={value=>set(sprite,'components',value)}/>
               {/if}
             {/if}
           {/if}
@@ -1290,9 +1263,8 @@
           {/each}
         </div>
         {#if roomPanel==='room'}
-          <Sections labels={['General','Physics','Rendering','Camera','Audio','Shader']} bind:value={roomSection}/>
           <button class="small-button" onclick={openRoomScript}>Open room script</button>
-          {#if roomSection==='General'}<div class="row start-room">
+          <div class="row start-room">
             {#if (project.start??Object.keys(project.rooms)[0])===roomId}<small>Starting room</small>
             {:else}<button class="small-button" onclick={()=>set(project,'start',roomId)}>Set as starting room</button>{/if}
           </div>
@@ -1301,72 +1273,15 @@
             <option value="platformer">Platformer</option><option value="top_down">Top-down</option>
           </select></label>
           <div class="row"><span>{room.cols} × {room.rows} tiles</span><button onclick={openResize}>Resize room…</button></div>
-          {:else if roomSection==='Camera'}
-            <label class="stack">Default camera target<select value={room.groupCamera==null?'':String(room.groupCamera)}
-              onchange={event=>{const value=event.currentTarget.value;setRoom('groupCamera',value===''?'':value==='true');}}>
-              <option value="">Game default ({project.camera?.groupCamera?'all players':'player 1'})</option>
-              <option value="false">Player 1</option><option value="true">All players</option>
-            </select></label>
-            <label class="stack">Default camera zoom (×)
-              <input type="number" min="0.25" max="4" step="any" value={room.cameraZoom??1} disabled={busy}
-                onchange={e=>setCameraZoom(e.currentTarget)}>
-            </label>
-            <label class="stack" title="Number of tile rows below the camera’s bottom edge">Camera bottom inset (tiles)
-              <input type="number" min="0" max={room.rows-1} step="1" value={room.cameraBottomInset??0} disabled={busy}
-                onchange={event=>{
-                  const input=event.currentTarget,value=input.valueAsNumber;
-                  if(input.value==='')setRoom('cameraBottomInset','');
-                  else if(input.validity.valid&&Number.isInteger(value))setRoom('cameraBottomInset',value||'');
-                  else input.value=room.cameraBottomInset??0;
-                }}>
-            </label>
-          {:else if roomSection==='Physics'}
-            {#if roomView==='platformer'}
-              <label class="stack">Gravity <input type="number" min="-100" max="100" step="any" value={room.gravity ?? platformGravity} onchange={e=>setRoom('gravity',e.currentTarget.valueAsNumber)}></label>
-            {/if}
-            <label class="stack">Room borders <select value={roomBorder(room,roomView==='top_down')} onchange={e=>setRoom('border',e.currentTarget.value)}>
-              <option value="sides">Side walls</option><option value="closed">All four walls</option><option value="open">Open</option>
-            </select></label>
-          {:else if roomSection==='Shader'}
-            <label class="stack">Room shader<select value={room.shader?.kind??'none'} onchange={e=>setRoom('shader',{...room.shader,kind:e.currentTarget.value,strength:room.shader?.strength??(atmospherePresets.includes(e.currentTarget.value)?55:35)})}>
-              <option value="none">None</option>{#each Object.entries(roomShaders) as [value,label]}<option {value}>{label}</option>{/each}
-            </select></label>
-            {#if room.shader && room.shader.kind!=='none'}
-              {#if !['ripple','hd',...atmospherePresets].includes(room.shader.kind)}<label class="stack">Color<input type="color" value={room.shader.color??'#000000'} onchange={e=>setRoom('shader',{...room.shader,color:e.currentTarget.value})}></label>{/if}
-              <label class="stack">Strength ({room.shader.strength??35}%)<input type="range" min="0" max="100" value={room.shader.strength??35} onchange={e=>setRoom('shader',{...room.shader,strength:e.currentTarget.valueAsNumber})}></label>
-              {#if ['scanlines','grid'].includes(room.shader.kind)}
-                <label class="stack">Spacing ({room.shader.spacing??3} px)<input type="range" min="2" max="12" value={room.shader.spacing??3} onchange={e=>setRoom('shader',{...room.shader,spacing:e.currentTarget.valueAsNumber})}></label>
-              {:else if room.shader.kind==='ripple'}
-                <label class="stack">Wavelength ({room.shader.wavelength??32} px)<input type="range" min="8" max="128" value={room.shader.wavelength??32} onchange={e=>setRoom('shader',{...room.shader,wavelength:e.currentTarget.valueAsNumber})}></label>
-                <label class="stack">Speed ({room.shader.speed??1} cycles/s)<input type="range" min="0" max="8" value={room.shader.speed??1} onchange={e=>setRoom('shader',{...room.shader,speed:e.currentTarget.valueAsNumber})}></label>
-              {:else if room.shader.kind==='vignette'}
-                <label class="stack">Clear radius ({room.shader.radius??55}%)<input type="range" min="0" max="95" value={room.shader.radius??55} onchange={e=>setRoom('shader',{...room.shader,radius:e.currentTarget.valueAsNumber})}></label>
-              {/if}
-            {/if}
-          {:else if roomSection==='Rendering'}
-            <label class="stack">Background color <input type="color" value={room.background??'#171829'} onchange={e=>setRoom('background',e.currentTarget.value)}></label>
-            <div class="stack asset-source">
-              <SearchSelect label="Background image" value={room.backgroundImage??''} disabled={busy||importingBackground}
-                options={[{value:'',label:'None'},...artFiles.filter(file=>!art[file]?.error).map(value=>({value,label:value.split('/').at(-1)}))]}
-                onChange={value=>setRoom('backgroundImage',value)}/>
-              <button aria-label="Browse for background image" disabled={busy||importingBackground}
-                onclick={()=>backgroundPicker.click()}>Browse…</button>
-              <input hidden type="file" aria-label="Background image file" bind:this={backgroundPicker} accept=".png,.ase,.aseprite"
-                onchange={e=>importBackground(e.currentTarget)}>
-            </div>
-            {#if room.backgroundImage}<label class="stack">Background scroll ({Math.round((room.backgroundParallax??1)*100)}%)
-              <input type="range" min="0" max="100" value={(room.backgroundParallax??1)*100}
-                title="0% stays fixed to the screen. 100% moves with the room."
-                onchange={e=>setRoom('backgroundParallax',e.currentTarget.valueAsNumber/100)}>
-            </label>{/if}
-              <label class="check"><input type="checkbox" checked={room.ySort??(roomView==='top_down')} onchange={e=>setRoom('ySort',e.currentTarget.checked)}> Draw lower sprites in front</label>
-          {:else if roomSection==='Audio'}
-            {#each [['music','Music'],['ambience','Ambient sound']] as [key,label]}
-              <label class="stack">{label}<select value={room[key]??''} onchange={e=>setRoom(key,e.currentTarget.value)}>
-                <option value="">None</option>{#each Object.keys(project.audio??{}) as id}<option value={id}>{id}</option>{/each}
-              </select></label>
-            {/each}
-          {/if}
+          <div class="stack asset-source">
+            <SearchSelect label="Background image" value={roomBackground??''} disabled={busy||importingBackground}
+              options={[{value:'',label:'None'},...artFiles.filter(file=>!art[file]?.error).map(value=>({value,label:value.split('/').at(-1)}))]}
+              onChange={async value=>{try{await setRoomBackground(roomId,value);}catch(err){error=err.message;}}}/>
+            <button aria-label="Browse for background image" disabled={busy||importingBackground}
+              onclick={()=>backgroundPicker.click()}>Browse…</button>
+            <input hidden type="file" aria-label="Background image file" bind:this={backgroundPicker} accept=".png,.ase,.aseprite"
+              onchange={e=>importBackground(e.currentTarget)}>
+          </div>
         {:else if roomPanel==='layers'}
           <div class="heading row mini"><h3>Draw order</h3><button class="small-button" disabled={busy} onclick={addLayer}>Add layer</button></div>
           {#each sortedLayers as {layer:item,index}}
@@ -1378,7 +1293,7 @@
             <label class="stack">Layer name <input value={layer.name} onchange={e=>changeLayer('name',e.currentTarget.value)}></label>
             <label class="check"><input type="checkbox" checked={layer.collidable} onchange={e=>changeLayer('collidable',e.currentTarget.checked)}> Enable collision</label>
             <label class="stack">Layer flag<select value={layer.flag??''} onchange={e=>changeLayer('flag',e.currentTarget.value)}>
-              <option value="">Always active</option>{#each Object.keys(project.flags??{}) as flag}<option>{flag}</option>{/each}
+              <option value="">Always active</option>{#each Object.keys(gameFlags) as flag}<option>{flag}</option>{/each}
             </select></label>
             {#if layer.flag}<label class="check"><input type="checkbox" checked={layer.when??true} onchange={e=>changeLayer('when',e.currentTarget.checked)}> Flag must be on</label>{/if}
             <label class="stack">Layer order <input type="number" min="-10000" max="10000" value={layer.order??layerIndex} onchange={e=>{
@@ -1483,13 +1398,23 @@
             options={[...new Set([...(importFile?[importFile.name]:[]),...sources])].map(value=>({value,label:value.split('/').at(-1)}))}
             onChange={value=>{if(value!==importFile?.name)selectSource(value);}} disabled={busy}/>
           <button type="button" disabled={busy} onclick={()=>filePicker.click()}>Browse device…</button>
-          <input hidden type="file" bind:this={filePicker} accept={createKind==='audio'?'.wav,.qoa,.ogg,.opus':'.ase,.aseprite,.png'}
+          <input hidden type="file" bind:this={filePicker} accept={createKind==='audio'?'.wav,.qoa,.ogg,.oga,.opus,.mid,.midi':'.ase,.aseprite,.png'}
             onchange={event=>{const file=event.currentTarget.files[0];if(file)selectSource(file.name,file);event.currentTarget.value='';}}>
         </div>
+        {#if midiSource}
+          <div class="row asset-source">
+            <SearchSelect label="SoundFont" value={newSoundFont}
+              options={[...new Set([...(soundFontFile?[soundFontFile.name]:[]),...soundFonts])].map(value=>({value,label:value.split('/').at(-1)}))}
+              onChange={value=>{if(value!==soundFontFile?.name){newSoundFont=value;soundFontFile=null;}}} disabled={busy}/>
+            <button type="button" disabled={busy} onclick={()=>soundFontPicker.click()}>Browse SoundFonts…</button>
+            <input hidden type="file" accept=".sf2" bind:this={soundFontPicker}
+              onchange={event=>{const file=event.currentTarget.files[0];if(file){soundFontFile=file;newSoundFont=file.name;}event.currentTarget.value='';}}>
+          </div>
+        {/if}
         {#if assetError}<p class="error" role="alert">{assetError}</p>{/if}
         <div class="dialog-actions">
           <button type="button" disabled={busy} onclick={()=>addForm=false}>Cancel</button>
-          <button class="primary" disabled={busy||!newSource}>{busy?'Creating…':'Create'}</button>
+          <button class="primary" disabled={busy||!newSource||midiSource&&!newSoundFont}>{busy?'Creating…':'Create'}</button>
         </div>
       </form>
     </Modal>
@@ -1576,8 +1501,6 @@
   .audio-line{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.32rem;font-size:.78rem;}
   .start-room{margin-bottom:.15rem;}
   .asset-name{font-size:.85rem;color:var(--accent);margin-bottom:.6rem;}
-  .variable input{max-width:9rem;margin-left:auto;}
-  .variable{margin-top:.45rem;}
   .asset-source{align-items:end;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.45rem;}
   .cover-setting{margin-bottom:.65rem}
   .cover-preview{width:4rem;height:4rem;object-fit:contain;background:var(--well);border:1px solid var(--line)}

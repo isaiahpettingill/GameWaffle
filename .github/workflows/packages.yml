@@ -274,9 +274,6 @@ jobs:
           if [[ ! -d "$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm" ]]; then
             "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018"
           fi
-          python3 -m venv "$RUNNER_TEMP/android-check"
-          "$RUNNER_TEMP/android-check/bin/python" -m pip install --disable-pip-version-check Pillow
-          echo "$RUNNER_TEMP/android-check/bin" >> "$GITHUB_PATH"
       - name: Enable emulator acceleration
         if: inputs.launch_packages || needs.version.outputs.tag != ''
         run: sudo chmod a+rw /dev/kvm

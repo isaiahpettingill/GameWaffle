@@ -6,6 +6,9 @@ import {homedir} from 'node:os';
 import {zipSync} from 'fflate';
 import {projectStore} from './project-store.mjs';
 import {projectBasename} from './resource-name.mjs';
+import {encodeCbor} from './cartridge.mjs';
+import {gameScriptPath,initialGameScript} from './game-script.mjs';
+import {initialRoomScript,roomScriptPath} from './room-script.mjs';
 
 export async function launch(port,open){
   const home=join(homedir(),'GameWaffle');
@@ -90,11 +93,14 @@ export async function launch(port,open){
           title=name;
           const view=form.get('view')==='top_down'?'top_down':'platformer';
           const room={title:'First room',cols:24,rows:16,view,entities:[],layers:[{name:'Ground',order:0,collidable:true,cells:[]}]};
-          const manifest=JSON.stringify({name,start:'room',tileSize:16,sprites:{},tiles:{},audio:{},rooms:{room}},null,2);
+          const settings={name,start:'room',tileSize:16,sprites:{},tiles:{},audio:{},rooms:{room},gameScript:gameScriptPath};
+          const manifest=JSON.stringify(settings,null,2);
+          const script=encodeCbor(initialGameScript(settings,{examples:true}));
+          const roomScript=encodeCbor(initialRoomScript(room));
           const archive=form.get('storage')==='archive';
           const base=projectBasename(name);
           const occupied=new Set((await readdir(destination)).map(entry=>entry.toLowerCase()));
-          const data=archive?zipSync({'project.json':Buffer.from(manifest)}):null;
+          const data=archive?zipSync({'project.json':Buffer.from(manifest),[gameScriptPath]:script,[roomScriptPath('room')]:roomScript}):null;
           for(let suffix=1;;suffix++){
             const filename=base+(suffix>1?'-'+suffix:'')+(archive?'.waffleproj':'');
             if(occupied.has(filename))continue;
@@ -110,6 +116,9 @@ export async function launch(port,open){
           if(!archive){
             await mkdir(join(project,'assets'));
             await mkdir(join(project,'scripts'));
+            await writeFile(join(project,gameScriptPath),script,{flag:'wx'});
+            await mkdir(join(project,'scripts','rooms'));
+            await writeFile(join(project,roomScriptPath('room')),roomScript,{flag:'wx'});
             await writeFile(join(project,'project.json'),manifest,{flag:'wx'});
           }
         }

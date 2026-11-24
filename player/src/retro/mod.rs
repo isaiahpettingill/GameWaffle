@@ -187,9 +187,10 @@ impl Core {
                 ports[port] && host.input.is_some_and(|f| f(port as u32, PAD, 0, id) != 0)
             }))
         });
+        self.game.runtime.set_connected_players(ports.iter().enumerate().fold(1, |mask, (slot, enabled)| mask | (u8::from(*enabled) << slot)));
         self.game.runtime.step_inputs(states)?;
         if let Some(video) = host.video {
-            self.video.frame(&self.game, video)?;
+            self.video.frame(&self.game, video, host.env)?;
         }
         let mut pcm = [0; 1600];
         self.audio.frame(&self.game, &mut pcm);

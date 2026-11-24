@@ -1,13 +1,13 @@
 const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
 
-export function cameraView(config,room,atlas,window,focus,zoom){
+export function cameraView(config,room,atlas,window,focus,zoom,cameraHeight=room.cameraHeight){
   const resolution=config.resolution?.map(axis=>clamp(axis,64,512));
   const fitting=(pixels,min,max)=>{
     min=clamp(min??128,128,512);
     return clamp(Math.floor(pixels/Math.max(1,config.zoom??2)),min,clamp(max??512,min,512));
   };
   const fullHeight=Math.max(1,room.height);
-  const extent=[Math.max(1,room.width),clamp(room.cameraHeight??room.height,1,fullHeight)];
+  const extent=[Math.max(1,room.width),clamp(cameraHeight??room.height,1,fullHeight)];
   const [width,height]=(resolution??[
     fitting(window[0],config.min_width,config.max_width),
     fitting(window[1],config.min_height,config.max_height),
@@ -19,7 +19,7 @@ export function cameraView(config,room,atlas,window,focus,zoom){
   };
   return {
     x:origin(focus[0],width,extent[0],seam('left',2),seam('right',2)),
-    y:origin(focus[1],height,extent[1],seam('up',3),room.cameraHeight==null?seam('down',3):0),
+    y:origin(focus[1],height,extent[1],seam('up',3),cameraHeight==null||cameraHeight===fullHeight?seam('down',3):0),
     width,height,resolution,
   };
 }

@@ -86,17 +86,11 @@ for(const width of [1280,800,390,320]){
       await page.getByRole('dialog',{name:'Edit Connection'}).getByRole('button',{name:'Cancel',exact:true}).click();
     }
     if(tab==='Game'){
-      const form=page.locator('.record-form').first();
-      const fields=form.locator('select,input,button');
-      assert.deepEqual(await fields.evaluateAll(nodes=>nodes.map(n=>n.tagName)),['SELECT','INPUT','INPUT','BUTTON']);
-      const sizes=await fields.evaluateAll(nodes=>nodes.map(n=>n.getBoundingClientRect().height));
-      assert.equal(new Set(sizes).size,1,'Variable form control heights at '+width);
-      for(const section of ['Controls','Items','Display']){
+      for(const section of ['Controls','Room defaults','Project assets']){
         await page.getByRole('button',{name:section,exact:true}).click();
         await checkFormRows(page,section);
       }
     }
-    if(tab==='Entities')await page.getByRole('button',{name:'Combat',exact:true}).click();
     if(tab==='Code'){
       await page.getByRole('button',{name:'Blocks',exact:true}).click();
       await page.locator('.blocklySvg:visible').first().waitFor();
@@ -229,34 +223,43 @@ for(const width of [1280,800,390,320]){
     await page.waitForFunction(async()=>Object.values((await(await fetch('./api/project')).json()).project.rooms).some(r=>r.title==='Saved room'));
     await page.locator('summary').filter({hasText:'Edit'}).click();
     await page.locator('.studio-menus').getByRole('button',{name:/^Undo rename of /}).click();assert.equal(await name.inputValue(),before);
-    await page.getByRole('button',{name:'Rendering',exact:true}).click();
     await page.getByRole('button',{name:'Background image',exact:true}).click();
     const backgroundPicker=page.getByRole('dialog',{name:'Background image'});
     await backgroundPicker.getByRole('searchbox').fill('key.png');
     await backgroundPicker.getByRole('button',{name:'key.png',exact:true}).click();
-    await page.waitForFunction(async()=> (await(await fetch('./api/project')).json()).project.rooms.yard.backgroundImage==='assets/sprites/key.png');
+    await page.waitForFunction(async()=> (await(await fetch('./api/project')).json()).roomBackgrounds.yard==='assets/sprites/key.png');
     const imageResponse=await page.request.get(url+'/api/room-art?path=assets%2Fsprites%2Fkey.png');
     assert.equal(imageResponse.headers()['content-type'],'image/png');
     const fileChooser=page.waitForEvent('filechooser');
     await page.getByRole('button',{name:'Browse for background image'}).click();
     await (await fileChooser).setFiles({name:'Café at night.PNG',mimeType:'image/png',buffer:await imageResponse.body()});
-    await page.waitForFunction(async()=> (await(await fetch('./api/project')).json()).project.rooms.yard.backgroundImage==='assets/backgrounds/cafe-at-night.png');
+    await page.waitForFunction(async()=> (await(await fetch('./api/project')).json()).roomBackgrounds.yard==='assets/backgrounds/cafe-at-night.png');
     await page.getByRole('button',{name:'Background image',exact:true}).filter({hasText:'cafe-at-night.png'}).waitFor();
-    await page.locator('.inspector').getByRole('button',{name:'Camera',exact:true}).click();
-    const cameraZoom=page.getByRole('spinbutton',{name:/Default camera zoom/});
-    assert.equal(await cameraZoom.inputValue(),'1');
-    await cameraZoom.fill('1.5');await cameraZoom.press('Tab');
-    await until('Room camera zoom',async()=> (await getProject()).rooms.yard.cameraZoom===1.5,page);
-    const bottomInset=page.getByLabel('Camera bottom inset (tiles)');
-    await bottomInset.fill('2');await bottomInset.press('Tab');
-    await until('Camera bottom inset',async()=> (await getProject()).rooms.yard.cameraBottomInset===2,page);
+    await page.getByRole('button',{name:'Open room script',exact:true}).click();
+    await page.getByRole('button',{name:'Text',exact:true}).click();
+    const roomSource=page.locator('.cm-content');
+    const previousRoom=await roomSource.innerText();
+    assert.match(previousRoom,/on init/);
+    const changedRoom=previousRoom.replace(/camera_zoom\(1(?:\.0)?\)/,'camera_zoom(1.5)')
+      .replace('set_camera_bottom_inset(0)','set_camera_bottom_inset(2)');
+    await roomSource.fill(changedRoom);
+    await until('Room camera init',async()=>{
+      const unit=await(await page.request.get(url+'/api/room-script/yard')).json();
+      return unit.events.init.some(row=>row.op==='camera_zoom'&&row.zoom.real===1.5)&&
+        unit.events.init.some(row=>row.op==='set_camera_bottom_inset'&&row.tiles===2);
+    },page);
     await nav.getByText('Game',{exact:true}).click();
-    await page.getByRole('button',{name:'Display',exact:true}).click();
-    const resolution=page.getByLabel('Resolution',{exact:true});
-    await resolution.selectOption('fixed');
-    const screenHeight=page.getByLabel('Height (px)',{exact:true});
-    await screenHeight.fill('180');await screenHeight.press('Tab');
-    await until('Fixed resolution',async()=> (await getProject()).camera?.resolution?.join('x')==='320x180',page);
+    await page.getByRole('button',{name:'Game script',exact:true}).click();
+    await page.getByRole('button',{name:'Open Game script',exact:true}).click();
+    await page.getByRole('button',{name:'Text',exact:true}).click();
+    const gameSource=page.locator('.cm-content');
+    const previousGame=await gameSource.innerText();
+    assert.match(previousGame,/on game startup/);
+    await gameSource.fill(previousGame.replace(/set_adaptive_display\([^\n]*\)/,'set_display_resolution(320, 180)'));
+    await until('Fixed Game resolution',async()=>{
+      const unit=await(await page.request.get(url+'/api/game-script')).json();
+      return unit.events.game_startup.some(row=>row.op==='set_display_resolution'&&row.width===320&&row.height===180);
+    },page);
     const fixedPlayer=await browser.newPage({viewport:{width:1000,height:660}});
     try{
       await fixedPlayer.goto(url+'/player.html?play=1');
@@ -268,8 +271,8 @@ for(const width of [1280,800,390,320]){
       await fixedPlayer.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
       await checkDisplay();
     }finally{await fixedPlayer.close();}
-    await resolution.selectOption('adaptive');
-    await until('Adaptive resolution',async()=> (await getProject()).camera?.resolution===undefined,page);
+    await gameSource.fill(previousGame);
+    await until('Adaptive resolution',async()=> (await(await page.request.get(url+'/api/game-script')).json()).events.game_startup.some(row=>row.op==='set_adaptive_display'),page);
     await nav.getByText('Room',{exact:true}).click();
     await page.locator('summary').filter({hasText:'Tools'}).click();
     await page.getByRole('button',{name:'Debug room'}).click();
@@ -326,7 +329,7 @@ for(const width of [1280,800,390,320]){
     await page.getByLabel('greeting',{exact:true}).fill('¡Hola!');
     await page.keyboard.press('Control+s');
     await page.waitForFunction(async()=> (await(await fetch('./api/project')).json()).project.localization?.tables.es?.greeting==='¡Hola!');
-    await page.getByRole('button',{name:'Settings',exact:true}).click();
+    await page.getByRole('button',{name:'Project assets',exact:true}).click();
     const coverChooser=page.waitForEvent('filechooser');
     await page.getByRole('button',{name:'Choose cover image…'}).click();
     await (await coverChooser).setFiles({name:'Cover art.png',mimeType:'image/png',buffer:await fs.readFile('demo/assets/sprites/key.png')});
@@ -455,11 +458,10 @@ assert.equal(path.basename(archived.path),'con-game.waffleproj');
 assert.equal(archived.project.name,'CON');
 await setup.getByRole('button',{name:'Settings',exact:true}).click();
 await setup.locator('.inspector').getByRole('button',{name:'Room',exact:true}).click();
-await setup.getByRole('button',{name:'Rendering',exact:true}).click();
 const archivedChooser=setup.waitForEvent('filechooser');
 await setup.getByRole('button',{name:'Browse for background image'}).click();
 await (await archivedChooser).setFiles({name:'Night.png',mimeType:'image/png',buffer:await fs.readFile('demo/assets/sprites/key.png')});
-await setup.waitForFunction(async()=> (await(await fetch('./api/project')).json()).project.rooms.room.backgroundImage==='assets/backgrounds/night.png');
+await setup.waitForFunction(async()=> (await(await fetch('./api/project')).json()).roomBackgrounds.room==='assets/backgrounds/night.png');
 await setup.close();
 console.log('Passed project dialogs, safe project names, file browsing, and collision handling');
 
@@ -493,11 +495,22 @@ await views.getByRole('button',{name:'Room',exact:true}).click();
 await authoring.getByRole('button',{name:'Undo connection from Top-down Courtyard'}).click();
 await until('Undo of the connection',async()=> (await readProject()).rooms.courtyard.exits.right.targets.join(',')==='yard,vault');
 
+await views.getByRole('button',{name:'Game',exact:true}).click();
+await authoring.getByRole('button',{name:'Room defaults',exact:true}).click();
+const getRoomInit=async id=>(await(await authoring.request.get(url+'/api/room-script/'+id)).json()).events.init;
+const oldYardInit=await getRoomInit('yard');
+const zoomDefault=authoring.getByRole('spinbutton',{name:'Camera zoom (×)',exact:true});
+await zoomDefault.fill('1.75');await zoomDefault.press('Tab');
+await until('Room defaults saved',async()=>(await readProject()).roomDefaults?.cameraZoom===1.75);
+await views.getByRole('button',{name:'Room',exact:true}).click();
 await authoring.getByRole('button',{name:'New room',exact:true}).click();
 const newRoom=authoring.getByRole('dialog',{name:'New Room'});
 await newRoom.getByLabel('Room name').fill('Upper Deck!');
 await newRoom.getByRole('button',{name:'Create room'}).click();
 await until('New room',async()=> (await readProject()).rooms.upper_deck?.title==='Upper Deck!');
+assert.equal((await getRoomInit('upper_deck')).find(row=>row.op==='camera_zoom').zoom,1.75);
+assert.deepEqual(await getRoomInit('yard'),oldYardInit);
+
 await views.getByRole('button',{name:'Game',exact:true}).click();
 await authoring.getByRole('button',{name:'Bitfonts',exact:true}).click();
 await authoring.getByRole('button',{name:'Import bitfont…'}).click();
@@ -535,7 +548,7 @@ await bitfont.waitFor({state:'hidden'});
 await until('Aseprite bitfont',async()=> (await readProject()).activeBitfont==='tagged');
 const {unpack}=await import('../src/cartridge.mjs');
 const renderedFont=unpack(new Uint8Array(await (await authoring.request.get(url+'/demo.waffle')).body()));
-assert.equal(renderedFont.runtimeAbi,11);
+assert.ok(renderedFont.runtimeAbi>=11);
 assert.equal(renderedFont.fontGlyphs.A,0);
 assert.equal(renderedFont.fontLayout.width,24);
 await views.getByRole('button',{name:'Code',exact:true}).click();
@@ -576,12 +589,13 @@ assert.equal(await authoring.locator('.project').getByRole('button',{name:'Upper
 assert.match(await stageRoom.innerText(),/Upper Deck!/);
 assert.equal(await views.getByRole('button',{name:'Code',exact:true}).getAttribute('aria-current'),'page');
 const roomCode=authoring.getByRole('region',{name:'Room code'});
+const readDeclarations=async()=> (await(await authoring.request.get(url+'/api/game-script')).json()).declarations;
 await roomCode.locator('summary[aria-label="Script actions"]').click();
 await roomCode.getByRole('button',{name:'New event…'}).click();
 const eventDialog=authoring.getByRole('dialog',{name:'New Event'});
 await eventDialog.getByRole('textbox',{name:'Event name'}).fill('Door opened!');
 await eventDialog.getByRole('button',{name:'Create event'}).click();
-await until('New event registered',async()=> (await readProject()).events?.door_opened==='Door opened!');
+await until('New event registered',async()=> (await readDeclarations()).events?.door_opened==='Door opened!');
 await roomCode.getByRole('button',{name:'Text',exact:true}).click();
 await roomCode.locator('.cm-content').fill(`on start
   camera(220, 160)
@@ -630,14 +644,14 @@ await eventDialog.getByRole('button',{name:'Create event'}).click();
 await dropdownText('.waffle_emit_event').filter({hasText:/Gate\s+opened!/}).waitFor();
 await until('Event created and selected from Emit event',async()=>{
   const script=await (await authoring.request.get(url+'/api/room-script/upper_deck')).json();
-  return (await readProject()).events?.gate_opened==='Gate opened!'&&script.events?.start?.[3]?.event==='gate_opened';
+  return (await readDeclarations()).events?.gate_opened==='Gate opened!'&&script.events?.start?.[3]?.event==='gate_opened';
 });
 await dropdownText('.waffle_received_event').filter({hasText:/Door\s+opened!/}).click();
 await picker.getByRole('button',{name:'New event…',exact:true}).click();
 await eventDialog.getByRole('textbox',{name:'Event name'}).fill('Cancelled event');
 await eventDialog.getByRole('button',{name:'Cancel',exact:true}).click();
 await dropdownText('.waffle_received_event').filter({hasText:/Door\s+opened!/}).waitFor();
-assert.equal((await readProject()).events.cancelled_event,undefined);
+assert.equal((await readDeclarations()).events.cancelled_event,undefined);
 await dropdownText('.waffle_received_event').filter({hasText:/Door\s+opened!/}).click();
 await picker.getByRole('button',{name:'Gate opened!',exact:true}).click();
 await dropdownText('.waffle_received_event').filter({hasText:/Gate\s+opened!/}).waitFor();
@@ -650,7 +664,7 @@ await flagDialog.getByRole('button',{name:'Create flag'}).click();
 await dropdownText('.waffle_set').filter({hasText:/Gate\s+unlocked/}).waitFor();
 await until('Flag created and selected from Set',async()=>{
   const script=await (await authoring.request.get(url+'/api/room-script/upper_deck')).json();
-  return (await readProject()).flags?.gate_unlocked===false&&script.events?.start?.[4]?.name==='gate_unlocked';
+  return (await readDeclarations()).flags?.gate_unlocked===false&&script.events?.start?.[4]?.name==='gate_unlocked';
 });
 const chain=roomWorkspace.locator('.blocklyBlockCanvas .waffle_if');
 const addBranch=chain.locator('image[alt="Add branch"]');

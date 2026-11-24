@@ -237,6 +237,10 @@ pub struct Spawn {
 
 #[derive(Clone, Deserialize)]
 pub struct Solid {
+    #[serde(default)]
+    pub border: u8,
+    #[serde(default)]
+    pub disabled: bool,
     #[serde(deserialize_with = "read_float")]
     pub x: f32,
     #[serde(deserialize_with = "read_float")]
@@ -271,6 +275,8 @@ pub struct Room {
     pub layout_key: String,
     #[serde(default)]
     pub group_camera: bool,
+    #[serde(default, rename = "groupCameraOverride")]
+    pub group_camera_override: Option<bool>,
     #[serde(default, rename = "cameraZoom")]
     pub camera_zoom: Option<f32>,
     #[serde(default)]
@@ -323,6 +329,8 @@ pub struct Menu {
 #[derive(Deserialize)]
 pub struct Game {
     #[serde(default)]
+    pub collections: crate::collections::Schema,
+    #[serde(default)]
     pub fonts: std::collections::BTreeSet<String>,
     #[serde(default)]
     pub events: std::collections::BTreeSet<String>,
@@ -340,6 +348,8 @@ pub struct Game {
     pub id: String,
     #[serde(default)]
     pub globals: BTreeMap<String, i64>,
+    #[serde(default, rename = "initialGlobals")]
+    pub initial_globals: BTreeMap<String, String>,
     #[serde(default)]
     pub flags: BTreeMap<String, bool>,
     pub start: String,
@@ -474,11 +484,44 @@ pub struct RoomSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_scroll: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub y_sort: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub music: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ambience: Option<String>,
+}
+
+#[derive(Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GameSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<crate::Camera>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimap: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_camera: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_controller_slot: Option<usize>,
+}
+
+impl GameSettings {
+    pub(crate) fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub(crate) fn valid(&self) -> bool {
+        self.display.is_none_or(crate::Camera::valid)
+            && self.minimap.as_deref().is_none_or(|mode| matches!(mode, "off" | "world" | "explored"))
+            && self.first_controller_slot.is_none_or(|slot| slot < 2)
+    }
 }
 
 impl RoomSettings {
@@ -495,6 +538,10 @@ impl RoomSettings {
                 .gravity
                 .is_none_or(|gravity| (-100.0..=100.0).contains(&gravity))
             && self.background.as_deref().is_none_or(Self::valid_color)
+            && self.background_image.as_ref().is_none_or(|path| path.len() <= 256)
+            && self.background_scroll.is_none_or(|scroll| (0.0..=1.0).contains(&scroll))
+            && self.camera_height.is_none_or(|height| (1..=4096).contains(&height))
+            && self.border.is_none_or(|border| matches!(border, 0 | 1 | 3))
             && self
                 .music
                 .iter()
@@ -569,6 +616,10 @@ pub struct HudText {
 
 #[derive(Serialize)]
 pub struct Snapshot<'a> {
+    #[serde(skip_serializing_if = "<[crate::drawing::Shape]>::is_empty")]
+    pub shapes: &'a [crate::drawing::Shape],
+    #[serde(rename = "gameSettings", skip_serializing_if = "GameSettings::is_default")]
+    pub game_settings: &'a GameSettings,
     #[serde(
         rename = "roomSettings",
         skip_serializing_if = "RoomSettings::is_default"

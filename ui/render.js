@@ -28,10 +28,46 @@ export function loadAtlas(atlas) {
   return images.get(atlas);
 }
 
+function drawShapes(ctx,shapes,hud,origin){
+  if(!shapes?.length)return;
+  ctx.save();
+  ctx.translate(-origin[0],-origin[1]);
+  const css=color=>'#'+color.toString(16).padStart(8,'0');
+  let fillColor=-1,strokeColor=-1,lineWidth=-1;
+  for(const shape of shapes){
+    if(shape.hud!==hud)continue;
+    const {kind,coords,fill,stroke,width}=shape;
+    const [x,y,a,b,c,d]=coords;
+    if(fillColor!==fill){ctx.fillStyle=css(fill);fillColor=fill;}
+    if(strokeColor!==stroke){ctx.strokeStyle=css(stroke);strokeColor=stroke;}
+    if(lineWidth!==width){ctx.lineWidth=width||1;lineWidth=width;}
+    if(kind==='rect'){
+      if(fill&255)ctx.fillRect(x,y,a,b);
+      if(width&&(stroke&255))ctx.strokeRect(x,y,a,b);
+      continue;
+    }
+    if(kind==='point'){
+      if(width&&(stroke&255)){ctx.fillStyle=css(stroke);ctx.fillRect(x-width/2,y-width/2,width,width);fillColor=-1;}
+      continue;
+    }
+    ctx.beginPath();
+    if(kind==='ellipse')ctx.ellipse(x,y,Math.abs(a)*.5,Math.abs(b)*.5,0,0,2*Math.PI);
+    else{
+      ctx.moveTo(x,y);ctx.lineTo(a,b);
+      if(kind==='triangle'){ctx.lineTo(c,d);ctx.closePath();}
+    }
+    if(kind!=='line'&&(fill&255))ctx.fill();
+    if(width&&(stroke&255))ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawMinimap(ctx,map,snapshot,width,height){
   if(!map || snapshot.menu || snapshot.dialog)return;
+  const mode=snapshot.gameSettings?.minimap??map.mode;
+  if(mode==='off')return;
   const explored=new Set(snapshot.explored??[]);
-  const visible=new Map(Object.entries(map.rooms).filter(([id])=>map.mode==='world'||explored.has(id)));
+  const visible=new Map(Object.entries(map.rooms).filter(([id])=>mode==='world'||explored.has(id)));
   if(!visible.size)return;
   const rooms=[...visible.values()];
   let left=Infinity,top=Infinity,right=-Infinity,bottom=-Infinity;
@@ -67,7 +103,7 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
   const settings=snapshot.roomSettings??{};
   const player=snapshot.actors.find(actor=>actor.player===0);
   const focus=snapshot.focus??(player?[player.x,player.y]:[room.width/2,room.height/2]);
-  const {x,y,width,height,resolution}=cameraView(cart.camera??{},room,atlas,[box.width,box.height],focus,settings.zoom);
+  const {x,y,width,height,resolution}=cameraView(snapshot.gameSettings?.display??cart.camera??{},room,atlas,[box.width,box.height],focus,settings.zoom,settings.cameraHeight);
   const shader=settings.shader??room.shader;
   const hd=shader?(shader.kind==='hd'?shader.strength:0):room.hd;
   const ripple=shader?(shader.kind==='ripple'&&shader.strength>0?[Math.ceil(shader.strength*.12),32,1]:null):room.ripple;
@@ -87,7 +123,9 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
   ctx.translate(-x,-y);
   const image = atlasImages[snapshot.room];
   if (!image) return;
-  const render = [...room.baked];
+  const render = settings.backgroundImage==null?room.baked.slice():room.baked.filter(layer=>layer.image!=='room/background');
+  if(settings.backgroundImage)render.push({image:'room/background/'+settings.backgroundImage,layer:-10001,
+    width:room.width,height:room.height,parallax:settings.backgroundScroll});
   for(const actor of snapshot.actors){
     if(actor.shadow?.placement==='ground')render.push({layer:actor.layer,order:1,groundShadow:actor.shadow});
     render.push({...actor,order:2,depth:actor.image.startsWith('sprite/')?actor.y+actor.height/2:-Infinity});
@@ -195,6 +233,7 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
       drawWeather(ctx,shader,width,height,snapshot.tick);
     }
   }
+  drawShapes(ctx,snapshot.shapes,false,[x,y]);
   if(scale===2){
     const gpu=postprocess(scene,width,height,hd);
     const pixels=gpu?null:ctx.getImageData(0,0,width,height).data;
@@ -207,7 +246,7 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false) {
       ctx.putImageData(new ImageData(new Uint8ClampedArray(result.buffer,result.byteOffset,result.length),width*2,height*2),0,0);
     }
   }
-  if(!showGrid){ctx.setTransform(scale,0,0,scale,0,0);drawMinimap(ctx,cart.minimap,snapshot,width,height);}
+  if(!showGrid){ctx.setTransform(scale,0,0,scale,0,0);drawShapes(ctx,snapshot.shapes,true,[0,0]);drawMinimap(ctx,cart.minimap,snapshot,width,height);}
   if (!showGrid && atlas.entries['ui/font']) {
     ctx.setTransform(scale,0,0,scale,0,0);
     const painters=new Map();

@@ -1,3 +1,4 @@
+import {validateCollections} from '../src/collections.mjs';
 import {EditorState} from '@codemirror/state';
 import {EditorView,keymap,lineNumbers,highlightActiveLine,highlightActiveLineGutter,drawSelection} from '@codemirror/view';
 import {history,historyKeymap,defaultKeymap,indentWithTab} from '@codemirror/commands';
@@ -53,7 +54,8 @@ export async function validateText(source,moduleName,registry){
     modules=await res.json();if(!res.ok)throw Error(modules.error);
   }
   try{
-    compileScript(unit,modules,undefined,registry);
+    const references=registry?.gameScript?{...registry,collections:validateCollections(unit.collections),events:{...registry.events,...unit.declarations?.events},flags:{...registry.flags,...unit.declarations?.flags}}:registry;
+    compileScript(unit,modules,undefined,references);
   }catch(err){Object.assign(err,locations.get(err.node));throw err;}
   return unit;
 }

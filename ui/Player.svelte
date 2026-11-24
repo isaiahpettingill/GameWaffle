@@ -135,14 +135,18 @@
       if (players > 1 && second[key]) result[1][second[key]] = true;
     }
     for (const key of [...fingers.values(),...taps]) if (key) result[0][key] = true;
-    const pads = [...(navigator.getGamepads?.() ?? [])].filter(Boolean).slice(0,players);
+    const first = Math.min(socket?players-1:3,snapshot?.gameSettings?.firstControllerSlot??0);
+    const pads = [...(navigator.getGamepads?.() ?? [])].filter(pad=>pad?.connected).slice(0,(socket?players:4)-first);
+    let connected=1;
     for (const [index,pad] of pads.entries()) {
-      const slot = pads.length === players ? index : Math.min(players - 1,index+1);
+      const slot = first+index;
+      connected|=1<<slot;
       for (const [i,button] of gamepad.entries()) if (pad.buttons[button]?.pressed) result[slot][buttons[i]] = true;
       for (const [i,on] of [pad.axes[1] < -.5,pad.axes[1] > .5,pad.axes[0] < -.5,pad.axes[0] > .5].entries()) {
         if (on) result[slot][buttons[i]] = true;
       }
     }
+    if(runtime&&!socket)runtime.set_connected_players(connected);
     return result;
   }
   function tick(now) {

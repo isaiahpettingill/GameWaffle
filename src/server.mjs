@@ -1,3 +1,4 @@
+import {validateCollections} from './collections.mjs';
 import {checkUpdate,update,exportDesktop,nativeTarget} from './desktop.mjs';
 import {parseScript,formatScript,locations} from './wafflescript.mjs';
 import {compileScript} from './script.mjs';
@@ -7,6 +8,9 @@ import {fileHistory} from './file-history.mjs';
 import {recoveryStore} from './recovery.mjs';
 import {projectStore} from './project-store.mjs';
 import {projectBasename} from './resource-name.mjs';
+import {gameScriptPath,initialGameScript,readGameScript} from './game-script.mjs';
+import {initialTileScript,tileScriptPath,tileStartsAnimated} from './tile-script.mjs';
+import {initialRoomScript,roomScriptPath} from './room-script.mjs';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { watch } from 'node:fs';
@@ -187,11 +191,13 @@ const server = createServer(async (req, res) => {
         const kind=url.searchParams.get('kind');
         const bitfont=kind==='font', background=kind==='background', cover=kind==='cover';
         const allowed=bitfont? /^[^\\/\x00-\x1f]+\.(yaff|ase|aseprite|png)$/i
-          : background||cover? /^[^\\/\x00-\x1f]+\.(ase|aseprite|png)$/i : /^[\w .-]+\.(png|ase|aseprite|wav|ogg|opus|qoa)$/i;
+          : background||cover? /^[^\\/\x00-\x1f]+\.(ase|aseprite|png)$/i : /^[^\\/\x00-\x1f]+\.(png|ase|aseprite|wav|ogg|oga|opus|qoa|mid|midi|sf2)$/i;
         if(!allowed.test(name??''))throw Error(background||cover?'Select a PNG or Aseprite image':'Select an image or sound file');
         const chunks=[];let size=0;
-        for await(const chunk of req){if((size+=chunk.length)>32*1024*1024)throw Error('File exceeds 32 MiB');chunks.push(chunk);}
-        const group=bitfont?'fonts':background?'backgrounds':cover?'covers':/\.(wav|ogg|opus|qoa)$/i.test(name)?'audio':kind==='tile'?'tiles':'sprites';
+        const midiAsset=/\.(mid|midi|sf2)$/i.test(name);
+        const limit=/\.sf2$/i.test(name)?64:32;
+        for await(const chunk of req){if((size+=chunk.length)>limit*1024*1024)throw Error(`File exceeds ${limit} MiB`);chunks.push(chunk);}
+        const group=bitfont?'fonts':background?'backgrounds':cover?'covers':/\.(wav|ogg|oga|opus|qoa|mid|midi|sf2)$/i.test(name)?'audio':kind==='tile'?'tiles':'sprites';
         let data=Buffer.concat(chunks),fontConfig;
         if(bitfont){
           ({data,fontConfig}=decodeCbor(data));
@@ -201,7 +207,7 @@ const server = createServer(async (req, res) => {
         const result=await change(async()=>{
           const files=new Map((await store.list('assets')).map(path=>[path.toLowerCase(),path]));
           const extension=extname(name);
-          const filename=bitfont||background||cover?projectBasename(name.slice(0,-extension.length))+extension.toLowerCase():name;
+          const filename=bitfont||background||cover||midiAsset?projectBasename(name.slice(0,-extension.length))+extension.toLowerCase():name;
           const base='assets/'+group+'/'+filename;
           if(bitfont)await inspectBitfont({...fontConfig,source:base},async()=>data);
           if(background||cover)await previewRoomArt(base,async()=>data);
@@ -238,11 +244,33 @@ const server = createServer(async (req, res) => {
         await mutation;
         const project=JSON.parse(await store.read('project.json','utf8'));
         explicitBehavior(project);
-        return send(res, 200, {path:root,project, assets:await discoverAssets(root,store), art:await describeArt(root,store), revision, previewKey});
+        const gameScript=await readGameScript(project,store.read);
+        return send(res, 200, {path:root,project, gameScript:gameScript&&{declarations:gameScript.declarations,constants:gameScript.constants,collections:gameScript.collections},
+          roomBackgrounds:cartridge?.roomPreviewBackgrounds??{}, assets:await discoverAssets(root,store), art:await describeArt(root,store), revision, previewKey});
       }
       if (url.pathname === '/api/project' && req.method === 'PUT') {
         const project = await jsonBody(req);
-        await change(() => recompile(project, undefined, () => store.save([['project.json',JSON.stringify(project,null,2)+'\n']])));
+        await change(async()=>{
+          const old=JSON.parse(await store.read('project.json','utf8'));
+          const files=[['project.json',JSON.stringify(project,null,2)+'\n']], scripts=new Map();
+          for(const [id,room] of Object.entries(project.rooms??{}))if(!Object.hasOwn(old.rooms,id)&&!room.script){
+            if(!/^[A-Za-z0-9_-]{1,64}$/.test(id))throw Error('Invalid room name');
+            const unit=initialRoomScript(room,project.roomDefaults);
+            scripts.set('room:'+id,unit);files.push([roomScriptPath(id),encodeCbor(unit)]);
+          }
+          const newAnimatedTiles=Object.fromEntries(Object.entries(project.tiles??{}).filter(([id,tile])=>
+            !Object.hasOwn(old.tiles??{},id)&&tileStartsAnimated(tile)));
+          if(Object.keys(newAnimatedTiles).length){
+            const variants=await previewTiles(newAnimatedTiles,project.tileSize??24,store.read);
+            for(const [id,previews] of Object.entries(variants)){
+              const unit=initialTileScript(newAnimatedTiles[id]);
+              for(let variant=0;variant<previews.variants.length;variant++){
+                scripts.set('tile:'+id+':'+variant,unit);files.push([tileScriptPath(id,variant),encodeCbor(unit)]);
+              }
+            }
+          }
+          await recompile(project,scripts,()=>store.save(files));
+        });
         return send(res, 200, {ok:true});
       }
       if(url.pathname==='/api/modules' && req.method==='GET'){
@@ -276,17 +304,22 @@ const server = createServer(async (req, res) => {
         const {imports,moduleName}=await jsonBody(req);return send(res,200,await loadModules({imports},store.read,Object.create(null),new Set(moduleName?[moduleName]:[])));
       }
       const match = url.pathname.match(/^\/api\/(script|room-script)\/([a-zA-Z0-9_-]+)$/);
-      if (match) {
-        const [,kind,id] = match;
-        const isRoom=kind==='room-script', collection=isRoom?'rooms':'sprites';
-        const defaultPath=`scripts/${collection}/${id}.cbor`;
+      const tileMatch=url.pathname.match(/^\/api\/tile-script\/([a-zA-Z0-9_-]+)\/(\d{1,4})$/);
+      const isTile=Boolean(tileMatch);
+      const isGame=url.pathname==='/api/game-script';
+      if (match || isGame || isTile) {
+        const kind=match?.[1],id=tileMatch?.[1]??match?.[2], variant=Number(tileMatch?.[2]);
+        const isRoom=kind==='room-script', collection=isRoom?'rooms':isTile?'tiles':'sprites';
+        const defaultPath=isGame?gameScriptPath:isTile?tileScriptPath(id,variant):`scripts/${collection}/${id}.cbor`;
+        if(isTile&&!cartridge.tilePreviews[id]?.[variant])throw Error('Choose a valid tile variant');
         if (req.method === 'GET') {
           await mutation;
           const project = JSON.parse(await store.read('project.json','utf8'));
-          if (!Object.hasOwn(project[collection],id)) return send(res, 404, {error:isRoom?'Unknown room':'Unknown entity type'});
-          const file = project[collection][id].script ?? defaultPath;
+          if (!isGame&&!Object.hasOwn(project[collection],id)) return send(res, 404, {error:isRoom?'Unknown room':'Unknown entity type'});
+          const file = (isGame?project.gameScript:isTile?null:project[collection][id].script) ?? defaultPath;
           const data = await store.read(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
-          const script=data ? (file.endsWith('.ws') ? {...parseScript(data.toString()),source:data.toString()} : decodeCbor(data)) : initialScript(isRoom?null:project.sprites[id]);
+          const script=data ? (file.endsWith('.ws') ? {...parseScript(data.toString()),source:data.toString()} : decodeCbor(data)) :
+            isGame?initialGameScript(project):isTile?initialTileScript(project.tiles[id]):isRoom?initialRoomScript(project.rooms[id]):initialScript(project.sprites[id]);
           if(url.searchParams.has('debug')){
             const labels=new WeakMap();
             function index(source,name){
@@ -308,25 +341,32 @@ const server = createServer(async (req, res) => {
             const names=Object.fromEntries(Object.entries(Opcodes).map(([name,id])=>[id,name]));
             Object.assign(names,{10:'constant',11:'load',12:'store',13:'calculate',14:'branch',15:'jump',16:'wait',17:'real',47:'string',48:'localized text',49:'text command',50:'entity query'});
             const events={};
-            compileScript(unit,modules,(event,op,node)=>(events[event]??=[]).push({...labels.get(node),op:names[op]}));
+            const gameUnit=isGame?unit:await readGameScript(project,store.read);
+            compileScript(unit,modules,(event,op,node)=>(events[event]??=[]).push({...labels.get(node),op:names[op]}),
+              {collections:validateCollections(gameUnit?.collections),gameScript:isGame,tileScript:isTile,roomScript:isRoom||isGame});
             return send(res,200,events);
           }
           return send(res,200,script);
         }
         if (req.method === 'PUT') {
           const script = await jsonBody(req);
+          if((script.declarations||script.collections)&&!isGame)throw Error('Move game declarations into the Game script');
           if(script.source!=null && formatScript(parseScript(script.source))!==formatScript(script))throw Error('Text and blocks differ');
           const edit=await change(async () => {
             const project = JSON.parse(await store.read('project.json','utf8'));
-            if (!Object.hasOwn(project[collection],id)) throw Error(isRoom?'Unknown room':'Unknown entity type');
+            if (!isGame&&!Object.hasOwn(project[collection],id)) throw Error(isRoom?'Unknown room':'Unknown entity type');
             const migrated=explicitBehavior(project);
-            const established = project[collection][id].script;
+            const established = isGame?project.gameScript:isTile?defaultPath:project[collection][id].script;
             const file = established ?? defaultPath;
-            project[collection][id].script = file;
+            if(isGame)project.gameScript=file;
+            else if(!isTile)project[collection][id].script = file;
             const data=file.endsWith('.ws')?(script.source??formatScript(script)):encodeCbor(script);
-            return history.save(file,data,()=>recompile(project,new Map([[isRoom?'room:'+id:id,script]]),async()=>{
-              await store.save([[file,data],...((migrated||!established) ? [['project.json',JSON.stringify(project,null,2)+'\n']] : [])]);
-            }),file.endsWith('.ws')?Buffer.from(''):encodeCbor({events:{}}));
+            const previous=encodeCbor(isGame?initialGameScript(project):isTile?initialTileScript(project.tiles[id]):{events:{}});
+            if(isGame){delete project.variables;delete project.flags;delete project.events;}
+            const scriptId=isGame?'game':isTile?'tile:'+id+':'+variant:isRoom?'room:'+id:id;
+            return history.save(file,data,()=>recompile(project,new Map([[scriptId,script]]),async()=>{
+              await store.save([[file,data],...((isGame||migrated||!established) ? [['project.json',JSON.stringify(project,null,2)+'\n']] : [])]);
+            }),file.endsWith('.ws')?Buffer.from(''):previous);
           });
           return send(res, 200, {ok:true,edit});
         }
@@ -428,6 +468,7 @@ if (lan) {
       previous.pressed = 0;
       return current;
     });
+    runtime.set_connected_players(slots.reduce((mask,state,slot)=>state?mask|(1<<slot):mask,1));
     const data = JSON.parse(runtime.step(JSON.stringify(input)));
     outgoingSounds.push(...data.sounds);
     outgoingEvents.push(...data.events);

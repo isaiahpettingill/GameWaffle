@@ -2,18 +2,64 @@ import {shaderPresets} from './room-shaders.mjs';
 export const effects=['sparks','dust','smoke','flame','bubbles','rain','snow'];
 export const platformGravity = 16;
 export const roomBorder = (room, topDown) => room.border ?? (room.closedEdges == null ? (topDown ? 'closed' : 'sides') : room.closedEdges ? 'closed' : 'open');
-export const Events = ['start','use_item', 'restored', 'tick', 'a', 'b', 'x', 'menu', 'begin_contact', 'end_contact', 'damage', 'destroy', 'animation_finished', 'menu_selected'];
+export const Events = ['init','start','game_startup','use_item', 'restored', 'tick', 'a', 'b', 'x', 'menu', 'begin_contact', 'end_contact', 'damage', 'destroy', 'animation_finished', 'menu_selected'];
 export const receivedEvent=name=>/^received\.[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name);
 export const inputEvent=name=>/^(pressed|released)\.[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name);
-export const initialScript=actor=>actor?.scriptGravity&&actor.gravityMode!=='room'?{events:{tick:[{op:'apply_gravity',modifier:null}]}}:{events:{}};
+export const timerEvent=name=>/^(after|every)\.[1-9][0-9]{0,6}$/.test(name)&&Number(name.split('.')[1])<=1296000;
+export function initialScript(actor){
+  const init=[], self={actor:'id'}, events={};
+  if(actor?.animation)init.push({op:'animate',tag:actor.animation});
+  if(actor?.team!=null)init.push({op:'set_entity_team',entity:self,team:actor.team});
+  if(actor?.emitter)init.push({op:'set_emitter',effect:actor.emitter.effect,rate:actor.emitter.rate,
+    x:actor.emitter.offset?.[0]??0,y:actor.emitter.offset?.[1]??0});
+  if(init.length)events.init=init;
+  if(actor?.scriptGravity&&actor.gravityMode!=='room')events.tick=[{op:'apply_gravity',modifier:null}];
+  return {events};
+}
 export const hudAnchors=['top_left','top_center','top_right','center_left','center','center_right','bottom_left','bottom_center','bottom_right'];
 export const Blocks = {
+  set_display_resolution:['Set game resolution to %1 × %2',[['width','integer',320],['height','integer',224]]],
+  set_adaptive_display:['Set adaptive display min %1 × %2 max %3 × %4 pixel zoom %5',[
+    ['min_width','integer',128],['min_height','integer',128],['max_width','integer',512],['max_height','integer',512],['zoom','integer',2],
+  ]],
+  set_default_camera:['Set default camera to %1',[['target',['player','group'],'player']]],
+  set_minimap:['Set minimap to %1',[['mode',['off','world','explored'],'off']]],
+  set_first_controller:['First gamepad controls player %1',[['player','integer',2]]],
+  set_entity_visible:['Show entity %1 %2',[['entity','integer',0],['visible','boolean',true]]],
+  assign_entity_player:['Assign entity %1 to player %2',[['entity','integer',0],['player','integer',1]]],
+  set_tile_playback:['Play this tile %1',[['mode',['still','loop','once'],'loop']]],
+  set_tile_frame:['Set this tile frame to %1',[['frame','integer',1]]],
+  advance_tile_frame:['Advance this tile frame by %1',[['steps','integer',1]]],
+  set_tile_friction:['Set this tile friction to %1',[['friction','number',{real:0.35}]]],
+  set_tile_body:['Set this tile body to %1',[['mode',['none','static','dynamic','kinematic','sensor','one_way','breakable','fluid','ladder'],'static']]],
+  force_entity:['Apply force to %1\nX %2 Y %3 N',[['entity','integer',0],['x','number',0],['y','number',-20]]],
+  draw_space:['Draw in %1 coordinates',[['space',['world','hud'],'world']]],
+  fill:['Fill shapes with %1',[['color','string','#cba6f7']]],
+  no_fill:['No fill',[]],
+  stroke:['Stroke shapes with %1',[['color','string','#cdd6f4']]],
+  no_stroke:['No stroke',[]],
+  stroke_width:['Stroke width %1 px',[['width','number',1]]],
+  rect:['Rectangle at %1, %2 · %3 × %4',[['x','number',0],['y','number',0],['width','number',16],['height','number',16]]],
+  ellipse:['Ellipse at %1, %2 · %3 × %4',[['x','number',8],['y','number',8],['width','number',16],['height','number',16]]],
+  circle:['Circle at %1, %2 · diameter %3',[['x','number',8],['y','number',8],['diameter','number',16]]],
+  line:['Line from %1, %2 to %3, %4',[['x','number',0],['y','number',0],['x2','number',16],['y2','number',16]]],
+  triangle:['Triangle %1, %2 · %3, %4 · %5, %6',[['x','number',0],['y','number',0],['x2','number',16],['y2','number',0],['x3','number',8],['y3','number',16]]],
+  point:['Point at %1, %2',[['x','number',0],['y','number',0]]],
+  inventory_append:['Add new %2 to %1',[['inventory','text','backpack'],['object_type','text','item']]],
+  inventory_remove:['Remove object %2 from %1',[['inventory','text','backpack'],['index','integer',1]]],
+  inventory_set:['Set %3 of object %2 in %1 to %4',[['inventory','text','backpack'],['index','integer',1],['property','text','amount'],['value','value',1]]],
+  inventory_create_child:['Create object in %3 of object %2 in %1',[['inventory','text','backpack'],['index','integer',1],['property','text','effect']]],
+  inventory_remove_child:['Clear %3 of object %2 in %1',[['inventory','text','backpack'],['index','integer',1],['property','text','effect']]],
+  array_append:['Add %2 to number array %1',[['array','text','scores'],['value','value',0]]],
+  array_set:['Set number %2 in %1 to %3',[['array','text','scores'],['index','integer',1],['value','value',0]]],
+  array_remove:['Remove number %2 from %1',[['array','text','scores'],['index','integer',1]]],
   draw_text:['Draw HUD text %2 named %1 in %3 at %4 with X %5 Y %6',[
     ['label','text','message'],['value','string','Hello!'],['font','text',''],['anchor',hudAnchors,'top_left'],
     ['x','number',4],['y','number',4],
   ]],
   set_hud_font:['Set HUD font to %1',[['font','text','']]],
   emit_event:['Emit event %1',[['event','text','']]],
+  emit_event_with_entity:['Emit event %1 with entity %2',[['event','text',''],['entity','integer',0]]],
   apply_gravity:['Apply gravity with modifier %1',[['modifier','number',1,'optional']]],
   force:['Apply force X %1 Y %2 N',[['x','number',0],['y','number',0]]],
   impulse:['Apply impulse X %1 Y %2 N·s',[['x','number',0],['y','number',0]]],
@@ -62,6 +108,14 @@ export const Blocks = {
   camera_zoom: ['Set camera zoom to %1×', [['zoom','number',1]]],
   reset_room_camera: ['Reset room camera', []],
   set_room_gravity: ['Set room gravity to %1', [['gravity','number',{real:9.8}]]],
+  set_room_background_image: ['Set background image to %1\nat %2 scroll (0–1)', [['image','text',''],['scroll','number',1]]],
+  set_entity_layer: ['Set draw layer of %1 to %2', [['entity','integer',0],['layer','integer',0]]],
+  set_entity_team: ['Set team of %1 to %2', [['entity','integer',0],['team','integer',0]]],
+  set_entity_max_health: ['Set health limit of %1 to %2', [['entity','integer',0],['health','number',1]]],
+  set_entity_friction: ['Set friction of %1 to %2', [['entity','integer',0],['friction','number',{real:0.5}]]],
+  set_emitter: ['Emit %1 at %2 particles per second\noffset X %3 Y %4', [['effect',effects,'smoke'],['rate','integer',16],['x','number',0],['y','number',0]]],
+  set_room_border: ['Set room borders to %1', [['border',['open','sides','closed'],'sides']]],
+  set_camera_bottom_inset: ['Set camera bottom inset to %1 tiles', [['tiles','integer',0]]],
   set_room_background: ['Set room background color to %1', [['color','string','#101a23']]],
   set_room_depth_sort: ['Sort entities by depth %1', [['enabled','boolean',true]]],
   set_room_music: ['Set room music to %1', [['sound','text','']]],
@@ -102,9 +156,22 @@ export const messageInputs = {say:'text',ask:'text',counter:'label',bar:'label',
 export const Opcodes = Object.freeze({
   walk:0, jump:1, damage:2, fire:3, chase:4, sound:5, velocity:6, animate:7, room:8, spawn:9, give:18, take:19, say:20, counter:21, hide:22, follow:23, camera:24, release_camera:25, remove_self:26, burst:27, emit:28, stop_fx:29,group_camera:30,checkpoint:31,retry_checkpoint:32,ask:33,give_player:34,take_player:35,count_player:36,bar:37,use_player_item:38,item_icon:39,follow_player:40,set_position:41,jump_force:42,apply_gravity:43,force:44,impulse:45,move_by:46,move_entity:51,entity_velocity:52,damage_entity:53,remove_entity:54,animate_once:55,show_menu:56,show_inventory:57,add_component:58,remove_component:59,set_entity_integer:60,set_entity_real:61,set_entity_boolean:62,set_entity_string:63,use_selected_item:64,set_respawn:65,respawn_when:66,emit_for:67,burst_at:68,flip_sprite_x:69,flip_sprite_y:70,set_sprite_rotation:71,rotate_sprite:72,fire_projectile:73,camera_follow_entity:74,camera_zoom:75,set_room_gravity:76,set_room_background:77,set_room_depth_sort:78,set_room_music:79,set_room_ambience:80,reset_room_camera:81,set_room_shader:82,reset_room_shader:83,emit_event:84,draw_text:85,set_hud_font:86,
   set_sprite_shadow:87,set_health_bar:88,heal_entity:89,push_entity:90,break_entity:91,
+  set_display_resolution:92,set_adaptive_display:93,set_default_camera:94,set_minimap:95,set_first_controller:96,
+  set_entity_visible:97,assign_entity_player:98,emit_event_with_entity:99,
+  set_tile_playback:100,set_tile_frame:101,advance_tile_frame:102,set_tile_friction:103,set_tile_body:104,force_entity:105,
+  draw_space:106,fill:107,no_fill:108,stroke:109,no_stroke:110,stroke_width:111,rect:112,ellipse:113,circle:114,line:115,triangle:116,point:117,
+  inventory_append:118,inventory_remove:119,inventory_set:120,inventory_create_child:121,inventory_remove_child:122,
+  array_append:123,array_set:124,array_remove:125,
+  set_room_background_image:127,set_camera_bottom_inset:128,set_room_border:129,
+  set_entity_layer:130,set_entity_team:131,set_entity_max_health:132,set_entity_friction:133,set_emitter:134,
 });
+export const collectionCommands=['inventory_append','inventory_remove','inventory_set','inventory_create_child','inventory_remove_child','array_append','array_set','array_remove'];
+export const collectionQueries=['inventory.length','inventory.type','inventory.has','inventory.get','array.length','array.at'];
+export const drawingCommands=['draw_space','fill','no_fill','stroke','no_stroke','stroke_width','rect','ellipse','circle','line','triangle','point'];
+export const tileCommands=['set_tile_playback','set_tile_frame','advance_tile_frame','set_tile_friction','set_tile_body'];
+export const gameCommands=['set_display_resolution','set_adaptive_display','set_default_camera','set_minimap','set_first_controller'];
 export const roomCommands = ['camera_follow_entity','camera_zoom','reset_room_camera','set_room_gravity',
-  'set_room_background','set_room_depth_sort','set_room_music','set_room_ambience','set_room_shader','reset_room_shader'];
+  'set_room_background','set_room_background_image','set_camera_bottom_inset','set_room_border','set_room_depth_sort','set_room_music','set_room_ambience','set_room_shader','reset_room_shader'];
 export const buttons = ['up','down','left','right','a','b','x','menu'];
 
 export const actorReadings = {
@@ -112,7 +179,7 @@ export const actorReadings = {
   grounded:'boolean',player:'integer',other:'integer',damage:'integer',other_player:'integer',
   last_spawn:'integer',answer:'integer',item_count:'integer',moving:'boolean',is_player:'boolean',facing:'integer',
   x_real:'real',y_real:'real',vx_real:'real',vy_real:'real',health_real:'real',
-  menu_choice:'integer',menu_item:'string',menu_id:'string',used_item:'string',event_sender:'integer',
+  menu_choice:'integer',menu_item:'string',menu_id:'string',used_item:'string',event_sender:'integer',event_entity:'integer',
 };
 const readingNames=Object.keys(actorReadings);
 export const readings=readingNames.filter(name=>['integer','boolean'].includes(actorReadings[name]));
@@ -133,7 +200,12 @@ export const entityQueries = {
   real: ['Entity %1 real %2','real',[['integer',0],['string','speed']]],
   boolean: ['Entity %1 boolean %2','boolean',[['integer',0],['string','ready']]],
   string: ['Entity %1 string %2','string',[['integer',0],['string','label']]],
+  controller_connected: ['Player %1 controller connected?','boolean',[['integer',2]]],
+  is_player: ['Entity %1 is a player?','boolean',[['integer',0]]],
+  player: ['Player controlling entity %1','integer',[['integer',0]]],
+  has_property: ['Entity %1 has property %2?','boolean',[['integer',0],['string','ready']]],
+  on_tile_top: ['Entity %1 touches the top of this tile?','boolean',[['integer',0]]],
 };
 
 
-export const valueInput=type=>['number','integer','real','boolean','string'].includes(type);
+export const valueInput=type=>['value','number','integer','real','boolean','string'].includes(type);

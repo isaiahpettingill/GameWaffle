@@ -1,5 +1,5 @@
 [target.wasm32-unknown-unknown]
-rustflags = ["-C", "target-feature=+simd128"]
+rustflags = ["-C", "target-feature=+simd128", "-C", "link-arg=--growable-table"]
 
 [target.'cfg(target_arch = "x86_64")']
 rustflags = ["-C", "target-feature=+sse2"]

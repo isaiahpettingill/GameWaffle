@@ -43,7 +43,7 @@ pub(super) struct Video {
 
 impl Video {
     pub fn new(game: &Game) -> Result<Self, Error> {
-        let cam = game.media.camera;
+        let cam = game.runtime.view().game_settings.display.unwrap_or(game.media.camera);
         let zoom = cam.zoom.clamp(1, 16);
         let [w, h] = cam.view_size([320 * zoom, 240 * zoom], None);
         let canvas = Surface::new(w, h, PixelFormat::XRGB8888)?.into_canvas()?;
@@ -55,7 +55,7 @@ impl Video {
             rectangles: Vec::new(),
         })
     }
-    pub fn frame(&mut self, game: &Game, output: super::VideoFn) -> Result<(), Error> {
+    pub fn frame(&mut self, game: &Game, output: super::VideoFn, environment: Option<super::EnvFn>) -> Result<(), Error> {
         let snapshot = game.runtime.view();
         let id = snapshot.room;
         let room = &game.media.rooms[id];
@@ -69,15 +69,23 @@ impl Video {
                     .map(|a| [a.x, a.y])
             })
             .unwrap_or([room.width as f32 / 2., room.height as f32 / 2.]);
-        let [w, h] = self.dimensions;
-        let cam = game.media.camera;
+        let cam = snapshot.game_settings.display.unwrap_or(game.media.camera);
+        let [w, h] = cam.view_size([320 * cam.zoom.max(1), 240 * cam.zoom.max(1)], None);
+        if self.dimensions != [w, h] {
+            self.dimensions = [w, h];
+            if let Some(environment) = environment {
+                const SET_GEOMETRY: u32 = 37;
+                let mut geometry = super::Geometry { w, h, max_w: 1024, max_h: 1024, aspect: w as f32 / h as f32 };
+                environment(SET_GEOMETRY, std::ptr::from_mut(&mut geometry).cast());
+            }
+        }
         let view = gamewaffle_runtime::viewport_zoom(
             cam,
             [
                 w.saturating_mul(cam.zoom.max(1)),
                 h.saturating_mul(cam.zoom.max(1)),
             ],
-            [room.width, room.camera_height()],
+            [room.width, snapshot.room_settings.camera_height.unwrap_or_else(|| room.camera_height())],
             focus,
             snapshot.room_settings.zoom,
         );

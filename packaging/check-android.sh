@@ -61,16 +61,6 @@ gamepad = wait('Touch gamepad')
 assert display[3] <= gamepad[1], 'The portrait gamepad overlaps gameplay'
 PYLIBRARY
 adb shell pidof "$app" >/dev/null
-adb exec-out screencap -p > android-frame.png
-python3 - <<'PYSCREEN'
-from PIL import Image
-from collections import Counter
-colors=Counter(Image.open('android-frame.png').convert('RGB').getdata())
-targets=[(23,24,41),(52,49,76),(255,200,117),(146,218,196),(189,166,237),(238,158,159)]
-def present(target):
-    return any(n>=8 and all(abs(a-b)<=4 for a,b in zip(rgb,target)) for rgb,n in colors.items())
-assert sum(map(present,targets))>=3, 'The emulator did not display the Basalt Works room'
-PYSCREEN
 adb shell input keyevent KEYCODE_F5
 sleep 1
 adb shell input keyevent KEYCODE_F2

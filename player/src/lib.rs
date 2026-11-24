@@ -12,8 +12,8 @@ use sdl3::{
     event::{Event, WindowEvent},
     gamepad::{Axis, Button, Gamepad},
     keyboard::Scancode as Key,
-    pixels::{Color, PixelFormat},
-    render::{BlendMode, Canvas, FRect, Texture},
+    pixels::{Color, FColor, PixelFormat},
+    render::{BlendMode, Canvas, FPoint, FRect, Texture, Vertex, VertexIndices},
     video::Window,
 };
 use std::{
@@ -47,7 +47,7 @@ impl Game {
     }
     fn from_cartridge(bytes: &[u8]) -> Result<Self, Error> {
         std::hint::black_box(
-            b"GAMEWAFFLE_RUNTIME_ABI_3\0GAMEWAFFLE_RUNTIME_ABI_4\0GAMEWAFFLE_RUNTIME_ABI_5\0GAMEWAFFLE_RUNTIME_ABI_6\0GAMEWAFFLE_RUNTIME_ABI_7\0GAMEWAFFLE_RUNTIME_ABI_8\0GAMEWAFFLE_RUNTIME_ABI_9\0GAMEWAFFLE_RUNTIME_ABI_10\0GAMEWAFFLE_RUNTIME_ABI_11\0",
+            b"GAMEWAFFLE_RUNTIME_ABI_3\0GAMEWAFFLE_RUNTIME_ABI_4\0GAMEWAFFLE_RUNTIME_ABI_5\0GAMEWAFFLE_RUNTIME_ABI_6\0GAMEWAFFLE_RUNTIME_ABI_7\0GAMEWAFFLE_RUNTIME_ABI_8\0GAMEWAFFLE_RUNTIME_ABI_9\0GAMEWAFFLE_RUNTIME_ABI_10\0GAMEWAFFLE_RUNTIME_ABI_11\0GAMEWAFFLE_RUNTIME_ABI_12\0",
         );
         let mut runtime = Runtime::from_cartridge(bytes, None)?;
         runtime.set_seed(
@@ -137,6 +137,11 @@ fn touch_button(
         .position(|r| lx >= r.x && lx < r.x + r.w && ly >= r.y && ly < r.y + r.h)
 }
 
+fn direct_touch(id: sdl3::sys::touch::SDL_TouchID) -> bool {
+    use sdl3::sys::touch::{SDL_GetTouchDeviceType, SDL_TOUCH_DEVICE_DIRECT};
+    unsafe { SDL_GetTouchDeviceType(id) == SDL_TOUCH_DEVICE_DIRECT }
+}
+
 fn fit_frame([width, height]: [u32; 2], [display_w, display_h]: [u32; 2]) -> [u32; 4] {
     let w = display_w.min(display_h * width / height).max(1);
     let h = display_h.min(display_w * height / width).max(1);
@@ -209,10 +214,10 @@ fn draw_world<T: sdl3::render::RenderTarget>(
     let y = axis(
         vy,
         h,
-        room.camera_height(),
+        snapshot.room_settings.camera_height.unwrap_or_else(|| room.camera_height()),
         snapshot.focus.map(|p| p[1]),
         seam("up", "seam/up", false),
-        if room.camera_height.is_none() {
+        if snapshot.room_settings.camera_height.or(room.camera_height).is_none_or(|height| height >= room.height) {
             seam("down", "seam/down", false)
         } else {
             0
@@ -233,9 +238,20 @@ fn draw_world<T: sdl3::render::RenderTarget>(
     ));
     canvas.clear();
     use gamewaffle_runtime::ShadowPlacement;
+    let background = snapshot.room_settings.background_image.as_deref().filter(|path| !path.is_empty()).map(|path| media::Layer {
+        image: format!("room/background/{path}"),
+        layer: -10001,
+        x: 0,
+        y: 0,
+        width: Some(room.width),
+        height: Some(room.height),
+        parallax: snapshot.room_settings.background_scroll,
+    });
     let mut entries: Vec<_> = room
         .baked
         .iter()
+        .filter(|layer| layer.image != "room/background" || snapshot.room_settings.background_image.is_none())
+        .chain(&background)
         .map(|layer| (layer.layer, 0, 0., Some(layer), None))
         .chain(snapshot.actors.iter().filter_map(|actor| {
             actor
@@ -400,8 +416,10 @@ fn draw_minimap<T: sdl3::render::RenderTarget>(
     width: u32,
     height: u32,
 ) -> Result<(), Error> {
+    let mode = snapshot.game_settings.minimap.as_deref().unwrap_or(&map.mode);
+    if mode == "off" { return Ok(()); }
     let visible = |name: &str| {
-        map.mode == "world" || snapshot.explored.is_some_and(|rooms| rooms.contains(name))
+        mode == "world" || snapshot.explored.is_some_and(|rooms| rooms.contains(name))
     };
     let bounds = map.rooms.iter().filter(|(name, _)| visible(name)).fold(
         None::<[i32; 4]>,
@@ -477,6 +495,31 @@ fn draw_minimap<T: sdl3::render::RenderTarget>(
         canvas.draw_rect(rect)?;
     }
     Ok(())
+}
+
+fn draw_shapes<T: sdl3::render::RenderTarget>(
+    canvas: &mut Canvas<T>, shapes: &[gamewaffle_runtime::drawing::Shape], hud: bool, offset: [f32; 2],
+) -> Result<(), Error> {
+    if shapes.is_empty() { return Ok(()); }
+    thread_local! { static VERTICES: std::cell::RefCell<Vec<Vertex>> = const { std::cell::RefCell::new(Vec::new()) }; }
+    VERTICES.with_borrow_mut(|vertices| {
+        vertices.clear();
+        for &shape in shapes.iter().filter(|shape| shape.style.hud == hud) {
+            shape.triangles(offset, |triangle, rgba| {
+                let [r,g,b,a] = rgba.to_be_bytes().map(|value| f32::from(value)/255.0);
+                vertices.extend(triangle.map(|[x,y]| Vertex { position: FPoint::new(x,y),
+                    color: FColor::RGBA(r,g,b,a), tex_coord: FPoint::new(0.0,0.0) }));
+            });
+        }
+        if !vertices.is_empty() {
+            let blend=canvas.blend_mode();
+            canvas.set_blend_mode(BlendMode::Blend);
+            let rendered=canvas.render_geometry(vertices,None,VertexIndices::Sequential);
+            canvas.set_blend_mode(blend);
+            rendered?;
+        }
+        Ok(())
+    })
 }
 
 struct FontPainter<'a> {
@@ -723,6 +766,7 @@ fn draw<T: sdl3::render::RenderTarget>(
     if let Some(shader) = shader {
         draw_weather(canvas, shader, [w, h], snapshot.tick, rectangles)?;
     }
+    draw_shapes(canvas,snapshot.shapes,false,[view[0] as f32,view[1] as f32])?;
     if let Some(texture) = hd_target {
         let raw = canvas.read_pixels(sdl3::rect::Rect::new(0, 0, w, h))?;
         let surface = if raw.pixel_format() == PixelFormat::RGBA32 {
@@ -750,6 +794,7 @@ fn draw<T: sdl3::render::RenderTarget>(
         )?;
         canvas.set_scale(2., 2.)?;
     }
+    draw_shapes(canvas,snapshot.shapes,true,[0.0;2])?;
     if snapshot.menu.is_none()
         && snapshot.dialog.is_none()
         && let Some(map) = &game.media.minimap
@@ -881,12 +926,13 @@ fn save_slot(runtime: &mut Runtime, slot: u8, write: bool) -> Result<(), Error> 
 }
 
 pub fn run(path: Option<PathBuf>, verify: bool) -> Result<(), Error> {
-    run_network(path, verify, None)
+    run_network(path, verify, None, false)
 }
 pub fn run_network(
     path: Option<PathBuf>,
     verify: bool,
     connection: Option<(String, Option<usize>)>,
+    touch_requested: bool,
 ) -> Result<(), Error> {
     let mut network = connection
         .map(|(address, n)| {
@@ -948,7 +994,9 @@ pub fn run_network(
     let mut hd_texture = None;
     let mut frame_dimensions = [0, 0];
     let mut atlas_id = String::new();
-    let mut touch = false;
+    let mut touch = !cfg!(target_os = "android")
+        && (touch_requested || sdl3::touch::num_touch_devices().into_iter().any(|id| direct_touch(id.into())));
+    let mut touch_override = touch_requested.then_some(true);
     let mut fingers = BTreeMap::new();
     let mut taps = [false; 8];
     let mut view = [0, 0, 320, 224];
@@ -981,7 +1029,7 @@ pub fn run_network(
                         status = format!("Save slot {slot}");
                         continue;
                     }
-                    Event::FingerDown { x, y, .. } if !cfg!(target_os = "android") => {
+                    Event::FingerDown { x, y, .. } if touch && !cfg!(target_os = "android") => {
                         match touch_button(&canvas, display, x, y) {
                             Some(10) => Some(true),
                             Some(11) => Some(false),
@@ -1012,7 +1060,7 @@ pub fn run_network(
                     repeat: false,
                     ..
                 }
-            ) || (!cfg!(target_os = "android")
+            ) || (touch && !cfg!(target_os = "android")
                 && matches!(event,Event::FingerDown {x,y,..} if touch_button(&canvas,display,x,y)==Some(9)));
             if toggle_setup {
                 if setup.take().is_none() {
@@ -1095,6 +1143,7 @@ pub fn run_network(
                     ..
                 } if !cfg!(target_os = "android") => {
                     touch = !touch;
+                    touch_override = Some(touch);
                     fingers.clear();
                 }
                 Event::KeyDown {
@@ -1140,9 +1189,12 @@ pub fn run_network(
                     taps = [false; 8];
                 }
                 Event::FingerDown {
-                    finger_id, x, y, ..
+                    touch_id, finger_id, x, y, ..
                 } if !cfg!(target_os = "android") => {
-                    touch = true;
+                    touch = touch_override.unwrap_or_else(|| touch || direct_touch(sdl3::sys::touch::SDL_TouchID(touch_id)));
+                    if !touch {
+                        continue;
+                    }
                     if let Some(index) = touch_button(&canvas, display, x, y) {
                         if index < 8 {
                             fingers.insert(finger_id, index);
@@ -1154,7 +1206,7 @@ pub fn run_network(
                 }
                 Event::FingerMotion {
                     finger_id, x, y, ..
-                } if !cfg!(target_os = "android") => {
+                } if touch && !cfg!(target_os = "android") => {
                     if let Some(index) = touch_button(&canvas, display, x, y).filter(|n| *n < 8) {
                         fingers.insert(finger_id, index);
                     } else {
@@ -1207,7 +1259,12 @@ pub fn run_network(
                 taps = [false; 8];
                 states[0][4] |= mouse[0];
                 states[0][5] |= mouse[1];
-                for (slot, pad) in states.iter_mut().zip(&controllers) {
+                let first_pad = game.runtime.first_controller_slot();
+                let mut connected = 1;
+                for (index, pad) in controllers.iter().filter(|pad| pad.connected()).take(4 - first_pad).enumerate() {
+                    let player = first_pad + index;
+                    connected |= 1 << player;
+                    let slot = &mut states[player];
                     for (index, button) in BUTTONS.iter().enumerate() {
                         slot[index] |= pad.button(*button);
                     }
@@ -1218,6 +1275,7 @@ pub fn run_network(
                     slot[2] |= x < -16000;
                     slot[3] |= x > 16000;
                 }
+                game.runtime.set_connected_players(connected);
                 if let Some((net, _)) = &mut network {
                     states = net.step(states[0])?;
                     game.runtime.set_view_size(320, 240);
@@ -1283,9 +1341,9 @@ pub fn run_network(
                     [a.x, a.y]
                 });
             view = viewport_zoom(
-                game.media.camera,
+                snapshot.game_settings.display.unwrap_or(game.media.camera),
                 [output.0, output.1],
-                [room.width, room.camera_height()],
+                [room.width, snapshot.room_settings.camera_height.unwrap_or_else(|| room.camera_height())],
                 snapshot.focus.unwrap_or(focus),
                 snapshot.room_settings.zoom,
             );
@@ -1366,7 +1424,7 @@ pub fn run_network(
         rendered?;
         display = game
             .as_ref()
-            .and_then(|g| g.media.camera.fixed_resolution())
+            .and_then(|g| g.runtime.game_settings().display.unwrap_or(g.media.camera).fixed_resolution())
             .unwrap_or([view[2], view[3]]);
         canvas.set_logical_size(
             display[0],

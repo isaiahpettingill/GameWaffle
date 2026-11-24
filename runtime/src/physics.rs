@@ -154,6 +154,19 @@ impl World {
         &mut self.physics.bodies[handle]
     }
 
+    pub fn set_body_enabled(&mut self, handle: Body, enabled: bool) {
+        self.body_mut(handle).set_enabled(enabled);
+        self.pending.push(handle);
+    }
+
+    pub fn set_friction(&mut self, handle: Body, friction: f32) {
+        for collider in self.physics.bodies[handle].colliders() {
+            let collider = &mut self.physics.colliders[*collider];
+            collider.set_friction(friction);
+            collider.set_friction_combine_rule(CoefficientCombineRule::Min);
+        }
+    }
+
     #[cfg(feature = "rollback")]
     pub(crate) fn contains(&self, handle: Body, id: u32) -> bool {
         self.physics
@@ -216,6 +229,7 @@ impl World {
             ))
             .density(config.density)
             .friction(config.friction)
+            .friction_combine_rule(CoefficientCombineRule::Min)
             .restitution(config.elasticity)
             .restitution_combine_rule(CoefficientCombineRule::Max);
         if let Some(mass) = config.mass.filter(|_| config.mode == Mode::Dynamic) {

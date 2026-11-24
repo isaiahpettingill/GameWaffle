@@ -8,17 +8,18 @@
   import RoutineEditor from './RoutineEditor.svelte';
   import ScriptConstants from './ScriptConstants.svelte';
   import {Ellipsis, FileCode, Maximize} from '@lucide/svelte';
+  import {validateCollections} from '../src/collections.mjs';
   import {movementPreset} from '../src/movement-preset.mjs';
   import {resourceName} from '../src/resource-name.mjs';
   import {formatScript,parseScript,replaceScriptConstants} from '../src/wafflescript.mjs';
   let modules=$state([]),selected=$state(''),newModule=$state(''),dialog=$state('');
   let preset=$state('platformer'),dynamic=$state(false),replaceLegacy=$state(false),dialogError=$state('');
-  const endpoint=()=>selected?'./api/module/'+encodeURIComponent(selected):(isRoom?'./api/room-script/':'./api/script/')+encodeURIComponent(sprite);
+  const endpoint=()=>selected?'./api/module/'+encodeURIComponent(selected):isGame?'./api/game-script':isTile?'./api/tile-script/'+encodeURIComponent(sprite)+'/'+variant:(isRoom?'./api/room-script/':'./api/script/')+encodeURIComponent(sprite);
   let textHost,textEditor,original;
-  let { sprite, isRoom=false, title=sprite, roomScripts, entityScripts, onSelectFile, sprites, actorDefinition, animations, newActor, items, textKeys, menus, references, actions, onBeforeSave, hasLegacyMovement, initialMovement, onMovementPreset, dirty = $bindable(false), status=$bindable(''), mode=$bindable('blocks'), onSave,onFileEdit,onNewEvent,onNewField } = $props();
-  const baseFile=$derived((isRoom?'room:':'entity:')+sprite);
+  let { sprite, isRoom=false, isGame=false, isTile=false, variant=0, title=sprite, tileScripts=[], roomScripts, entityScripts, onSelectFile, sprites, actorDefinition, animations, newActor, items, textKeys, menus, references, actions, onBeforeSave, hasLegacyMovement, initialMovement, onMovementPreset, dirty = $bindable(false), status=$bindable(''), mode=$bindable('blocks'), onSave,onFileEdit,onNewEvent,onNewField } = $props();
+  const baseFile=$derived(isGame?'game':isTile?'tile:'+sprite+':'+variant:(isRoom?'room:':'entity:')+sprite);
   const currentFile=$derived(selected?'module:'+selected:baseFile);
-  const registry=()=>({fonts:references.fontsLabels,events:references.eventsLabels,roomScript:selected?undefined:isRoom,sounds:Object.fromEntries(references.sounds.map(id=>[id,true])),sprites:Object.fromEntries(sprites.map(id=>[id,true])),items:Object.fromEntries(items.map(id=>[id,true])),controls:Object.fromEntries(actions.map(id=>[id,true])),text:Object.fromEntries(textKeys.map(id=>[id,true])),menus:Object.fromEntries(menus.map(id=>[id,true])),flags:Object.fromEntries(references.flags.map(id=>[id,true]))});
+  const registry=()=>({collections:validateCollections(references.collections),fonts:references.fontsLabels,events:references.eventsLabels,constants:references.gameConstants,gameScript:isGame&&!selected,tileScript:isTile&&!selected,roomScript:selected?undefined:isRoom||isGame,sounds:Object.fromEntries(references.sounds.map(id=>[id,true])),sprites:Object.fromEntries(sprites.map(id=>[id,true])),items:Object.fromEntries(items.map(id=>[id,true])),controls:Object.fromEntries(actions.map(id=>[id,true])),text:Object.fromEntries(textKeys.map(id=>[id,true])),menus:Object.fromEntries(menus.map(id=>[id,true])),flags:Object.fromEntries(references.flags.map(id=>[id,true]))});
   let timer,pendingSave,editNumber=0,saving=$state(false);
   let draft,recovered=$state(false);
   function changed(){
@@ -46,7 +47,7 @@
   onMount(()=>{
     blockEditor=mountBlocks(host,changed,sprites,items,actions,animations,textKeys,menus,references,(compact,index)=>{
       compactToolbox=compact;selectedCategory=index;
-    },definition=>routineEditor=definition,routineModules,isRoom,editConstants,onNewEvent,onNewField);
+    },definition=>routineEditor=definition,routineModules,isRoom||isGame,editConstants,isGame?undefined:onNewEvent,isGame?undefined:onNewField,isGame,isTile);
     fetch('./api/modules').then(r=>r.json()).then(data=>{if(Array.isArray(data))modules=data;}).catch(err=>error=err.message);
     open(sprite);
     return ()=>{clearTimeout(timer);version++;importsRequest++;status='';blockEditor.dispose();textEditor?.dispose();};
@@ -86,7 +87,7 @@
         await draft.write(null);previous=null;
       }
       original=data;textEditor?.dispose();textEditor=null;
-      blockEditor.setRoomContext(isRoom&&!selected);
+      blockEditor.setRoomContext((isRoom||isGame)&&!selected,isGame&&!selected,isTile&&!selected);
       blockEditor.load(data);
       recovered=!!previous;dirty=recovered;
       mode=previous?.mode??mode;
@@ -109,13 +110,13 @@
     const next=picker.value;
     if(next===currentFile)return;
     picker.value=currentFile;
-    const [kind,id]=next.split(':');
+    const [kind,id,variant]=next.split(':');
     if(next===baseFile){await selectBase();return;}
     if(kind==='module'){
       if(!await flush())return;
       selected=id;
       await open(sprite);
-    }else await onSelectFile(kind,id);
+    }else await onSelectFile(kind,id,Number(variant));
   }
   export async function flush(){
     clearTimeout(timer);
@@ -137,7 +138,7 @@
       const result=await fetch(endpoint(),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
       if(!result.ok)throw Error((await result.json()).error);
       onFileEdit((await result.json()).edit,'script edit in '+(selected||sprite));original=data;
-      if(!selected)onSave(sprite,isRoom);
+      if(!selected)await onSave(sprite,isRoom,isGame,data,isTile);
       error='';
       if(generation===editNumber){dirty=false;recovered=false;await draft.write(null);}
       return !dirty;
@@ -231,11 +232,15 @@
         <FileCode size={16} aria-hidden="true"/>
         <select aria-label="Script file" title={selected?selected+'.ws':title} value={currentFile}
           disabled={!ready||busy} onchange={event=>chooseFile(event.currentTarget)}>
+          <option value="game">Game script</option>
           {#if roomScripts.length}<optgroup label="Room scripts">
             {#each roomScripts as {id,title}}<option value={'room:'+id}>{title} · Room script</option>{/each}
           </optgroup>{/if}
           {#if entityScripts.length}<optgroup label="Entity scripts">
             {#each entityScripts as {id,title}}<option value={'entity:'+id}>{title}</option>{/each}
+          </optgroup>{/if}
+          {#if tileScripts.length}<optgroup label="Tile scripts">
+            {#each tileScripts as {id,variant,title}}<option value={'tile:'+id+':'+variant}>{title}</option>{/each}
           </optgroup>{/if}
           {#if modules.length}<optgroup label="Modules">
             {#each modules as name}<option value={'module:'+name}>{name}.ws</option>{/each}
@@ -246,7 +251,7 @@
         <select class="category-picker" aria-label="Block category" value={String(selectedCategory)} disabled={!ready||busy}
           onchange={event=>blockEditor.selectCategory(Number(event.currentTarget.value))}>
           <option value="-1">Add block</option>
-          {#each blockCategories(isRoom&&!selected) as category,index}<option value={String(index)}>{category}</option>{/each}
+          {#each blockCategories((isRoom||isGame)&&!selected,isGame&&!selected,isTile&&!selected) as category,index}<option value={String(index)}>{category}</option>{/each}
         </select>
       {/if}
       <div class="edit-tools">
@@ -264,7 +269,7 @@
             <button onclick={()=>{closeScriptMenu(true);onNewEvent();}}>New event…</button>
             <button disabled={!ready||busy} onclick={()=>{closeScriptMenu(true);editConstants();}}>Constants…</button>
             <button disabled={dirty||busy} onclick={()=>{closeScriptMenu(true);newModule='';dialogError='';dialog='module';}}>New module…</button>
-            {#if !selected&&!isRoom}<button disabled={!ready||busy} onclick={()=>{closeScriptMenu(true);chooseMovement();}}>Movement preset…</button>{/if}
+            {#if !selected&&!isRoom&&!isGame&&!isTile}<button disabled={!ready||busy} onclick={()=>{closeScriptMenu(true);chooseMovement();}}>Movement preset…</button>{/if}
             {#if dirty}<button disabled={busy||saving} onclick={()=>{closeScriptMenu(true);clearTimeout(timer);dialog='discard';}}>Discard draft…</button>{/if}
           </div>
         </details>

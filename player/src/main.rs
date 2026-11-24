@@ -13,6 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut path = None;
     let mut verify = false;
+    let mut touch = false;
     let mut network = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
@@ -37,10 +38,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if arg == "--verify" {
             verify = true;
+        } else if arg == "--touch" {
+            touch = true;
         } else if path.is_none() {
             path = Some(PathBuf::from(arg));
         } else {
-            return Err("Usage: gamewaffle-player [--verify] [cartridge.waffle]".into());
+            return Err("Usage: gamewaffle-player [--verify] [--touch] [cartridge.waffle]".into());
         }
     }
     if path.is_none() {
@@ -51,5 +54,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    main::run_network(path, verify, network)
+    main::run_network(path, verify, network, touch)
 }

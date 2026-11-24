@@ -1,6 +1,6 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct Camera {
     pub min_width: u32,
@@ -25,6 +25,15 @@ impl Default for Camera {
 }
 
 impl Camera {
+    pub(crate) fn valid(self) -> bool {
+        (128..=512).contains(&self.min_width)
+            && (128..=512).contains(&self.min_height)
+            && (self.min_width..=512).contains(&self.max_width)
+            && (self.min_height..=512).contains(&self.max_height)
+            && (1..=8).contains(&self.zoom)
+            && self.resolution.is_none_or(|size| size.iter().all(|axis| (64..=512).contains(axis)))
+    }
+
     pub fn fixed_resolution(self) -> Option<[u32; 2]> {
         self.resolution
             .map(|size| size.map(|axis| axis.clamp(64, 512)))

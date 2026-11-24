@@ -1,4 +1,5 @@
-import { actorReadings, Blocks, Events, inputEvent, receivedEvent, Opcodes, messageInputs, entityQueries, roomCommands, valueInput } from './schema.mjs';
+import { actorReadings, Blocks, Events, inputEvent, receivedEvent, timerEvent, Opcodes, messageInputs, entityQueries, roomCommands, gameCommands, tileCommands, collectionCommands, collectionQueries, valueInput } from './schema.mjs';
+import {inventoryTypes,propertyType,scalarTypes,validateCollections} from './collections.mjs';
 
 const variableScopes = {local:0,global:1,flag:2,local_real:9,global_real:10,local_bool:11,global_bool:12,local_string:13,global_string:14};
 export const scopes = Object.keys(variableScopes);
@@ -105,13 +106,17 @@ function compileEvents(script, modules, trace, registry) {
        r.paramTypes.some(type=>!types.includes(type)))))throw Error('Invalid routine '+name);
   }
   try {
-  const dependencies = new Set(), shaderPresets = new Set(), fontUses = new Set();
-  let scriptGravity=false,scriptJump=false,requiresAbi10=false;
+  let scriptBorder=false;
+  const dependencies = new Set(), backgroundUses = new Set(), shaderPresets = new Set(), fontUses = new Set();
+  const collections=registry?.collections??validateCollections(script.collections);
+  let scriptGravity=false,scriptJump=false,requiresAbi10=false,requiresAbi12=false;
   const events = {};
   let nodes = 0;
   for (const [event, body] of Object.entries(script.events ?? {})) {
-    if (!Events.includes(event)&&!inputEvent(event)&&!receivedEvent(event)) throw Error(`Unknown script event: ${event}`);
-    if(inputEvent(event)&&registry&&!Object.hasOwn(registry.controls,event.split('.')[1]))throw Error('Map action in Game → Controls: '+event);
+    if (!Events.includes(event)&&!inputEvent(event)&&!receivedEvent(event)&&!timerEvent(event)) throw Error(`Unknown script event: ${event}`);
+    if(timerEvent(event))requiresAbi12=true;
+    if(event==='game_startup'&&registry&&!registry.gameScript)throw Error('Use On game startup in the Game script');
+    if(inputEvent(event)&&registry?.controls&&!Object.hasOwn(registry.controls,event.split('.')[1]))throw Error('Map action in Game → Controls: '+event);
     if(receivedEvent(event)&&registry?.events&&!Object.hasOwn(registry.events,event.slice(9)))throw Error('Choose an event from Game → Events');
     const bytes = [], names = [], constants = [], reals = [];
     let checking = 0;
@@ -181,6 +186,20 @@ function compileEvents(script, modules, trace, registry) {
         return typeof value==='boolean'?'boolean':'integer';
       } else if(value?.call){
         current=value;
+        if(collectionQueries.includes(value.call)){
+          const operation=collectionQueries.indexOf(value.call), [id,index,path]=value.args;
+          const inventory=operation<4;
+          const count=[1,2,3,3,1,2][operation];
+          if(value.args.length!==count||typeof id!=='string'||(inventory?!inventoryTypes(collections,id):!Object.hasOwn(collections.arrays,id)))
+            throw Error(value.call+' requires a declared collection and '+count+' arguments');
+          const property=operation===2||operation===3?propertyType(collections,id,path):null;
+          const result=['integer','string','boolean',property,'integer',collections.arrays[id]][operation];
+          if(!scalarTypes.includes(result))throw Error('Read a scalar property through its inventory path');
+          if(count>1)requireType(expression(index,target,depth+1),'integer','Collection index',target);
+          emit(126,target,operation,...word(intern(names,id)),...word(target),...word(intern(names,property?path:'')));
+          requiresAbi12=true;
+          return result;
+        }
         if(value.call==='item_key'){
           const [id]=value.args;
           if(value.args.length!==1||!variableName(id))throw Error('Choose a registered item for item_key');
@@ -189,6 +208,8 @@ function compileEvents(script, modules, trace, registry) {
         }
         if (value.call.startsWith('entity.') && !unit.imports?.includes('entity')) {
           const name=value.call.slice(7), query=Object.hasOwn(entityQueries,name)&&entityQueries[name];
+          if(name==='on_tile_top'&&registry&&!registry.tileScript)throw Error('Use the tile top query in a tile script');
+          if(Object.keys(entityQueries).indexOf(name)>=13)requiresAbi12=true;
           if(!query)throw Error('Unknown entity query '+name);
           const [,result,params]=query;
           if(value.args.length!==params.length)throw Error(value.call+' takes '+params.length+' arguments');
@@ -211,8 +232,8 @@ function compileEvents(script, modules, trace, registry) {
         return call(value.call,value.args,true,r=>expression(r.result,target,depth+1),(arg,type,name)=>checkArgument(arg,type,name,depth));
       } else if(value?.constant!=null){
         current=value;
-        if(!Object.hasOwn(unit.constants??{},value.constant))throw Error('Unknown constant '+value.constant);
-        const literal=unit.constants[value.constant];
+        const literal=unit.constants?.[value.constant]??registry?.constants?.[value.constant];
+        if(literal===undefined)throw Error('Unknown constant '+value.constant);
         if(!constantType(literal))throw Error('Invalid constant '+value.constant);
         return expression(literal,target,depth+1);
       } else if(value?.param){
@@ -230,11 +251,11 @@ function compileEvents(script, modules, trace, registry) {
         return scopeType(value.scope);
       } else if(value?.action!=null || value?.pressed!=null || value?.released!=null){
         const action=value.action??value.pressed??value.released;
-        if(registry&&!Object.hasOwn(registry.controls,action))throw Error('Map action in Game → Controls: '+action);
+        if(registry?.controls&&!Object.hasOwn(registry.controls,action))throw Error('Map action in Game → Controls: '+action);
         emit(commands.load,target,value.pressed!=null?7:value.released!=null?8:6,...word(named(action)));
         return 'boolean';
       } else if (value?.item != null) {
-        if(registry&&!Object.hasOwn(registry.items,value.item))throw Error('Register item in Game → Items: '+value.item);
+        if(registry?.items&&!Object.hasOwn(registry.items,value.item))throw Error('Register item in Game → Items: '+value.item);
         emit(commands.load,target,4,...word(named(value.item)));
       } else if(value?.actor){
         const index=Object.keys(actorReadings).indexOf(value.actor);
@@ -334,7 +355,7 @@ function compileEvents(script, modules, trace, registry) {
           emit(commands.wait,0);
         } else {
           if (!Object.hasOwn(Blocks,block.op)) throw Error(`Unknown block: ${block.op}`);
-          if(registry&&Blocks[block.op][1].some(([key])=>key==='item')&&!Object.hasOwn(registry.items,block.item??Blocks[block.op][1][0][2]))throw Error('Register item in Game → Items: '+(block.item??Blocks[block.op][1][0][2]));
+          if(registry?.items&&Blocks[block.op][1].some(([key])=>key==='item')&&!Object.hasOwn(registry.items,block.item??Blocks[block.op][1][0][2]))throw Error('Register item in Game → Items: '+(block.item??Blocks[block.op][1][0][2]));
           if (['give','take'].includes(block.op) && !variableName(block.item??'coin'))throw Error('Use an item ID with letters, numbers, or underscores');
           if(block.op==='follow_player'&&typeof block.player==='number'&&(!Number.isInteger(block.player)||block.player<1||block.player>4))throw Error('Select player 1 to 4.');
           if(block.op==='jump'||block.op==='jump_force')scriptJump=true;
@@ -342,6 +363,9 @@ function compileEvents(script, modules, trace, registry) {
           if(['set_sprite_shadow','set_health_bar'].includes(block.op)&&registry?.roomScript)
             throw Error('Use '+block.op+' in an entity script');
           if(Opcodes[block.op]>=87)requiresAbi10=true;
+          if(Opcodes[block.op]>=92)requiresAbi12=true;
+          if(gameCommands.includes(block.op)&&registry&&!registry.gameScript)throw Error('Use '+block.op+' in the Game script');
+          if(tileCommands.includes(block.op)&&registry&&!registry.tileScript)throw Error('Use '+block.op+' in a tile script');
           if(block.op==='set_health_bar')for(const key of ['fill','track']){
             if(typeof block[key]==='string'&&!/^#[0-9a-f]{6}$/i.test(block[key]))
               throw Error('Choose a health bar color such as #a6e3a1');
@@ -351,6 +375,8 @@ function compileEvents(script, modules, trace, registry) {
             if(['set_room_music','set_room_ambience'].includes(block.op) && block.sound && registry?.sounds && !Object.hasOwn(registry.sounds,block.sound))
               throw Error('Choose a sound from Assets → Sounds');
           }
+          if(block.op==='set_room_border')scriptBorder=true;
+          if(block.op==='set_room_background_image'&&block.image)backgroundUses.add(block.image);
           if(block.op==='set_room_shader')shaderPresets.add(block.shader??Blocks.set_room_shader[1][0][2]);
           if(block.op==='reset_room_shader')shaderPresets.add('none');
           if(block.op==='fire_projectile'){
@@ -363,18 +389,35 @@ function compileEvents(script, modules, trace, registry) {
               throw Error('Choose a font from Game → Bitfonts');
             fontUses.add(block.font);
           }
-          if(block.op==='emit_event'&&(!variableName(block.event)||registry?.events&&!Object.hasOwn(registry.events,block.event)))
-            throw Error('Choose an event from Game → Events');
+          if(['emit_event','emit_event_with_entity'].includes(block.op)&&(!variableName(block.event)||registry?.events&&!Object.hasOwn(registry.events,block.event)))
+            throw Error('Declare the event in the Game script');
           const message = messageInputs[block.op];
           const messageValue = message && (block[message]??Blocks[block.op][1][0][2]);
           const dynamicMessage = message && (typeof messageValue!=='string' || messageValue.length>96);
+          let collectionValue;
+          if(collectionCommands.includes(block.op)){
+            if(block.op.startsWith('array_')){
+              collectionValue=collections.arrays[block.array];
+              if(!collectionValue)throw Error('Declare number array '+block.array+' in the Game script');
+            }else{
+              const types=inventoryTypes(collections,block.inventory);
+              if(!types)throw Error('Declare inventory '+block.inventory+' in the Game script');
+              if(['inventory_append','inventory_remove'].includes(block.op)&&['game','players'].includes(block.inventory))
+                throw Error('Game and player property objects have fixed ownership');
+              if(block.op==='inventory_append'&&!types.includes(block.object_type))throw Error('Choose an allowed object type');
+              if(block.property!=null){
+                collectionValue=propertyType(collections,block.inventory,block.property);
+                if((block.op==='inventory_set')!==scalarTypes.includes(collectionValue))throw Error('Use scalar assignment or child object creation for this property type');
+              }
+            }
+          }
           const operands = Blocks[block.op][1].map(([key,type,fallback,optional],index)=>{
             if(block[key]===null && !optional)throw Error('None requires an optional input: '+key);
             const value = block[key] ?? fallback;
             if (valueInput(type)) {
               const actual=expression(value,index,depth+1);
               if(key==='entity')requireType(actual,'integer',key,index);
-              else if(type!=='number')requireType(actual,type,key,index);
+              else if(type!=='number')requireType(actual,type==='value'?collectionValue:type,key,index);
               else if(actual!=='integer'&&actual!=='real')throw Error(key+' requires a numeric value');
               return index;
             }
@@ -400,6 +443,6 @@ function compileEvents(script, modules, trace, registry) {
     if (bytes.length >= 65535) throw Error('Script bytecode exceeds 64 KiB');
     if (bytes.length) events[event] = { b:typeof Buffer === "undefined" ? Uint8Array.from(bytes) : Buffer.from(bytes), n:names, k:constants, ...(reals.length ? {f:reals} : {}) };
   }
-  return { events, dependencies, shaderPresets, fontUses, scriptGravity, scriptJump, requiresAbi10 };
+  return { events, dependencies, backgroundUses, scriptBorder, shaderPresets, fontUses, scriptGravity, scriptJump, requiresAbi10, requiresAbi12 };
   } catch(error){error.node=current;throw error;}
 }

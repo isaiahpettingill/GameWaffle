@@ -46,7 +46,7 @@ pub(super) fn variables(source: &BTreeMap<String, String>) -> Result<vm::Variabl
             if big.bits() > 8192 {
                 return Err("Invalid saved integer".into());
             }
-            vm::Value::Large(big)
+            vm::Value::Large(Rc::new(big))
         };
         globals.insert(name.as_str().into(), value);
     }
@@ -103,6 +103,10 @@ struct Scene {
     camera_point: Option<[f32; 2]>,
     #[serde(default, skip_serializing_if = "RoomSettings::is_default")]
     room_settings: RoomSettings,
+    #[serde(default, skip_serializing_if = "GameSettings::is_default")]
+    game_settings: GameSettings,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    shapes: Vec<drawing::Shape>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     hud_font: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -115,6 +119,10 @@ struct Scene {
 
 #[derive(Deserialize, Serialize)]
 struct SavedActor {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    hidden: bool,
+    #[serde(default)]
+    created_at: u64,
     #[serde(default)]
     origin: Option<Spawn>,
     id: u32,
@@ -169,6 +177,8 @@ impl SavedActor {
     fn capture(actor: &Actor, world: &World) -> Self {
         Self {
             id: actor.id,
+            hidden: actor.hidden,
+            created_at: actor.created_at,
             origin: actor.origin.clone(),
             name: actor.name.clone(),
             sprite: actor.sprite.clone(),
@@ -236,6 +246,8 @@ impl SavedActor {
             (self.layer, self.player),
         );
         let actor = runtime.actors.get_mut(&id).unwrap();
+        actor.hidden = self.hidden;
+        actor.created_at = self.created_at;
         if let Some(name) = &self.name {
             runtime.named_entities.insert(name.clone(), id);
         }
@@ -330,6 +342,8 @@ impl Scene {
             camera_slot: runtime.camera_slot,
             camera_point: runtime.camera_point,
             room_settings: runtime.room_settings.clone(),
+            game_settings: runtime.game_settings.clone(),
+            shapes: runtime.shapes.clone(),
             hud_font: runtime.hud_font.clone(),
             hud_text: runtime.hud_text.clone(),
             icons: runtime.icons.clone(),
@@ -366,6 +380,8 @@ impl Scene {
             || !self.particles.valid_save()
             || self.camera_slot > 3
             || !self.room_settings.valid()
+            || !self.game_settings.valid()
+            || self.shapes.len() > drawing::LIMIT || self.shapes.iter().any(|shape| !shape.valid())
             || self.pending.len() > MAX_ACTORS
             || self.broadcasts.len() > MAX_BROADCASTS
             || self.event_deliveries.len() > MAX_EVENT_DELIVERIES
@@ -400,7 +416,7 @@ impl Scene {
             return Err("Invalid saved room state".into());
         }
         for actor in &self.actors {
-            if actor.animation_start > self.tick
+            if actor.animation_start > self.tick || actor.created_at > self.tick
                 || actor.player.is_some_and(|p| p > 3)
                 || actor
                     .xy
@@ -437,14 +453,17 @@ impl Scene {
     fn solid_id_in_scene(&self) -> bool {
         self.actors
             .iter()
-            .any(|actor| actor.id <= self.solids as u32 || actor.id >= self.next)
+            .any(|actor| {
+                if actor.id == 0 { return actor.sprite.as_deref() != Some(GAME_SCRIPT) || actor.player.is_some(); }
+                actor.id <= self.solids as u32 || actor.id >= self.next || actor.sprite.as_deref() == Some(GAME_SCRIPT)
+            })
     }
 
     fn restore(self, runtime: &mut Runtime) -> Result<(), String> {
         let discard: Vec<_> = runtime
             .actors
             .keys()
-            .filter(|id| !runtime.static_ids.contains(id))
+            .filter(|id| !runtime.static_ids.contains(id) && (**id != 0 || self.actors.iter().any(|actor| actor.id == 0)))
             .copied()
             .collect();
         for id in discard {
@@ -474,6 +493,11 @@ impl Scene {
         runtime.camera_slot = self.camera_slot;
         runtime.camera_point = self.camera_point;
         runtime.room_settings = self.room_settings;
+        runtime.apply_room_border();
+        runtime.shapes = self.shapes;
+        if !self.game_settings.is_default() {
+            runtime.game_settings = self.game_settings;
+        }
         if runtime.room_settings.gravity.is_some() {
             runtime.apply_room_gravity();
         }
@@ -506,6 +530,8 @@ struct Save {
     rng: u32,
     players: BTreeMap<usize, [f32; 2]>,
     globals: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "collections::Collections::is_empty")]
+    collections: collections::Collections,
     flags: Vec<String>,
     #[serde(default)]
     personal: [BTreeMap<String, u32>; 4],
@@ -541,11 +567,12 @@ impl Runtime {
                 .filter_map(|a| Some((a.player?, [a.p.x, a.p.y])))
                 .collect(),
             globals: self
-                .globals
+                .game_properties.globals
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
-            flags: self.flags.keys().map(ToString::to_string).collect(),
+            collections: self.game_properties.collections.clone(),
+            flags: self.game_properties.flags.keys().map(ToString::to_string).collect(),
             personal: self.personal.clone(),
             inventory: self.inventory.clone(),
             removed: self.removed.clone(),
@@ -576,6 +603,8 @@ impl Runtime {
             return Err("Invalid save for this game".into());
         }
         let globals = variables(&state.globals)?;
+        if !state.collections.valid(&self.game.collections) {return Err("Invalid saved collections".into());}
+        let collections=if state.collections.is_empty(){collections::Collections::new(&self.game.collections)?}else{state.collections};
         for room in state.memory.values() {
             for record in room.values() {
                 if record
@@ -623,8 +652,9 @@ impl Runtime {
             .filter(|room| self.game.rooms.contains_key(room))
             .collect();
         self.memory = state.memory;
-        self.globals = globals;
-        self.flags = state
+        self.game_properties.collections = collections;
+        self.game_properties.globals = globals;
+        self.game_properties.flags = state
             .flags
             .into_iter()
             .map(|n| (n.into(), 1.into()))

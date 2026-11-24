@@ -20,7 +20,11 @@ export function pack(cart, { editor = false, locale = cart.localization?.locale 
   const items=Object.fromEntries(Object.entries(cart.items??{}).map(([id,item])=>[id,{
     ...item,...(item.label?{label:label(item.label)}:{}),
   }]));
-  const metadata = encodeCbor({fonts:Object.keys(cart.fonts??{}),events:cart.events??[],controls:cart.controls??{},items,text,menus,minimap:cart.minimap?.mode??'off',id:cart.saveId??name,start, sprites, rooms, globals:globals??{}, flags:flags??{}});
+  const objects=cart.collections&&{...cart.collections,types:Object.fromEntries(Object.entries(cart.collections.types).map(([id,fields])=>[id,
+    Object.fromEntries(Object.entries(fields).map(([name,field])=>[name,{type:field.type,
+      ...(Object.hasOwn(field,'default')?{default:String(field.type==='real'?field.default.real:field.default)}:{})}]))]))};
+  const metadata = encodeCbor({fonts:Object.keys(cart.fonts??{}),events:cart.events??[],controls:cart.controls??{},items,text,menus,minimap:cart.minimap?.mode??'off',id:cart.saveId??name,start, sprites, rooms, globals:globals??{}, flags:flags??{},
+    ...(cart.gameProgram?{initialGlobals:cart.initialGlobals,collections:objects}:{})});
   if (metadata.length > MAX_METADATA) throw Error('Cartridge simulation data exceeds 32 MiB');
   const compressed = deflateSync(metadata,{level:6});
   const views = Object.fromEntries(Object.entries(rooms).map(([id,room])=>[id,

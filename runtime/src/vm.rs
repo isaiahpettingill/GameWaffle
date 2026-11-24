@@ -1,4 +1,4 @@
-use crate::{Action, Input, Runtime};
+use crate::{Action, Input, Runtime, jit};
 use num_bigint::BigInt;
 use num_traits::{FromPrimitive, ToPrimitive, Zero};
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,7 @@ pub type Variables = BTreeMap<Rc<str>, Value>;
 #[derive(Clone)]
 pub enum Value {
     Small(i64),
-    Large(BigInt),
+    Large(Rc<BigInt>),
     Real(f64),
     Text(Rc<str>),
 }
@@ -46,14 +46,14 @@ impl Value {
     fn integer(&self) -> Result<BigInt, &'static str> {
         match self {
             Self::Small(value) => Ok((*value).into()),
-            Self::Large(value) => Ok(value.clone()),
+            Self::Large(value) => Ok((**value).clone()),
             Self::Real(_) | Self::Text(_) => Err("Expected integer operands"),
         }
     }
     fn from_integer(value: BigInt) -> Self {
         value
             .to_i64()
-            .map_or_else(|| Self::Large(value), Self::Small)
+            .map_or_else(|| Self::Large(Rc::new(value)), Self::Small)
     }
     fn float(&self) -> f64 {
         match self {
@@ -112,9 +112,10 @@ pub struct Program {
     code: Vec<Instruction>,
     fingerprint: u64,
     names: Vec<Rc<str>>,
-    constants: Vec<Value>,
+    constants: Vec<i64>,
     registers: usize,
     reals: Vec<f64>,
+    regions: Vec<jit::Region>,
 }
 
 pub struct Machine {
@@ -124,6 +125,7 @@ pub struct Machine {
     registers: Vec<Value>,
     pc: usize,
     wake: u64,
+    draw_style: crate::drawing::Style,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -135,6 +137,8 @@ pub struct SavedMachine {
     registers: Vec<SavedRegister>,
     pc: usize,
     wake: u64,
+    #[serde(default, skip_serializing_if = "crate::drawing::Style::is_default")]
+    draw_style: crate::drawing::Style,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -149,11 +153,14 @@ struct Context<'a> {
     id: u32,
     received: bool,
     input: Input,
+    buttons: u8,
+    previous_buttons: u8,
+    fuel: usize,
     actions: &'a mut Vec<Action>,
 }
 
 impl Program {
-    pub fn decode(raw: Encoded) -> Result<Self, String> {
+    pub fn decode(raw: Encoded, controls: &BTreeMap<String, u8>) -> Result<Self, String> {
         if raw.b.len() > 65535 || raw.n.len() > 4096 || raw.k.len() > 4096 || raw.f.len() > 4096 {
             return Err("Script bytecode exceeds its limits".into());
         }
@@ -167,6 +174,7 @@ impl Program {
             hasher.write(&value.to_le_bytes());
         }
         let mut code = Vec::new();
+        let mut opcodes = Vec::new();
         let mut positions = BTreeMap::new();
         let mut jumps = Vec::new();
         let mut registers = 0;
@@ -187,6 +195,32 @@ impl Program {
                 88 | 90 => "WWW",
                 89 => "WW",
                 91 => "W",
+                92 | 97 | 98 => "WW",
+                93 => "WWWWW",
+                94 | 95 => "N",
+                96 => "W",
+                99 => "NW",
+                100 | 104 => "N",
+                101..=103 => "W",
+                105 => "WWW",
+                106 => "N",
+                107 | 109 | 111 => "W",
+                108 | 110 => "",
+                112 | 113 | 115 => "WWWW",
+                114 => "WWW",
+                116 => "WWWWWW",
+                117 => "WW",
+                118 => "NN",
+                119 | 123 | 125 => "NW",
+                120 => "NWNW",
+                121 | 122 => "NWN",
+                124 => "NWW",
+                126 => "roNWN",
+                127 => "NW",
+                128 => "W",
+                129 => "N",
+                130..=133 => "WW",
+                134 => "NWWW",
                 2 => "WWW",
                 3 | 9 => "NWW",
                 5 | 7 | 8 => "N",
@@ -240,7 +274,7 @@ impl Program {
                     b'k' => index < raw.k.len(),
                     b'f' => index < raw.f.len(),
                     b'N' => index < raw.n.len(),
-                    b'n' if opcode == 11 && args[1] == 5 => index < 27,
+                    b'n' if opcode == 11 && args[1] == 5 => index < 28,
                     b'n' if opcode == 11 && args[1] == 3 => index < 8,
                     b'n' => index < raw.n.len(),
                     b's' => {
@@ -250,7 +284,8 @@ impl Program {
                             matches!(index, 0..=2 | 9..=14)
                         }
                     }
-                    b'o' if opcode == 50 => index < 13,
+                    b'o' if opcode == 50 => index < 18,
+                    b'o' if opcode == 126 => index < 6,
                     b'o' if opcode == 49 => matches!(index, 20 | 21 | 22 | 33 | 37),
                     b'o' => index < 34,
                     _ => true,
@@ -260,8 +295,12 @@ impl Program {
                 }
                 args[slot] = value;
             }
+            if opcode == 11 && (6..=8).contains(&args[1]) {
+                args[3] = controls.get(&raw.n[args[2] as usize]).copied().unwrap_or_default().into();
+            }
             let handler = HANDLERS[usize::from(opcode)];
             code.push(Instruction { handler, args });
+            opcodes.push(opcode);
             match opcode {
                 14 => jumps.push((code.len() - 1, 1)),
                 15 => jumps.push((code.len() - 1, 0)),
@@ -276,25 +315,104 @@ impl Program {
                 .ok_or("Jump target is outside an instruction boundary")?
                 as u16;
         }
+        for pc in 0..code.len().saturating_sub(3) {
+            if opcodes[pc..pc+4]!=[11,10,13,12] {continue;}
+            let [dest,scope,name,..]=code[pc].args;
+            let [rhs,..]=code[pc+1].args;
+            let [calc_dest,op,left,right,..]=code[pc+2].args;
+            let [store_scope,store_name,source,..]=code[pc+3].args;
+            if scope<=1 && rhs!=dest && matches!(op,0..=2) && calc_dest==dest && left==dest && right==rhs
+                && store_scope==scope && store_name==name && source==dest {
+                code[pc].handler=fused_integer_update;
+            }
+        }
+        let reals: Vec<f64> = raw.f.iter().map(|value| {
+            value.parse::<f64>().ok().filter(|value| value.is_finite()).ok_or("Invalid real constant")
+        }).collect::<Result<_, _>>()?;
+        let regions = find_numeric_regions(&mut code, &opcodes, &reals);
         Ok(Self {
             code,
             fingerprint: hasher.finish(),
             names: raw.n.into_iter().map(Rc::from).collect(),
-            constants: raw.k.into_iter().map(Value::from).collect(),
+            constants: raw.k,
             registers,
-            reals: raw
-                .f
-                .into_iter()
-                .map(|value| {
-                    value
-                        .parse::<f64>()
-                        .ok()
-                        .filter(|value| value.is_finite())
-                        .ok_or("Invalid real constant")
-                })
-                .collect::<Result<_, _>>()?,
+            reals,
+            regions,
         })
     }
+}
+
+fn find_numeric_regions(code: &mut [Instruction], opcodes: &[u8], reals: &[f64]) -> Vec<jit::Region> {
+    let mut regions = Vec::new();
+    let mut start = 0;
+    while start < code.len() && regions.len() < 8 {
+        let mut steps = Vec::new();
+        let mut inputs = Vec::new();
+        let mut outputs = Vec::new();
+        let mut written = [false; REGISTERS];
+        let mut read = [false; REGISTERS];
+        let mut math = 0;
+        let mut has_real = false;
+        for (instruction, opcode) in code.iter().zip(opcodes).skip(start).take(128) {
+            let [dst, arg, lhs, rhs, ..] = instruction.args;
+            let step = match *opcode {
+                17 => {
+                    has_real = true;
+                    jit::Step::Real { dst, value: reals[arg as usize] }
+                }
+                13 => {
+                    let Some(op) = jit::Op::from_bytecode(arg) else { break };
+                    for reg in [lhs, rhs] {
+                        if !written[reg as usize] && !std::mem::replace(&mut read[reg as usize], true) {
+                            inputs.push(reg);
+                        }
+                    }
+                    math += 1;
+                    jit::Step::Math { dst, lhs, rhs, op }
+                }
+                _ => break,
+            };
+            if !std::mem::replace(&mut written[dst as usize], true) {
+                outputs.push(dst);
+            }
+            steps.push(step);
+        }
+        let length = steps.len();
+        if math >= 6 && has_real {
+            code[start].handler = if opcodes[start] == 17 { run_numeric_region::<17> } else { run_numeric_region::<13> };
+            code[start].args[5] = regions.len() as u16;
+            regions.push(jit::Region::new(steps, inputs, outputs));
+        }
+        start += length.max(1);
+    }
+    regions
+}
+
+fn run_numeric_region<const FIRST: u8>(
+    instruction: &Instruction, program: &Program, machine: &mut Machine, context: &mut Context<'_>, count: usize,
+) -> Result<(), &'static str> {
+    let region = &program.regions[instruction.args[5] as usize];
+    let interpret = |machine: &mut Machine, context: &mut Context<'_>| {
+        execute::<FIRST>(instruction, program, machine, context, count)
+    };
+    if count == 1 || !context.runtime.jit_enabled || context.fuel < region.steps.len() {
+        return interpret(machine, context);
+    }
+    let mut scratch = [0.0; REGISTERS];
+    for &reg in &region.inputs {
+        let Value::Real(value) = machine.registers[reg as usize] else { return interpret(machine, context) };
+        scratch[reg as usize] = value;
+    }
+    if !region.run(&mut scratch) {
+        return interpret(machine, context);
+    }
+    for &reg in &region.outputs {
+        machine.registers[reg as usize] = Value::Real(scratch[reg as usize]);
+    }
+    context.runtime.jit_runs = context.runtime.jit_runs.wrapping_add(1);
+    context.fuel -= region.steps.len();
+    machine.pc += region.steps.len();
+    Ok(())
 }
 
 impl Machine {
@@ -306,6 +424,7 @@ impl Machine {
             program,
             pc: 0,
             wake: 0,
+            draw_style: Default::default(),
         }
     }
 
@@ -330,6 +449,7 @@ impl Machine {
                 .collect(),
             pc: self.pc,
             wake: self.wake,
+            draw_style: self.draw_style,
         }
     }
 
@@ -337,6 +457,7 @@ impl Machine {
         if saved.fingerprint != program.fingerprint
             || saved.pc > program.code.len()
             || saved.registers.len() != program.registers
+            || !saved.draw_style.valid()
         {
             return None;
         }
@@ -364,12 +485,14 @@ impl Machine {
                 .map(Rc::from),
             pc: saved.pc,
             wake: saved.wake,
+            draw_style: saved.draw_style,
         })
     }
 
     pub fn restart(&mut self) {
         self.pc = 0;
         self.wake = 0;
+        self.draw_style = Default::default();
     }
 
     pub fn run(
@@ -384,30 +507,36 @@ impl Machine {
             return Ok(false);
         }
         let program = self.program.clone();
+        let budget = runtime.script_fuel.min(SLICE);
+        let previous_buttons = runtime.input_slot(id).map_or(0, |slot| runtime.prior_buttons[slot]);
         let mut cx = Context {
             received: event.starts_with("received."),
             runtime,
             id,
             input,
+            buttons: input.bits(),
+            previous_buttons,
+            fuel: budget,
             actions,
         };
-        let budget = cx.runtime.script_fuel.min(SLICE);
-        let floor = cx.runtime.script_fuel - budget;
-        while cx.runtime.script_fuel > floor && self.wake <= cx.runtime.tick {
+        let result = loop {
+            if cx.fuel == 0 || self.wake > cx.runtime.tick { break Ok(()); }
             let Some(first) = program.code.get(self.pc) else {
-                break;
+                break Ok(());
             };
             #[cfg(target_arch = "wasm32")]
             if cx.runtime.debug {
                 if debug_break(id, event, self.pc) {
                     debug_inspect(&cx.runtime.inspect_actor(id));
                 }
-                (first.handler)(first, &program, self, &mut cx, 1)?;
+                if let Err(error) = (first.handler)(first, &program, self, &mut cx, 1) { break Err(error); }
                 continue;
             }
-            let count = (cx.runtime.script_fuel - floor).min(DISPATCH_BATCH);
-            (first.handler)(first, &program, self, &mut cx, count)?;
-        }
+            let count = cx.fuel.min(DISPATCH_BATCH);
+            if let Err(error) = (first.handler)(first, &program, self, &mut cx, count) { break Err(error); }
+        };
+        cx.runtime.script_fuel -= budget - cx.fuel;
+        result?;
         if self.wake > cx.runtime.tick {
             return Ok(false);
         }
@@ -417,7 +546,7 @@ impl Machine {
 
 // The loader resolves each opcode once. Each handler reads the next handler
 // address directly from the decoded instruction stream.
-const HANDLERS: [Handler; 92] = [
+const HANDLERS: [Handler; 135] = [
     execute::<0>,
     execute::<1>,
     execute::<2>,
@@ -510,6 +639,49 @@ const HANDLERS: [Handler; 92] = [
     execute::<89>,
     execute::<90>,
     execute::<91>,
+    execute::<92>,
+    execute::<93>,
+    execute::<94>,
+    execute::<95>,
+    execute::<96>,
+    execute::<97>,
+    execute::<98>,
+    execute::<99>,
+    execute::<100>,
+    execute::<101>,
+    execute::<102>,
+    execute::<103>,
+    execute::<104>,
+    execute::<105>,
+    execute::<106>,
+    execute::<107>,
+    execute::<108>,
+    execute::<109>,
+    execute::<110>,
+    execute::<111>,
+    execute::<112>,
+    execute::<113>,
+    execute::<114>,
+    execute::<115>,
+    execute::<116>,
+    execute::<117>,
+    execute::<118>,
+    execute::<119>,
+    execute::<120>,
+    execute::<121>,
+    execute::<122>,
+    execute::<123>,
+    execute::<124>,
+    execute::<125>,
+    execute::<126>,
+    execute::<127>,
+    execute::<128>,
+    execute::<129>,
+    execute::<130>,
+    execute::<131>,
+    execute::<132>,
+    execute::<133>,
+    execute::<134>,
 ];
 fn execute<const OP: u8>(
     i: &Instruction,
@@ -519,8 +691,32 @@ fn execute<const OP: u8>(
     count: usize,
 ) -> Result<(), &'static str> {
     m.pc += 1;
-    cx.runtime.script_fuel -= 1;
+    cx.fuel -= 1;
     match OP {
+        118..=126 => collection_command(OP,i,m,cx),
+        106..=117 => draw_command(OP, i, m, cx),
+        92..=98 => system_command(OP, i, m, cx),
+        100..=104 => tile_command(OP, i, m, cx),
+        105 => {
+            let [target,x,y,..]=i.args;
+            if let Some(body)=cx.runtime.entity(entity_id(&m.registers[target as usize])).and_then(|actor|actor.body) {
+                let f=|reg:u16|m.registers[reg as usize].float().clamp(-20000.0,20000.0) as f32;
+                cx.runtime.world.force(body, crate::Vec2::new(f(x),f(y)));
+            }
+            Ok(())
+        }
+        134 => {
+            let [preset, rate, x, y, ..] = i.args;
+            let effect = crate::particles::Effect::named(&m.program.names[preset as usize])
+                .ok_or("Choose a particle effect")?;
+            let offset = [x, y].map(|reg| m.registers[reg as usize].float().clamp(-4096.0, 4096.0) as f32);
+            let rate = m.registers[rate as usize].float().clamp(1.0, 240.0) as u16;
+            if let Some(actor) = cx.runtime.actors.get_mut(&cx.id) {
+                let phase = actor.emitter.filter(|old| old.effect == effect).map_or(0, |old| old.phase);
+                actor.emitter = Some(crate::particles::Emitter { effect, rate, offset, phase, until: None });
+            }
+            Ok(())
+        }
         10 => constant(i, m, cx),
         11 => load(i, m, cx),
         12 => store(i, m, cx),
@@ -555,8 +751,8 @@ fn execute<const OP: u8>(
             );
             Ok(())
         }
-        74..=83 => room_command::<OP>(i, m, cx),
-        84 => {
+        74..=83 | 127..=129 => room_command::<OP>(i, m, cx),
+        84 | 99 => {
             let name = &program.names[i.args[0] as usize];
             if cx.runtime.game.events.contains(name.as_ref())
                 && cx.actions.len() < crate::MAX_ACTIONS
@@ -569,6 +765,7 @@ fn execute<const OP: u8>(
                 cx.actions.push(Action::Broadcast(crate::Broadcast {
                     name: name.to_string(),
                     sender,
+                    entity: if OP==99 { entity_id(&m.registers[i.args[1] as usize]) } else { 0 },
                 }));
             }
             Ok(())
@@ -608,7 +805,7 @@ fn execute<const OP: u8>(
             }
             Ok(())
         }
-        51..=54 | 58..=63 | 65 | 66 | 89..=91 => entity_command::<OP>(i, m, cx),
+        51..=54 | 58..=63 | 65 | 66 | 89..=91 | 130..=133 => entity_command::<OP>(i, m, cx),
         _ => engine::<OP>(i, m, cx),
     }?;
     if count > 1 && m.wake <= cx.runtime.tick {
@@ -620,7 +817,48 @@ fn execute<const OP: u8>(
 }
 
 fn constant(i: &Instruction, m: &mut Machine, _: &mut Context<'_>) -> Result<(), &'static str> {
-    m.registers[i.args[0] as usize] = m.program.constants[i.args[1] as usize].clone();
+    m.registers[i.args[0] as usize] = Value::Small(m.program.constants[i.args[1] as usize]);
+    Ok(())
+}
+
+// Keep the original instructions and their program counters for single-step
+// debugging, instruction budgets, jumps into the sequence, and large integers.
+fn fused_integer_update(i:&Instruction,program:&Program,m:&mut Machine,cx:&mut Context<'_>,count:usize)->Result<(),&'static str>{
+    use std::collections::btree_map::Entry;
+    if count<4 {return execute::<11>(i,program,m,cx,count);}
+    let [dest,scope,name,..]=i.args;
+    let [rhs,constant,..]=program.code[m.pc+1].args;
+    let op=program.code[m.pc+2].args[1];
+    let number=program.constants[constant as usize];
+    let updated={
+        let table=if scope==0 {&mut cx.runtime.actors.get_mut(&cx.id).unwrap().variables}else{&mut cx.runtime.game_properties.globals};
+        let at_limit=table.len()>=VARIABLE_LIMIT;
+        let output=|left:i64| match op {0=>left.checked_add(number),1=>left.checked_sub(number),_=>left.checked_mul(number)};
+        match table.entry(program.names[name as usize].clone()) {
+            Entry::Occupied(mut entry)=>{
+                if let Value::Small(left)=entry.get(){
+                    let result=output(*left);
+                    if let Some(value)=result{
+                        if value==0 {entry.remove();}else{*entry.get_mut()=Value::Small(value);}
+                    }
+                    result
+                }else{None}
+            }
+            Entry::Vacant(entry)=>{
+                let result=output(0);
+                if let Some(value)=result.filter(|value|*value!=0 && !at_limit){entry.insert(Value::Small(value));}
+                result.filter(|value|*value==0 || !at_limit)
+            }
+        }
+    };
+    let Some(updated)=updated else{return execute::<11>(i,program,m,cx,count);};
+    m.registers[dest as usize]=Value::Small(updated);
+    m.registers[rhs as usize]=Value::Small(number);
+    cx.fuel-=4;
+    m.pc+=4;
+    if count>4 {
+        if let Some(next)=program.code.get(m.pc){return (next.handler)(next,program,m,cx,count-4);}
+    }
     Ok(())
 }
 
@@ -630,21 +868,9 @@ fn real(i: &Instruction, m: &mut Machine, _: &mut Context<'_>) -> Result<(), &'s
 }
 
 fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'static str> {
-    let [dest, scope, key, _, ..] = i.args;
+    let [dest, scope, key, mask, ..] = i.args;
     let value = if scope == 3 {
-        let input = cx.input;
-        Value::from(i64::from(
-            [
-                input.up,
-                input.down,
-                input.left,
-                input.right,
-                input.a,
-                input.b,
-                input.x,
-                input.menu,
-            ][key as usize],
-        ))
+        Value::from(i64::from(cx.buttons & (1 << key) != 0))
     } else if scope == 5 {
         let a = &cx.runtime.actors[&cx.id];
         match key {
@@ -658,6 +884,7 @@ fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'
             24 => Value::Text(Rc::from(a.menu_id.as_str())),
             25 => Value::Text(m.used_item.clone().unwrap_or_default()),
             26 => Value::from(if cx.received { m.payload[0] } else { 0 }),
+            27 => Value::from(if cx.received { m.payload[1] } else { 0 }),
             _ => Value::from(match key {
                 0 => i64::from(cx.id),
                 1 => a.p.x.round() as i64,
@@ -684,18 +911,9 @@ fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'
             }),
         }
     } else if (6..=8).contains(&scope) {
-        let mask = cx
-            .runtime
-            .game
-            .controls
-            .get(m.program.names[key as usize].as_ref())
-            .copied()
-            .unwrap_or(0);
-        let now = cx.input.bits() & mask != 0;
-        let before = cx
-            .runtime
-            .input_slot(cx.id)
-            .is_some_and(|slot| cx.runtime.prior_buttons[slot] & mask != 0);
+        let mask = mask as u8;
+        let now = cx.buttons & mask != 0;
+        let before = cx.previous_buttons & mask != 0;
         Value::from(i64::from(match scope {
             7 => now && !before,
             8 => before && !now,
@@ -712,8 +930,8 @@ fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'
         let name = &m.program.names[key as usize];
         let table = match scope {
             0 | 9 | 11 | 13 => &cx.runtime.actors[&cx.id].variables,
-            1 | 10 | 12 | 14 => &cx.runtime.globals,
-            _ => &cx.runtime.flags,
+            1 | 10 | 12 | 14 => &cx.runtime.game_properties.globals,
+            _ => &cx.runtime.game_properties.flags,
         };
         let fallback = || match scope {
             9 | 10 => Value::Real(0.0),
@@ -730,8 +948,8 @@ fn store(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &
     let [scope, key, source, _, ..] = i.args;
     let table = match scope {
         0 | 9 | 11 | 13 => &mut cx.runtime.actors.get_mut(&cx.id).unwrap().variables,
-        1 | 10 | 12 | 14 => &mut cx.runtime.globals,
-        _ => &mut cx.runtime.flags,
+        1 | 10 | 12 | 14 => &mut cx.runtime.game_properties.globals,
+        _ => &mut cx.runtime.game_properties.flags,
     };
     let name = &m.program.names[key as usize];
     let value = &m.registers[source as usize];
@@ -790,6 +1008,173 @@ fn calculate(i: &Instruction, m: &mut Machine, _: &mut Context<'_>) -> Result<()
         _ => calculate_integer(op, a, b)?,
     };
     m.registers[dest as usize] = value;
+    Ok(())
+}
+
+fn collection_command(op:u8,i:&Instruction,m:&mut Machine,cx:&mut Context<'_>)->Result<(),&'static str>{
+    let get=|n:usize|&m.registers[i.args[n] as usize];
+    let name=|n:usize|m.program.names[i.args[n] as usize].as_ref();
+    let index=|n:usize|match get(n){
+        Value::Small(value) if *value>0=>usize::try_from(*value-1).unwrap_or(usize::MAX),
+        _=>usize::MAX,
+    };
+    let collections=&mut cx.runtime.game_properties.collections;
+    if op==126{
+        let result=collections.query(i.args[1],name(2),index(3),name(4))?;
+        m.registers[i.args[0] as usize]=result;
+        return Ok(());
+    }
+    let zero=Value::Small(0);
+    let (index,path,value)=match op {
+        118=>(0,name(1),&zero),119|125=>(index(1),"",&zero),120=>(index(1),name(2),get(3)),
+        121|122=>(index(1),name(2),&zero),123=>(0,"",get(1)),124=>(index(1),"",get(2)),
+        _=>unreachable!(),
+    };
+    collections.command(&cx.runtime.game.collections,op,name(0),index,path,value)
+}
+
+fn draw_command(op: u8, i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'static str> {
+    use crate::drawing::{Kind, Shape};
+    let get=|index:usize| &m.registers[i.args[index] as usize];
+    match op {
+        106 => m.draw_style.hud=m.program.names[i.args[0] as usize].as_ref()=="hud",
+        107 | 109 => {
+            let Value::Text(text)=get(0) else {return Err("A drawing color must be a string");};
+            let color=text.strip_prefix('#').filter(|hex|matches!(hex.len(),6|8))
+                .and_then(|hex|u32::from_str_radix(hex,16).ok().map(|color|if hex.len()==6{(color<<8)|255}else{color}))
+                .ok_or("Use a color such as #80c0ff or #80c0ff80")?;
+            if op==107 {m.draw_style.fill=color;} else {m.draw_style.stroke=color;}
+        }
+        108 => m.draw_style.fill=0,
+        110 => m.draw_style.stroke=0,
+        111 => m.draw_style.width=get(0).float().clamp(0.0,64.0) as f32,
+        _ => {
+            if cx.runtime.shapes.len()>=crate::drawing::LIMIT {return Ok(());}
+            let (kind,count)=match op {
+                112=>(Kind::Rect,4), 113=>(Kind::Ellipse,4), 114=>(Kind::Ellipse,3),
+                115=>(Kind::Line,4), 116=>(Kind::Triangle,6), 117=>(Kind::Point,2), _=>unreachable!(),
+            };
+            let mut coords=[0.0;6];
+            for (index,coord) in coords[..count].iter_mut().enumerate(){
+                *coord=get(index).float().clamp(-65536.0,65536.0) as f32;
+            }
+            if op==114 {coords[3]=coords[2];}
+            cx.runtime.shapes.push(Shape {kind,coords,style:m.draw_style});
+        }
+    }
+    Ok(())
+}
+
+fn system_command(op: u8, i: &Instruction, m: &Machine, cx: &mut Context<'_>) -> Result<(), &'static str> {
+    let integer = |n: usize| match &m.registers[i.args[n] as usize] {
+        Value::Small(value) => u32::try_from(*value).map_err(|_| "Integer outside supported range"),
+        _ => Err("Expected a non-negative integer"),
+    };
+    let name = || m.program.names[i.args[0] as usize].as_ref();
+    let runtime = &mut cx.runtime;
+    if op <= 96 && cx.id != 0 {
+        return Err("Use this command in the Game script");
+    }
+    match op {
+        92 | 93 => {
+            let settings = if op == 92 {
+                crate::Camera { resolution: Some([integer(0)?, integer(1)?]), ..Default::default() }
+            } else {
+                crate::Camera { min_width: integer(0)?, min_height: integer(1)?, max_width: integer(2)?,
+                    max_height: integer(3)?, zoom: integer(4)?, resolution: None }
+            };
+            if !settings.valid() { return Err("Display dimensions or pixel zoom are outside the supported range"); }
+            runtime.game_settings.display = Some(settings);
+        }
+        94 => {
+            let group = match name() { "player" => false, "group" => true, _ => return Err("Unknown camera target") };
+            runtime.game_settings.group_camera = Some(group);
+            runtime.group_camera = runtime.game.rooms[&runtime.room].group_camera_override.unwrap_or(group);
+        }
+        95 => {
+            let mode = name();
+            if !matches!(mode, "off" | "world" | "explored") { return Err("Unknown minimap mode"); }
+            if runtime.game_settings.minimap.as_deref() != Some(mode) {
+                runtime.game_settings.minimap = Some(mode.to_owned());
+            }
+        }
+        96 => {
+            let player = integer(0)?;
+            if !(1..=2).contains(&player) { return Err("Choose player 1 or 2 for the first gamepad"); }
+            runtime.game_settings.first_controller_slot = Some(player as usize - 1);
+        }
+        97 => {
+            let entity = integer(0)?;
+            if runtime.entity_ids.contains(&entity) {
+                runtime.actors.get_mut(&entity).unwrap().hidden = m.registers[i.args[1] as usize].zero();
+            }
+        }
+        98 => {
+            let entity = integer(0)?;
+            let player = integer(1)?;
+            if player > 4 { return Err("Choose player 1 to 4, or 0 for no player"); }
+            runtime.assign_player(entity, player.checked_sub(1).map(|player| player as usize));
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+fn tile_command(op: u8, i: &Instruction, m: &Machine, cx: &mut Context<'_>) -> Result<(), &'static str> {
+    let runtime = &mut cx.runtime;
+    let actor = runtime.actors.get_mut(&cx.id).ok_or("Tile is no longer active")?;
+    let name = actor.sprite.as_deref().filter(|name| name.starts_with("@tile/"))
+        .ok_or("Use this command in a tile script")?;
+    let value = || &m.registers[i.args[0] as usize];
+    let text = || m.program.names[i.args[0] as usize].as_ref();
+    match op {
+        100 => {
+            let (clip,once) = match text() {
+                "still" => ("default",false), "loop" => ("sequence",false), "once" => ("sequence",true),
+                _ => return Err("Unknown tile playback mode"),
+            };
+            if actor.animation!=clip || actor.animation_once!=once || once {
+                actor.animation=clip.into(); actor.animation_start=runtime.tick;
+                actor.animation_once=once; actor.animation_finished=false;
+            }
+        }
+        101 | 102 => {
+            let Value::Small(amount) = value() else { return Err("Use an integer tile frame"); };
+            let sprite=&runtime.game.sprites[name];
+            let frames=&sprite.clips["sequence"].frames;
+            if frames.is_empty() { return Ok(()); }
+            let count=frames.len() as i64;
+            let current=actor.animation.strip_prefix("frame_").and_then(|text|text.parse::<i64>().ok()).unwrap_or_else(|| {
+                let image = sprite.clips.get(&actor.animation).map(|clip|clip.image_with_repeat(
+                    (runtime.tick - actor.animation_start) * 1000 / 60, u32::from(actor.animation_once)));
+                frames.iter().position(|frame|Some(frame.image.as_str())==image).unwrap_or(0) as i64
+            });
+            let frame=if op==101 { amount.saturating_sub(1).clamp(0,count-1) } else { (current+amount.rem_euclid(count)).rem_euclid(count) };
+            actor.animation=format!("frame_{frame}");
+            actor.animation_start=runtime.tick;actor.animation_once=false;
+        }
+        103 => {
+            let friction = value().float().clamp(0.0,1.0) as f32;
+            actor.physics.friction=friction;
+            if let Some(body)=actor.body {runtime.world.set_friction(body,friction);}
+        }
+        104 => {
+            use crate::Mode::*;
+            let mode = match text() {
+                "none"=>None,"static"=>Static,"dynamic"=>Dynamic,"kinematic"=>Kinematic,
+                "sensor"=>Sensor,"one_way"=>OneWay,"breakable"=>Breakable,"fluid"=>Fluid,"ladder"=>Ladder,
+                _=>return Err("Unknown tile body type"),
+            };
+            if actor.physics.mode!=mode {
+                actor.physics.mode=mode;
+                if let Some(body)=actor.body.take() {runtime.world.remove(body);}
+                actor.body=runtime.world.create(actor.id,actor.p,actor.width,actor.height,&actor.physics,&[]);
+                if let Some(body)=actor.body { runtime.world.set_friction(body,actor.physics.friction); }
+                actor.velocity(&mut runtime.world,actor.v);
+            }
+        }
+        _=>unreachable!(),
+    }
     Ok(())
 }
 
@@ -999,7 +1384,7 @@ fn room_command<const OP: u8>(
     cx: &mut Context<'_>,
 ) -> Result<(), &'static str> {
     let runtime = &mut cx.runtime;
-    if runtime.room_script_id != Some(cx.id) {
+    if runtime.room_script_id != Some(cx.id) && cx.id != 0 {
         return Err("Room controls require a room script");
     }
     let operand = i.args[0] as usize;
@@ -1051,7 +1436,7 @@ fn room_command<const OP: u8>(
             runtime.camera_point = None;
             runtime.camera_slot = 0;
             let room = &runtime.game.rooms[&runtime.room];
-            runtime.group_camera = room.group_camera;
+            runtime.group_camera = room.group_camera_override.or(runtime.game_settings.group_camera).unwrap_or(room.group_camera);
             runtime.room_settings.zoom = room.camera_zoom;
         }
         82 => {
@@ -1064,6 +1449,30 @@ fn room_command<const OP: u8>(
             runtime.room_settings.shader = Some(crate::RoomShader { kind, strength });
         }
         83 => runtime.room_settings.shader = None,
+        127 => {
+            let image = &m.program.names[operand];
+            if runtime.room_settings.background_image.as_deref() != Some(image.as_ref()) {
+                runtime.room_settings.background_image = Some(image.to_string());
+            }
+            runtime.room_settings.background_scroll = Some(m.registers[i.args[1] as usize].float().clamp(0.0, 1.0) as f32);
+        }
+        128 => {
+            let room = &runtime.game.rooms[&runtime.room];
+            let rows = m.registers[operand].float().clamp(0.0, room.rows.saturating_sub(1) as f64);
+            runtime.room_settings.camera_height = Some((room.height - rows as f32 * room.size) as u32);
+        }
+        129 => {
+            let border = match m.program.names[operand].as_ref() {
+                "open" => 0,
+                "sides" => 1,
+                "closed" => 3,
+                _ => return Err("Unknown room border"),
+            };
+            if runtime.room_settings.border != Some(border) {
+                runtime.room_settings.border = Some(border);
+                runtime.apply_room_border();
+            }
+        }
         _ => unreachable!(),
     }
     Ok(())
@@ -1155,6 +1564,20 @@ fn entity_query(
                 .cloned()
                 .unwrap_or(fallback)
         }
+        13 => Value::from(i64::from(matches!(a, Value::Small(1..=4)) &&
+            runtime.connected_players & (1 << (entity_id(a) - 1)) != 0)),
+        14 => Value::from(i64::from(runtime.entity(entity_id(a)).is_some_and(|actor| actor.player.is_some()))),
+        15 => Value::from(runtime.entity(entity_id(a)).and_then(|actor| actor.player).map_or(0, |slot| slot as i64 + 1)),
+        16 => {
+            let Value::Text(key) = b else { return Err("Expected an entity property name"); };
+            Value::from(i64::from(runtime.entity(entity_id(a)).is_some_and(|actor| {
+                actor.variables.keys().any(|name| {
+                    let name = name.as_ref();
+                    name == key.as_ref() || name.split_once('.').is_some_and(|(_, suffix)| suffix == key.as_ref())
+                })
+            })))
+        }
+        17 => Value::from(i64::from(runtime.touches_tile_top(cx.id,entity_id(a)))),
         _ => Value::Real(runtime.entity(entity_id(a)).map_or(0.0, |actor| {
             f64::from(match op {
                 4 => actor.p.x,
@@ -1225,6 +1648,25 @@ fn entity_command<const OP: u8>(
                 actor.components.push(name.to_string());
             }
         }
+        130..=133 => {
+            let value = m.registers[i.args[1] as usize].float();
+            let actor = cx.runtime.actors.get_mut(&id).unwrap();
+            match OP {
+                130 => actor.layer = value.clamp(-10000.0, 10000.0) as i32,
+                131 => actor.team = value.clamp(i32::MIN as f64, i32::MAX as f64) as i32,
+                132 => {
+                    actor.physics.health = value.clamp(0.001, 1000000.0) as f32;
+                    actor.health = actor.health.min(actor.physics.health);
+                }
+                133 => {
+                    actor.physics.friction = value.clamp(0.0, 1.0) as f32;
+                    if let Some(body) = actor.body {
+                        cx.runtime.world.set_friction(body, actor.physics.friction);
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
         60..=63 => {
             let name = &m.program.names[i.args[1] as usize];
             let value = &m.registers[i.args[2] as usize];
@@ -1237,9 +1679,7 @@ fn entity_command<const OP: u8>(
             };
             let fields = &mut cx.runtime.actors.get_mut(&id).unwrap().variables;
             let key = format!("{prefix}{name}");
-            if value.zero() {
-                fields.remove(key.as_str());
-            } else if fields.len() < VARIABLE_LIMIT || fields.contains_key(key.as_str()) {
+            if fields.len() < VARIABLE_LIMIT || fields.contains_key(key.as_str()) {
                 fields.insert(key.into(), value.clone());
             } else {
                 return Err("Entity field limit reached");

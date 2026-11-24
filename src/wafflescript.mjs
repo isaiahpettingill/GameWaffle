@@ -1,4 +1,4 @@
-import {Blocks,Events,inputEvent,receivedEvent} from './schema.mjs';
+import {Blocks,Events,inputEvent,receivedEvent,timerEvent} from './schema.mjs';
 import {binaryMath, conditionalBranches, constantType, formatParameters, maxParameters, parseParameters, scopes, unaryMath} from './script.mjs';
 
 const symbols = {or:'or',and:'and','==':'equal','!=':'not_equal','<':'less','<=':'less_equal','>':'greater','>=':'greater_equal','+':'add','-':'subtract','*':'multiply','/':'divide','%':'remainder'};
@@ -59,7 +59,7 @@ export function parseScript(source){
     else if(eat('false'))value=false;
     else {
       const name=qualified(),[scope,key]=name.split('.');
-      if(peek()==='(')value={call:name,args:args()};
+      if(peek()==='(')value={call:name==='controller_connected'?'entity.controller_connected':name,args:args()};
       else if(key && scopes.includes(scope))value={scope,get:key};
       else if(key && scope==='const')value={constant:key};
       else if(key && scope==='entity')value={actor:key};
@@ -123,10 +123,44 @@ export function parseScript(source){
     return rows;
   }
   const events=Object.create(null), routines=Object.create(null),constants=Object.create(null),imports=[],declarations=[];
+  const game={globals:Object.create(null),flags:Object.create(null),events:Object.create(null)};
+  const collections={types:Object.create(null),inventories:Object.create(null),arrays:Object.create(null)};
   while(eat('\n')){}
   while(peek()!==undefined){
     const start=tokens[i].at;
     if(eat('use')){imports.push(id());eol();continue;}
+    if(eat('object')){
+      const name=id(),fields=Object.create(null);
+      if(Object.hasOwn(collections.types,name))fail('Object type already exists');
+      eol();
+      while(!eat('end')){
+        const field=id();if(Object.hasOwn(fields,field))fail('Duplicate object property');
+        need(':');const type=id();fields[field]={type,...(eat('=')?{default:expr()}:{})};eol();
+      }
+      collections.types[name]=fields;eol();continue;
+    }
+    if(['game_properties','player_properties'].includes(peek())){
+      const root=tokens[i++].s==='game_properties'?'game':'players';
+      if(collections[root])fail('Properties already have an object type');
+      need(':');collections[root]=id();eol();continue;
+    }
+    if(['inventory','array'].includes(peek())){
+      const kind=tokens[i++].s,name=id(),group=kind==='inventory'?collections.inventories:collections.arrays;
+      if(Object.hasOwn(group,name))fail('Collection name already exists');
+      need(':');
+      if(kind==='inventory'){const types=[id()];while(eat(','))types.push(id());group[name]=types;}
+      else group[name]=id();
+      eol();continue;
+    }
+    if(['global','flag','event'].includes(peek())){
+      const kind=tokens[i++].s,name=id();
+      const values=game[{global:'globals',flag:'flags',event:'events'}[kind]];
+      const literal=kind==='event'?(eat('=')?expr():name.replaceAll('_',' ')):(need('='),expr());
+      if(Object.hasOwn(values,name)||!constantType(literal)||(kind==='flag'&&typeof literal!=='boolean')||
+        (kind==='event'&&(typeof literal!=='string'||!literal.trim()||literal.length>100)))
+        fail('Use a unique name and a valid '+kind+' value');
+      values[name]=literal;eol();continue;
+    }
     if(eat('const')){
       const name=id();need('=');
       const literal=expr();
@@ -136,8 +170,13 @@ export function parseScript(source){
       eol();continue;
     }
     if(eat('on')){
-      const name=qualified();
-      if(!Events.includes(name)&&!inputEvent(name)&&!receivedEvent(name)||Object.hasOwn(events,name))error('Unknown or duplicate event '+name,start,tokens[i-1].at+name.length);
+      let name;
+      if(['after','every'].includes(peek())&&/^\d/.test(tokens[i+1]?.s??'')){
+        const mode=id(),seconds=Number(tokens[i++].s);
+        need('seconds');name=mode+'.'+Math.round(seconds*60);
+        if(!timerEvent(name))fail('Use a timer between one tick and six hours');
+      }else name=eat('game')?(need('startup'),'game_startup'):eat('collide')?'begin_contact':qualified();
+      if(!Events.includes(name)&&!inputEvent(name)&&!receivedEvent(name)&&!timerEvent(name)||Object.hasOwn(events,name))error('Unknown or duplicate event '+name,start,tokens[i-1].at+name.length);
       eol();events[name]=body();
     }else if(eat('def') || eat('proc')){
       const kind=tokens[i-1].s,name=id(),params=[];need('(');
@@ -155,11 +194,13 @@ export function parseScript(source){
       if(kind==='def'){need('return');routine={...signature,result:expr()};eol();}
       else routine={...signature,body:body()};
       routines[name]=mark(routine,start);
-    }else fail('Expected on, const, use, proc, or def');
+    }else fail('Expected a declaration, routine, or event handler');
     need('end');eol();
   }
   const detached=readDetachedBlocks(source);
-  const script={events,routines,imports,...(declarations.length?{constants}:{}),...(detached.length?{detached}:{})};
+  const script={events,routines,imports,...(declarations.length?{constants}:{}),
+    ...(Object.values(game).some(group=>Object.keys(group).length)?{declarations:game}:{}),
+    ...(Object.values(collections).some(group=>Object.keys(group).length)?{collections}:{}),...(detached.length?{detached}:{})};
   constantLocations.set(script,declarations);
   return script;
 }
@@ -229,6 +270,18 @@ export function formatScript(script){
     }
   }
   for(const name of script.imports??[])lines.push('use '+name);
+  for(const [kind,collection] of [['global','globals'],['flag','flags'],['event','events']]){
+    for(const [name,literal] of Object.entries(script.declarations?.[collection]??{}))lines.push(kind+' '+name+' = '+value(literal));
+  }
+  for(const [name,fields] of Object.entries(script.collections?.types??{})){
+    lines.push('object '+name);
+    for(const [field,config] of Object.entries(fields))lines.push('  '+field+': '+config.type+(Object.hasOwn(config,'default')?' = '+value(config.default):''));
+    lines.push('end','');
+  }
+  for(const [name,types] of Object.entries(script.collections?.inventories??{}))lines.push('inventory '+name+': '+types.join(', '));
+  for(const [name,type] of Object.entries(script.collections?.arrays??{}))lines.push('array '+name+': '+type);
+  if(script.collections?.game)lines.push('game_properties: '+script.collections.game);
+  if(script.collections?.players)lines.push('player_properties: '+script.collections.players);
   const constants=constantLines(script.constants);
   if(constants.length)lines.push(...constants,'');
   for(const [name,r] of Object.entries(script.routines??{})){
@@ -236,7 +289,11 @@ export function formatScript(script){
     if(r.body)body(r.body,1);else lines.push('  return '+value(r.result));
     lines.push('end','');
   }
-  for(const [name,rows] of Object.entries(script.events??{})){lines.push('on '+name);body(rows,1);lines.push('end','');}
+  for(const [name,rows] of Object.entries(script.events??{})){
+    const [kind,ticks]=name.split('.');
+    const label=name==='game_startup'?'game startup':timerEvent(name)?kind+' '+Number((Number(ticks)/60).toFixed(6))+' seconds':name;
+    lines.push('on '+label);body(rows,1);lines.push('end','');
+  }
   for(const block of script.detached??[])lines.push(detachedComment+JSON.stringify(block));
   return lines.join('\n');
 }

@@ -108,6 +108,16 @@ const definitions = {
   wait:['control','Wait %1 ticks',[input('ticks')]],
 };
 
+export const collectionReporters={
+  'inventory.length':['Object count in %1',['inventory']],
+  'inventory.type':['Type of object %2 in %1',['inventory','index']],
+  'inventory.has':['Does object %2 in %1 have %3?',['inventory','index','property']],
+  'inventory.get':['Read %3 of object %2 in %1',['inventory','index','property']],
+  'array.length':['Number count in %1',['array']],
+  'array.at':['Number %2 in %1',['array','index']],
+};
+export const collectionReporterType=name=>'waffle_'+name.replace('.','_');
+
 export function logicDefinitions(conditionShape) {
   return Object.entries(definitions).map(([id,[style,message0,args0,output,tooltip]])=>({
     type:prefix+id,style,message0,args0,tooltip,
@@ -128,6 +138,9 @@ export function readValue(block) {
       const key='arg'+index;
       return block.getInputTargetBlock(key)?child(key):fallback;
     })};
+  }
+  for(const [name,[,operands]] of Object.entries(collectionReporters)){
+    if(block.type===collectionReporterType(name))return {call:name,args:operands.map(key=>key==='index'?(block.getInputTargetBlock(key)?child(key):1):field(key))};
   }
   switch (block.type.slice(prefix.length)) {
     case 'function_call': {
@@ -188,6 +201,13 @@ export function writeValue(value) {
   if(value.param)return {type:prefix+'param',fields:{name:value.param}};
   if(value.constant!=null)return {type:prefix+'constant',fields:{name:value.constant}};
   if(value.call){
+    if(Object.hasOwn(collectionReporters,value.call)){
+      const fields={},inputs={};
+      collectionReporters[value.call][1].forEach((key,i)=>{
+        if(key==='index')inputs[key]=slot(value.args[i],1);else fields[key]=value.args[i];
+      });
+      return {type:collectionReporterType(value.call),fields,inputs};
+    }
     if(value.call==='item_key'&&typeof value.args[0]==='string')return {type:prefix+'item_key',fields:{item:value.args[0]}};
     const query=value.call.startsWith('entity.')?value.call.slice(7):'';
     if(Object.hasOwn(entityQueries,query) && value.args.length===entityQueries[query][2].length)

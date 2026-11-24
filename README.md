@@ -132,7 +132,25 @@ Install CMake and the SDL3 build dependencies for your operating system. Run thi
 npm run build:native
 ```
 
-Open the player in `web-built/native/`. Press **F1** to open a cartridge. You can also drop a cartridge on the window or give its path to the executable. Press **F2** to reset the game. Press **F3** to show or hide touch controls.
+Open the player in `web-built/native/`. Press **F1** to open a cartridge. You can also drop a cartridge on the window or give its path to the executable. Press **F2** to reset the game. On Linux and Windows the player shows the touch overlay for direct touchscreens reported by SDL. Use **F3** to toggle it, or launch with `--touch` to enable it manually.
+
+### macOS
+
+Build Studio and the native player from the GitHub checkout. Install the Xcode command-line tools, CMake, Rust, and Node.js first.
+
+```sh
+git clone https://github.com/isaiahpettingill/GameWaffle.git
+cd GameWaffle
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.105 --locked
+npm ci
+npm run build
+cargo build --release --locked --manifest-path studio/Cargo.toml
+cargo build --release --locked --features bundled --manifest-path player/Cargo.toml
+./studio/target/release/gamewaffle-studio
+```
+
+Run `./player/target/release/gamewaffle-player` to open the cartridge picker.
 
 ### Android
 
@@ -339,8 +357,43 @@ This preset uses the contrast-sensitive edge reconstruction used by Lemuroid's H
 | Player | One of four input slots assigned to an instance. |
 | Control | A D-pad direction or a console button. |
 | Action | A named input bound to one or more controls. |
-| Item | A registered inventory entry. |
+| Inventory | An ordered collection that owns typed objects. |
 
 To make an entity playable, select it in **Entities**. Select a player and **Place player in room**. Click the map to place the instance. To assign an existing instance, select it and set **Controlled by**. An actor without a script starts with built-in movement. Clear **Built-in movement** to control movement from its script.
 
-In **Game → Controls**, create an action such as `jump` and select its controls. Under **On tick**, read the action’s held, pressed, or released state from **Input & sensing**. Each player receives input on its own instance. Register inventory items in **Game → Items** before you use them in scripts.
+In **Game → Controls**, create an action such as `jump` and select its controls. Under **On tick**, read the action’s held, pressed, or released state from **Input & sensing**. Each player receives input on its own instance.
+
+
+## Initialization and settings
+
+Open **Game script** from the **Game** tab or the script picker. The starter script declares globals, flags, events, and constants. Its **On game startup** stack sets display resolution, camera behavior, the minimap, and the first gamepad's player slot. Keyboard input belongs to Player 1. Use **Controller connected?** with a player number, and use **Assign player** or **Set entity visible** on an entity to control who can play it and when it appears.
+
+**Game → Room defaults** supplies values for new rooms. Studio copies them into each room's **On init** stack when it creates the room. Edit that stack to change an existing room's camera, background, borders, gravity, music, ambience, or shader. The background picker edits the same stack. An **On init** stack runs once per entity or tile instance and again when a fresh room is created during play. Use **On tick** for behavior that should repeat each frame.
+
+Tile scripts are selectable by variant. Aseprite tags marked `:animated:` seed an animation command in the tile script. The script can select a frame, advance frames, set playback, change friction, and respond to an entity contacting the tile. Event handlers can read the sender and an optional entity payload. **Every** and **After** timers take seconds.
+
+Import MIDI tracks in **Assets → Sounds** and pair each track with an SF2 SoundFont. Studio renders the tracks with RustySynth when building the cartridge. Room music and ambience blocks use the same audio picker for MIDI, WAV, Ogg Vorbis, and Opus sources. Use the **Drawing** blocks to set fill and stroke and draw shapes in room or HUD coordinates.
+
+## Collections
+
+Declare object types, inventories, numeric arrays, and optional Game or Player property objects in the Game script. In Blockly, look in **Collections**. WaffleScript uses one-based indexes.
+
+```wafflescript
+object item
+  label: string = "Key"
+  count: integer = 1
+end
+
+inventory backpack: item
+array scores: integer
+
+on init
+  inventory_append("backpack", "item")
+  inventory_set("backpack", 1, "count", 2)
+  array_append("scores", 100)
+end
+```
+
+An inventory owns its objects. Use a collection name, index, and field path to read or write scalar properties. An object can own another typed object, and the compiler rejects circular type declarations. Arrays hold integers or reals. Game and Player property objects use fixed indexes, 1 for the Game singleton and 1 through 4 for players.
+
+WaffleScript uses a threaded interpreter and compiles hot stretches of real arithmetic with Cranelift on x86-64 and ARM64 desktop hosts. The web player compiles those stretches to WebAssembly and runs them through its function table. The interpreter handles the remaining instructions, debugging, and platforms where the JIT is unavailable. Run `node packaging/bench-vm.mjs` after building to compare the interpreter and JIT locally.

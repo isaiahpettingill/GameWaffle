@@ -4,6 +4,11 @@ import {compileColliders} from './colliders.mjs';
 import {addSeams} from './seams.mjs';
 import {generateMinimap} from './minimap.mjs';
 import {byteCache} from './compile-cache.mjs';
+import {compileMidi} from './midi.mjs';
+import {readGameScript} from './game-script.mjs';
+import {tileScriptPath} from './tile-script.mjs';
+import {roomScriptPath} from './room-script.mjs';
+import {validateCollections} from './collections.mjs';
 import {pack} from './pack.mjs';
 import {defaultFont,readBitfont} from './font.mjs';
 import { initialScript, buttons, effects, platformGravity, roomBorder } from './schema.mjs';
@@ -16,7 +21,7 @@ import { readAseprite, tagFrames } from './ase.mjs';
 import { decodeCbor } from './cartridge.mjs';
 import {loadModules} from './modules.mjs';
 import {parseScript} from './wafflescript.mjs';
-import { compileScript, tileSizes, variableName } from './script.mjs';
+import { compileScript, constantType, tileSizes, variableName } from './script.mjs';
 import { instanceNames } from './instances.mjs';
 
 function compileLocalization(config = {locale:'',tables:{}}) {
@@ -158,7 +163,7 @@ function wavToQoa(b) {
 }
 
 const artFile = /\.(ase|aseprite|png)$/i;
-const assetFile = /\.(ase|aseprite|png|yaff|wav|opus|ogg|oga|qoa)$/i;
+const assetFile = /\.(ase|aseprite|png|yaff|wav|opus|ogg|oga|qoa|mid|midi|sf2)$/i;
 const artCache=byteCache(64*1024*1024);
 async function readArt(file,read) {
   const data=await read(file);
@@ -277,6 +282,16 @@ export async function compileProject(root, { project: draft, scripts = new Map()
   if (!store && root.endsWith('.waffleproj')) store=await (await import('./project-store.mjs')).projectStore(root);
   const read = store?.read ?? ((name,encoding)=>readFile(projectPath(root,name),encoding));
   const project = draft ?? JSON.parse(await read('project.json','utf8'));
+  const gameUnit=scripts.get('game')??await readGameScript(project,read);
+  const declarations=gameUnit?.declarations;
+  const collections=validateCollections(gameUnit?.collections);
+  const flagValues={...project.flags,...declarations?.flags};
+  const initialGlobals=Object.fromEntries(Object.entries(declarations?.globals??{}).map(([name,value])=>{
+    const type=constantType(value);
+    if(!variableName(name)||!type)throw Error('Invalid game global '+name);
+    return [{integer:'',real:'real.',boolean:'bool.',string:'text.'}[type]+name,
+      type==='real'?String(value.real):type==='boolean'?String(+value):String(value)];
+  }));
   const controls=Object.fromEntries(buttons.map((name,i)=>[name,1<<i]));
   const bindings=Object.entries(project.controls??{});
   if(bindings.length>64)throw Error('Use up to 64 input actions.');
@@ -295,11 +310,13 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     }
     return [id,{title:menu.title,options:menu.options}];
   }));
-  const events=project.events??{};
+  const events={...project.events,...declarations?.events};
   if(typeof events!=='object'||Array.isArray(events)||Object.keys(events).length>256
     ||Object.entries(events).some(([id,label])=>!variableName(id)||typeof label!=='string'||!label.trim()||label.length>100))
-    throw Error('Use up to 256 named events in Game → Events');
-  const registry={fonts:{...project.bitfonts,builtin:true},controls,menus,events,sounds:project.audio??{},roomScript:false,sprites:project.sprites??{},flags:project.flags??{},items:project.items??{},text:localization.tables[localization.locale]??{}};
+    throw Error('Use up to 256 named events in the Game script');
+  const registry={fonts:{...project.bitfonts,builtin:true},controls,menus,events,sounds:project.audio??{},roomScript:false,
+    sprites:project.sprites??{},flags:flagValues,constants:gameUnit?.constants,collections,items:project.items??{},text:localization.tables[localization.locale]??{}};
+  const gameScript=gameUnit?compileScript(gameUnit,await loadModules(gameUnit,read),undefined,{...registry,gameScript:true,roomScript:true}):null;
   const frames = new Map(), sources = new Map();
   async function source(file) {
     if (!sources.has(file)) sources.set(file, await readArt(file,read));
@@ -312,8 +329,10 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     return { image: id, ms: frame.duration };
   }
 
-  let runtimeAbi=9;
+  let runtimeAbi=gameUnit?12:9;
   const sprites = Object.create(null), dependencies = new Map(), spriteFonts = new Map();
+  if(Object.keys(gameScript?.events??{}).length)sprites['@game']={clips:{},program:gameScript.events,
+    physics:props(undefined,'none'),width:1,height:1,layer:0,animation:'default',team:0};
   for (const [id, sprite] of Object.entries(project.sprites ?? {})) {
     key(id, 'sprite');
     const ase = await source(sprite.source);
@@ -323,7 +342,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     clips.default=clip(all,0);
     for (const tag of ase.tags) clips[tag.name]=clip(tagFrames(tag).map(i=>all[i]),tag.repeat);
     let script = compileScript(initialScript(sprite));
-    if (sprite.script) {
+    if (sprite.script || scripts.has(id)) {
       try {
         const unit=scripts.get(id) ?? (sprite.script.endsWith('.ws') ? parseScript(await read(sprite.script,'utf8')) : decodeCbor(await read(sprite.script)));
         script=compileScript(unit,await loadModules(unit,read),undefined,registry);
@@ -335,10 +354,10 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     if(sprite.emitter && (!effects.includes(sprite.emitter.effect) || !Number.isInteger(sprite.emitter.rate) || sprite.emitter.rate<1 || sprite.emitter.rate>240
       || (sprite.emitter.offset!=null && (!Array.isArray(sprite.emitter.offset)||sprite.emitter.offset.length!==2||sprite.emitter.offset.some(value=>!Number.isFinite(value)||Math.abs(value)>4096)))))
       throw Error('Invalid particle emitter for '+id);
-    if(script.requiresAbi10)runtimeAbi=10;
+    runtimeAbi=Math.max(runtimeAbi,script.requiresAbi12?12:script.requiresAbi10?10:9);
     dependencies.set(id,script.dependencies);
     spriteFonts.set(id,script.fontUses);
-    sprites[id] = { clips, components:components(sprite.components), respawn:respawnRule(sprite.respawn,project.flags), scriptJump:sprite.legacyBuiltInJump==null?script.scriptJump:!sprite.legacyBuiltInJump, scriptGravity:sprite.gravityMode!=null?sprite.gravityMode==='script':Boolean(sprite.scriptGravity||script.scriptGravity), program:script.events, physics: props(sprite.physics, 'none'), width: sprite.width ?? ase.width,
+    sprites[id] = { clips, components:components(sprite.components), respawn:respawnRule(sprite.respawn,flagValues), scriptJump:sprite.legacyBuiltInJump==null?script.scriptJump:!sprite.legacyBuiltInJump, scriptGravity:sprite.gravityMode!=null?sprite.gravityMode==='script':Boolean(sprite.scriptGravity||script.scriptGravity), program:script.events, physics: props(sprite.physics, 'none'), width: sprite.width ?? ase.width,
       height: sprite.height ?? ase.height, layer: sprite.layer ?? 0, animation: sprite.animation ?? 'default',
       emitter:sprite.emitter?{effect:sprite.emitter.effect,rate:sprite.emitter.rate,offset:sprite.emitter.offset??[0,0]}:null, alwaysActive:sprite.alwaysActive??false, team: sprite.team ?? 0, projectile: sprite.projectile };
     number(sprites[id].width, 1, 8192, 'sprite width');
@@ -361,7 +380,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       return [name,value];
     }));
   }
-  const globals = variables(project.variables,false), flags = variables(project.flags,true);
+  const globals = variables(project.variables,false), flags = variables(flagValues,true);
   function conditions(...sources){
     return sources.filter(s=>s?.flag).map(s=>{
       if(!Object.hasOwn(flags,s.flag))throw Error('Unknown condition flag: '+s.flag);
@@ -380,7 +399,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
   if(resolution!=null){
     if(!Array.isArray(resolution)||resolution.length!==2)throw Error('Set the resolution width and height');
     camera.resolution=resolution.map(value=>integer(value,64,512,'screen resolution'));
-    runtimeAbi=11;
+    runtimeAbi=Math.max(runtimeAbi,11);
   }
   const tiles = Object.create(null);
   for (const [id, tile] of Object.entries(project.tiles ?? {})) {
@@ -390,7 +409,25 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     tiles[id] = {
       variants: variants.map((indices, v) => indices.map((i, f) => register(`tile/${id}/${v}/${f}`, ase, i, flags))),
       physics: props(tile.physics, flags.includes('fluid') ? 'fluid' : 'static'),
+      hosts:[],
     };
+    const compiled=tiles[id];
+    const sequence=compiled.variants.flat();
+    for(let variant=0;variant<compiled.variants.length;variant++){
+      const key='tile:'+id+':'+variant;
+      const bytes=scripts.has(key)?null:await read(tileScriptPath(id,variant)).catch(error=>{if(error.code!=='ENOENT')throw error;});
+      const unit=scripts.get(key)??(bytes?decodeCbor(bytes):null);
+      if(!unit)continue;
+      const script=compileScript(unit,await loadModules(unit,read),undefined,{...registry,tileScript:true});
+      const name='@tile/'+id+'/'+variant;
+      const clip=frames=>({frames,repeat:0,durationMs:frames.reduce((total,frame)=>total+frame.ms,0)});
+      const clips={default:clip([compiled.variants[variant][0]]),sequence:clip(sequence)};
+      for(const [index,frame] of sequence.entries())clips['frame_'+index]=clip([frame]);
+      sprites[name]={clips,program:script.events,physics:compiled.physics,width:size,height:size,layer:0,animation:'default',team:0};
+      dependencies.set(name,script.dependencies);spriteFonts.set(name,script.fontUses);
+      compiled.hosts[variant]=name;
+      runtimeAbi=Math.max(runtimeAbi,12);
+    }
 
   }
 
@@ -399,9 +436,12 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     key(id, 'audio');
     const asset = typeof config === 'string' ? { source: config } : config;
     const extension = extname(asset.source).slice(1).toLowerCase();
-    if (!['wav','ogg','oga','opus','qoa'].includes(extension)) throw Error(`Unsupported audio format: ${extension}`);
+    if (!['wav','ogg','oga','opus','qoa','mid','midi'].includes(extension)) throw Error(`Unsupported audio format: ${extension}`);
     const data = await read(asset.source);
-    audio[id] = extension === 'wav' && asset.compress !== false
+    if(extension==='mid'||extension==='midi'){
+      if(typeof asset.soundFont!=='string'||!/\.sf2$/i.test(asset.soundFont))throw Error(`Choose a SoundFont (.sf2) for ${id}`);
+      audio[id]={format:'qoa',data:await compileMidi(data,await read(asset.soundFont))};
+    }else audio[id] = extension === 'wav' && asset.compress !== false
       ? { format: 'qoa', data: wavToQoa(data) } : { format: extension, data };
   }
 
@@ -437,7 +477,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     font={width:96,height,rgba:image.frames[0].rgba,
       glyphs:Object.fromEntries(characters.map((character,index)=>[character,96+index]))};
   }
-  const rooms = Object.create(null), atlases = Object.create(null);
+  const rooms = Object.create(null), atlases = Object.create(null), roomPreviewBackgrounds=Object.create(null);
   for (const [id, room] of Object.entries(project.rooms ?? {})) {
     key(id, 'room');
     const cols = integer(room.cols, 1, Math.floor(4096 / size), 'room columns');
@@ -449,7 +489,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     const cameraZoom = number(room.cameraZoom ?? 1, .25, 4, 'default camera zoom');
     if(cameraZoom!==1)runtimeAbi=Math.max(runtimeAbi,10);
     const bottomInset=Math.min(rows-1,integer(room.cameraBottomInset??0,0,1023,'bottom camera inset'));
-    if(bottomInset)runtimeAbi=11;
+    if(bottomInset)runtimeAbi=Math.max(runtimeAbi,11);
     const ySort = room.ySort ?? view === 'top_down';
     const images = new Map(), baked = [], entities = [], solids = [], blockers = new Set();
     if (room.backgroundImage) {
@@ -469,23 +509,38 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       for (const target of dependencies.get(sprite)) includeSprite(target);
       for (const font of spriteFonts.get(sprite)) usedFonts.add(font);
     }
-    let scriptHost;
-    if (room.script) {
-      const isText=room.script.endsWith('.ws');
-      const data=scripts.has('room:'+id)?null:await read(room.script,isText?'utf8':undefined).catch(error=>{
+    async function includeBackgrounds(paths){
+      for(const path of paths){
+        const art=await source(path);
+        images.set('room/background/'+path,{width:art.width,height:art.height,rgba:art.frames[0].rgba});
+      }
+    }
+    await includeBackgrounds(gameScript?.backgroundUses??[]);
+    for(const sprite of gameScript?.dependencies??[])includeSprite(sprite);
+    for(const font of gameScript?.fontUses??[])usedFonts.add(font);
+    for(const kind of gameScript?.shaderPresets??[])bakeShaderPreset(kind,images);
+    let scriptHost, scriptBorder=gameScript?.scriptBorder;
+    {
+      const file=room.script??roomScriptPath(id);
+      const isText=file.endsWith('.ws');
+      const data=scripts.has('room:'+id)?null:await read(file,isText?'utf8':undefined).catch(error=>{
         if(error.code!=='ENOENT')throw error;
         return null;
       });
       const unit=scripts.get('room:'+id) ?? (data==null?null:isText?parseScript(data):decodeCbor(data));
       if(unit){
+        const background=unit.events?.init?.findLast(block=>block.op==='set_room_background_image');
+        if(typeof background?.image==='string')roomPreviewBackgrounds[id]=background.image;
         const script=compileScript(unit,await loadModules(unit,read),undefined,{...registry,roomScript:true});
-        if(script.requiresAbi10)runtimeAbi=Math.max(runtimeAbi,10);
+        runtimeAbi=Math.max(runtimeAbi,script.requiresAbi12?12:script.requiresAbi10?10:9);
         if (Object.keys(script.events).length) {
+          scriptBorder||=script.scriptBorder;
           scriptHost='@room/'+id;
           sprites[scriptHost]={clips:{},program:script.events,physics:props(undefined,'none'),
             width:1,height:1,layer:0,animation:'default',team:0};
           for (const sprite of script.dependencies) includeSprite(sprite);
           for (const font of script.fontUses) usedFonts.add(font);
+          await includeBackgrounds(script.backgroundUses);
           for (const kind of script.shaderPresets) bakeShaderPreset(kind,images);
         }
       }
@@ -536,12 +591,19 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         if (!tile) throw Error(`Unknown tile: ${tileId}`);
         if (cells.has(y * cols + x)) throw Error(`Duplicate tile in room ${id} at ${x}, ${y}`);
         cells.set(y * cols + x, cell);
-        const clip = tile.variants[variant ?? ((x * 37 + y * 17) % tile.variants.length)];
+        const selected=variant ?? ((x * 37 + y * 17) % tile.variants.length);
+        const clip = tile.variants[selected];
         if (!clip) throw Error(`Unknown variant for ${tileId}`);
         const physics = layer.collidable ? tile.physics : { ...tile.physics, mode: 'none' };
         const gates=conditions(layer,project.tiles[tileId]);
-        const dynamic = gates.length>0 || !['static','none'].includes(physics.mode);
-        if (!dynamic && clip.length === 1) {
+        const host=tile.hosts[selected];
+        const dynamic = host || gates.length>0 || !['static','none'].includes(physics.mode);
+        if(host){
+          includeSprite(host);
+          entities.push({x:(x+.5)*size,y:(y+.5)*size,sprite:host,
+            persistence:project.tiles[tileId].persistRemoval?`tile/${index}/${x}/${y}`:null,
+            conditions:gates,layer:order,physics:physics.mode==='none'?{...physics,mode:'sensor'}:physics});
+        }else if (!dynamic && clip.length === 1) {
           const col = Math.floor(x/chunkSize)*chunkSize, row = Math.floor(y/chunkSize)*chunkSize;
           const image = `layer/${index}/${col}/${row}`;
           if (!chunks.has(image)) {
@@ -556,7 +618,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
             conditions:gates, blocker:gates.length && physics.mode==='static'?y*cols+x:null,
             physics: !gates.length && physics.mode === 'static' ? { ...physics, mode: 'none' } : physics, layer: order });
         }
-        if (!gates.length && physics.mode === 'static') {
+        if (!gates.length && physics.mode === 'static' && !host) {
           zone.set(y * cols + x, physics);
           blockers.add(y * cols + x);
         }
@@ -576,7 +638,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     }
     const border = roomBorder(room, view === 'top_down');
     if (!['closed','sides','open'].includes(border)) throw Error('Invalid room border');
-    if (border !== 'open') {
+    if (scriptBorder || border !== 'open') {
       const physics = props(undefined, 'static');
       const walls={
         left:{x:-size/2,y:height/2,width:size,height:height+size*16},
@@ -584,11 +646,12 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         up:{x:width/2,y:-size/2,width,height:size},
         down:{x:width/2,y:height+size/2,width,height:size},
       };
-      for(const edge of border==='closed'?Object.keys(walls):['left','right']){
+      for(const edge of scriptBorder||border==='closed'?Object.keys(walls):['left','right']){
         const exit=room.exits?.[edge],opposite={left:'right',right:'left',up:'down',down:'up'}[edge];
         const back=project.rooms[exit?.targets?.[0]]?.exits?.[opposite];
         if(exit?.adjacent && exit.mode==='fixed' && !exit.flag && back?.adjacent && back.mode==='fixed' && !back.flag && back.targets[0]===id)continue;
-        solids.push({...walls[edge],physics});
+        const side=edge==='left'||edge==='right';
+        solids.push({...walls[edge],physics,...(scriptBorder?{border:side?1:2,disabled:border==='open'||border==='sides'&&!side}:{})});
       }
     }
     const ripple = bakeRoomShader(room.shader,images);
@@ -613,21 +676,26 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     rooms[id] = { layoutKey, scriptHost, title: room.title ?? id, ripple, shader, hd:room.shader?.kind==='hd'?(room.shader.strength??35):0, exits, cols, rows, width, height, size, baked, solids, entities,
       blockers: [...blockers], background: room.background ?? '#101a23', music: room.music,
       ambience: room.ambience, group_camera:(room.groupCamera??project.camera?.groupCamera)===true,
+      groupCameraOverride:room.groupCamera,
       ...(cameraZoom===1?{}:{cameraZoom}), ...(bottomInset?{cameraHeight:height-bottomInset*size}:{}), gravity, view, ySort };
   }
   addSeams(rooms,atlases,sprites,atlas);
   const start = project.start ?? Object.keys(rooms)[0];
   if (!Object.hasOwn(rooms, start)) throw Error('Choose a valid starting room');
+  const minimapMode=project.minimap??'off';
+  const minimap=generateMinimap(rooms,start,gameUnit&&minimapMode==='off'?'world':minimapMode);
+  if(minimap)minimap.mode=minimapMode;
   function thumbnail(frame) {
     const { width, height, rgba: data } = frames.get(frame.image);
     return PNG.sync.write({ width, height, data });
   }
   const tilePreviews = Object.fromEntries(Object.entries(tiles).map(([id, tile]) =>
     [id, { mode: tile.physics.mode, variants: tile.variants.map(clip => thumbnail(clip[0])) }]));
-  const spritePreviews = Object.fromEntries(Object.entries(sprites).filter(([id])=>!id.startsWith('@room/')).map(([id, sprite]) =>
+  const spritePreviews = Object.fromEntries(Object.entries(sprites).filter(([id])=>!id.startsWith('@')).map(([id, sprite]) =>
     [id, thumbnail((sprite.clips[sprite.animation] ?? sprite.clips.default).frames[0])]));
   const coverArt=await compileCover(project.coverImage,read);
-  return { runtimeAbi, controls,items,menus,events:Object.keys(events),localization,minimap:generateMinimap(rooms,start,project.minimap),saveId:project.saveId??project.name, name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
+  return { runtimeAbi, controls,items,menus,events:Object.keys(events),localization,minimap,saveId:project.saveId??project.name, name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
+    gameProgram:gameScript?.events,initialGlobals,collections,roomPreviewBackgrounds,
     coverArt,tilePreviews, spritePreviews, fontGlyphs:font.glyphs,fontLayout:font.layout, fontFallbackGlyphs:font.layout||namedFonts.size?builtinFont.glyphs:undefined,
     fonts:Object.fromEntries([...namedFonts].map(([id,font])=>[id,{layout:font.layout,glyphs:font.glyphs}])) };
 }
