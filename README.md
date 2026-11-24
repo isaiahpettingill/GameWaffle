@@ -61,17 +61,9 @@ Use a collidable layer for walls. Top-down enemies use four-direction A* on the 
 
 ## Set a room shader
 
-Open the room inspector. Select **Room → Shader**. Select a preset, then set its strength. Select **Play room** to see the result at the game resolution.
+Open the room script. Add **Set shader** under **On init**, then choose a preset and set its strength. Select **Play room** to see the result. You can also change shaders on tick or in an event handler.
 
-| Preset | Controls |
-|---|---|
-| Color wash | Color and strength |
-| Scanlines or LCD grid | Color, strength, and spacing in game pixels |
-| Vignette | Edge color, strength, and clear radius |
-| Water ripple | Strength, wavelength in game pixels, and speed in cycles per second |
-| HD pixel smoothing | Edge blend strength at 2× output |
-
-The player applies the effect to the room, sprites, and particles before it draws the HUD. Each room can use one preset. Select **None** to clear the effect.
+Presets include color wash, scanlines, LCD grid, vignette, water ripple, HD pixel smoothing, fog, volumetric lighting, lens flare, snow, rain, and wind.
 
 ## Prepare assets and scripts
 
@@ -122,7 +114,7 @@ Standalone players open without a cartridge. Open a `.waffle` file to start a ga
 
 In Studio, select **File → Export… → Web player** to get a separate copy. Run `npm run build:player` to build only the web player. Open `web-built/standalone/gamewaffle-player.html` in a browser. Select **Open cartridge**. The player can run offline.
 
-Set cover art in **Game → Settings → Cartridge cover art** before exporting. The image is embedded in each exported cartridge, including separate language editions.
+Set cover art in **Game → Project assets → Cartridge cover art** before exporting. The image is embedded in each exported cartridge, including separate language editions.
 
 ### Desktop
 
@@ -167,7 +159,7 @@ Install `web-built/android/GameWaffle-Player.apk` on an Android device. Local bu
 
 ### Render resolution
 
-Open **Game**, then open **Display**. The player calculates the internal resolution from the available display area and the pixel zoom. It keeps the internal resolution between 128 × 128 and 512 × 512 pixels. The camera follows player 1 when the room is larger than the screen.
+Open the **Game script**. Set a fixed display resolution or set adaptive display bounds and pixel zoom under **On game startup**. The camera follows Player 1 by default and stays within the room boundaries.
 
 ## Play with other players
 
@@ -231,15 +223,15 @@ pan. A stepped mouse wheel zooms around the pointer. Use a pinch to zoom on a
 touchscreen or touchpad. Continuous touchpad scrolling pans. Hold Ctrl while
 scrolling to zoom with a smooth wheel, or Shift to pan. **Fit** centers the room.
 
-Set a room image in **Room → Background & sound → Background image**. Select
-a PNG or Aseprite project asset. The first frame is drawn behind the room.
-**Background scroll** ranges from 0% for a screen-fixed image to 100% for a
-room-fixed image.
+Choose a PNG or Aseprite image using **Background image** in the room inspector.
+Studio writes the asset into the room's **On init** stack. The first frame is
+drawn behind the room. Set the scroll value in the script from 0 for a
+screen-fixed image to 1 for a room-fixed image.
 
 ## Generate a HUD minimap
 
-In **Game → Display → HUD minimap**, choose **Whole world** or **Explored
-rooms**. Studio lays out the room outlines from the directions of their exits,
+Add **Set minimap** to the Game script and choose **World** or **Explored**.
+Studio lays out the room outlines from the directions of their exits,
 draws links, and highlights the current room. Explored mode reveals a room
 when the player enters it and saves discoveries with game progress.
 
@@ -249,13 +241,13 @@ Select **World**. Select a room and an exit. Select a destination. Use **Once pe
 
 For a continuous crossing, connect opposite edges in both directions. Select **Fixed** and **Connect opposite edges** on both exits. Use equal edge lengths. The camera shows terrain from the next room before the player crosses. Sprites and physics start when the player enters the next room.
 
-Use a camera block to follow an instance, show a position, or follow a selected player. Normal enemy scripts and bodies pause outside the camera and player activity areas. Enable **Entities → Combat → Run scripts off camera** for a boss.
+Use a camera block to follow an instance, show a position, or follow a selected player. Normal enemy scripts and bodies pause outside the camera and player activity areas. Enable **Entities → Run scripts off camera** for a boss.
 
 ## Items, dialogue, and saves
 
-Use the **Items** blocks to give, remove, or count items in the party inventory. Use **Looks & sound** to show a counter, message, or game menu. Press A to advance dialogue. In the Top-down Courtyard, walk up to collect the key.
+Use **Collections** to declare an inventory, add objects, and read or update their fields. Use **Looks & sound** to show a counter, message, or game menu. Press A to advance dialogue.
 
-To use a custom bitmap font, import a 96 × 48 pixel sheet. Arrange ASCII characters 32 through 127 in 16 columns and 6 rows. Each cell has 6 × 8 pixels. Select the font in **Game → Display**.
+Import a custom font in **Game → Bitfonts**. Use **Set HUD font** or pick a font on a text block to change it from a script.
 
 On desktop, press **F4** to map a controller. Press each control in order. The player saves the mapping for that controller model. Press **F5** to save, **F6** to select a slot, or **F9** to load. Android has save slots in **Game menu**. The web player has a slot selector.
 

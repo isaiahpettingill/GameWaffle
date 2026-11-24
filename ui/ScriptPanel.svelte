@@ -119,12 +119,15 @@
     }else await onSelectFile(kind,id,Number(variant));
   }
   export async function flush(){
-    clearTimeout(timer);
-    while(pendingSave)await pendingSave;
-    if(!ready || !dirty)return true;
-    if(busy){await tick();return false;}
-    pendingSave=save().finally(()=>pendingSave=null);
-    return pendingSave;
+    while(ready&&dirty){
+      clearTimeout(timer);
+      if(!pendingSave){
+        if(busy){await tick();return false;}
+        pendingSave=save().finally(()=>pendingSave=null);
+      }
+      if(!await pendingSave)return false;
+    }
+    return true;
   }
   async function save(){
     saving=true;
@@ -141,7 +144,7 @@
       if(!selected)await onSave(sprite,isRoom,isGame,data,isTile);
       error='';
       if(generation===editNumber){dirty=false;recovered=false;await draft.write(null);}
-      return !dirty;
+      return true;
     }catch(err){error=err.message;return false;}finally{saving=false;}
   }
   function closeDiscard(){
