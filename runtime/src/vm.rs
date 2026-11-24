@@ -99,7 +99,7 @@ extern "C" {
     #[wasm_bindgen::prelude::wasm_bindgen(js_namespace=globalThis, js_name=waffleBreak)]
     fn debug_break(id: u32, event: &str, pc: usize) -> bool;
     #[wasm_bindgen::prelude::wasm_bindgen(js_namespace=globalThis, js_name=waffleInspect)]
-    fn debug_inspect(state: &str);
+    fn debug_inspect(state: &[u8]);
 }
 
 type Handler =
@@ -348,6 +348,24 @@ impl Program {
                 code[pc].handler=fused_integer_update;
             }
         }
+        for (pc, ops) in opcodes.windows(3).enumerate() {
+            let [temp, constant, ..] = code[pc].args;
+            let [dst, op, left, right, ..] = code[pc + 1].args;
+            match ops {
+                [10, 13, 14] if raw.k[constant as usize] == 0
+                    && op == 6 && temp == dst && temp == left && temp != right
+                    && code[pc + 2].args[0] == temp =>
+                {
+                    code[pc].handler = fused_repeat_test;
+                }
+                [10, 13, 15] if raw.k[constant as usize] == 1
+                    && op == 1 && temp == right && left == dst && temp != left =>
+                {
+                    code[pc].handler = fused_repeat_next;
+                }
+                _ => {}
+            }
+        }
         let reals: Vec<f64> = raw.f.iter().map(|value| {
             value.parse::<f64>().ok().filter(|value| value.is_finite()).ok_or("Invalid real constant")
         }).collect::<Result<_, _>>()?;
@@ -527,6 +545,7 @@ impl Machine {
         id: u32,
         event: &str,
         input: Input,
+        previous_buttons: u8,
         actions: &mut Vec<Action>,
     ) -> Result<bool, &'static str> {
         if self.wake > runtime.tick {
@@ -534,7 +553,6 @@ impl Machine {
         }
         let program = self.program.clone();
         let budget = runtime.script_fuel.min(SLICE);
-        let previous_buttons = runtime.input_slot(id).map_or(0, |slot| runtime.prior_buttons[slot]);
         let mut cx = Context {
             received: event.starts_with("received."),
             runtime,
@@ -552,8 +570,10 @@ impl Machine {
             };
             #[cfg(target_arch = "wasm32")]
             if cx.runtime.debug {
-                if debug_break(id, event, self.pc) {
-                    debug_inspect(&cx.runtime.inspect_actor(id));
+                if debug_break(id, event, self.pc)
+                    && let Ok(state) = cx.runtime.inspect_actor(id)
+                {
+                    debug_inspect(&state);
                 }
                 if let Err(error) = (first.handler)(first, &program, self, &mut cx, 1) { break Err(error); }
                 continue;
@@ -876,6 +896,47 @@ fn execute<const OP: u8>(
 
 fn constant(i: &Instruction, m: &mut Machine, _: &mut Context<'_>) -> Result<(), &'static str> {
     m.registers[i.args[0] as usize] = Value::Small(m.program.constants[i.args[1] as usize]);
+    Ok(())
+}
+
+// Run the three original loop instructions together when the counter fits in
+// a register. Step counts, registers, and jump targets stay identical.
+fn fused_repeat_test(i: &Instruction, program: &Program, m: &mut Machine, cx: &mut Context<'_>, count: usize) -> Result<(), &'static str> {
+    if count < 3 {
+        return execute::<10>(i, program, m, cx, count);
+    }
+    let counter = program.code[m.pc + 1].args[3] as usize;
+    let Value::Small(value) = m.registers[counter] else {
+        return execute::<10>(i, program, m, cx, count);
+    };
+    m.registers[i.args[0] as usize] = Value::Small(i64::from(value > 0));
+    let next = if value > 0 { m.pc + 3 } else { program.code[m.pc + 2].args[1] as usize };
+    finish_fused_repeat(program, m, cx, count, next)
+}
+
+fn fused_repeat_next(i: &Instruction, program: &Program, m: &mut Machine, cx: &mut Context<'_>, count: usize) -> Result<(), &'static str> {
+    if count < 3 {
+        return execute::<10>(i, program, m, cx, count);
+    }
+    let counter = program.code[m.pc + 1].args[0] as usize;
+    let Value::Small(value) = m.registers[counter] else {
+        return execute::<10>(i, program, m, cx, count);
+    };
+    let Some(decremented) = value.checked_sub(1) else {
+        return execute::<10>(i, program, m, cx, count);
+    };
+    m.registers[i.args[0] as usize] = Value::Small(1);
+    m.registers[counter] = Value::Small(decremented);
+    let next = program.code[m.pc + 2].args[0] as usize;
+    finish_fused_repeat(program, m, cx, count, next)
+}
+
+fn finish_fused_repeat(program: &Program, m: &mut Machine, cx: &mut Context<'_>, count: usize, next: usize) -> Result<(), &'static str> {
+    cx.fuel -= 3;
+    m.pc = next;
+    if count > 3 && let Some(instruction) = program.code.get(next) {
+        return (instruction.handler)(instruction, program, m, cx, count - 3);
+    }
     Ok(())
 }
 

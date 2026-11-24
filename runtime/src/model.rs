@@ -117,6 +117,11 @@ impl Clip {
     }
 
     pub fn image_with_repeat(&self, elapsed: u64, repeat: u32) -> &str {
+        if let [frame] = self.frames.as_slice()
+            && self.duration_ms <= u64::from(frame.ms.max(1))
+        {
+            return &frame.image;
+        }
         let duration = self.duration();
         if duration == 0 {
             return "";
@@ -656,6 +661,7 @@ pub struct Snapshot<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explored: Option<&'a std::collections::BTreeSet<String>>,
     pub tick: u64,
+    #[serde(serialize_with = "crate::frame::actors")]
     pub actors: Vec<ActorView<'a>>,
     pub particles: &'a [crate::particles::Batch],
     pub focus: Option<[f32; 2]>,

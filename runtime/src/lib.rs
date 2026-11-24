@@ -1,6 +1,7 @@
 mod camera;
 pub mod cartridge;
 mod collections;
+mod frame;
 mod jit;
 pub mod drawing;
 pub mod gradient;
@@ -234,7 +235,7 @@ pub struct Runtime {
     camera_window: [u32; 2],
     camera_seams: bool,
     tile_entities: std::collections::BTreeSet<u32>,
-    checkpoint: Option<String>,
+    checkpoint: Option<Vec<u8>>,
     checkpoint_requested: bool,
     retry: bool,
     inventory: BTreeMap<String, u32>,
@@ -298,18 +299,8 @@ impl Runtime {
     pub fn enable_debug(&mut self) {
         self.debug = true;
     }
-    pub fn inspect_actor(&self, id: u32) -> String {
-        let values = |table: &vm::Variables| {
-            table
-                .iter()
-                .map(|(key, value)| (key.to_string(), value.to_string()))
-                .collect::<BTreeMap<_, _>>()
-        };
-        let entities:Vec<_>=self.entity_ids.iter().filter_map(|id|self.actors.get(id)).map(|entity|
-            serde_json::json!({"id":entity.id,"name":entity.name.as_ref().or(entity.sprite.as_ref())})).collect();
-        let actor = self.actors.get(&id);
-        serde_json::json!({"room":self.room,"tick":self.tick,"actor":id,"sprite":actor.and_then(|a|a.sprite.as_ref()),
-            "entities":entities,"globals":values(&self.game_properties.globals),"locals":actor.map(|a|values(&a.variables)),"flags":values(&self.game_properties.flags)}).to_string()
+    pub fn inspect_actor(&self, id: u32) -> Result<Vec<u8>, String> {
+        frame::inspect(self, id)
     }
     pub fn save_id(&self) -> String {
         self.game.id.clone()
@@ -321,21 +312,32 @@ impl Runtime {
         self.camera_window = [width.max(1), height.max(1)];
         self.camera_seams = seams;
     }
-    pub fn step_buttons(&mut self, buttons: u32) -> Result<String, String> {
-        self.step_inputs(std::array::from_fn(|index| {
+    pub fn advance_buttons(&mut self, buttons: u32, ticks: u8) -> Result<(), String> {
+        let inputs = std::array::from_fn(|index| {
             Input::from_bits((buttons >> (index * 8)) as u8)
-        }))?;
+        });
+        for _ in 0..ticks {
+            self.step_inputs(inputs)?;
+        }
+        Ok(())
+    }
+
+    pub fn step_buttons(&mut self, buttons: u32) -> Result<Vec<u8>, String> {
+        self.advance_buttons(buttons, 1)?;
         self.snapshot()
     }
 
-    pub fn step(&mut self, input_json: &str) -> Result<String, String> {
+    pub fn step(&mut self, input_json: &str) -> Result<Vec<u8>, String> {
         let inputs: [Input; 4] = serde_json::from_str(input_json).map_err(|err| err.to_string())?;
         self.step_inputs(inputs)?;
         self.snapshot()
     }
 
-    pub fn snapshot(&self) -> Result<String, String> {
-        serde_json::to_string(&self.view()).map_err(|error| error.to_string())
+    pub fn snapshot(&self) -> Result<Vec<u8>, String> {
+        let view = self.view();
+        let mut bytes = Vec::with_capacity(256 + 64 * view.actors.len());
+        ciborium::into_writer(&view, &mut bytes).map_err(|error| error.to_string())?;
+        Ok(bytes)
     }
 
     pub fn reset(&mut self) -> Result<(), String> {
@@ -1403,14 +1405,21 @@ impl Runtime {
         }
         self.deliver_broadcasts(&inputs, &mut actions);
         self.run_timers(&inputs, &mut actions);
+        let mut emitter_ids = Vec::new();
         let scripted: Vec<_> = self
             .entity_ids
             .iter()
             .filter_map(|id| self.actors.get(id))
             .filter(|actor| actor.sprite.is_some() && actor.bullet.is_none() && actor.active())
-            .map(|actor| (actor.id, actor.player))
-            .chain(self.room_script_id.map(|id| (id, Some(0))))
-            .chain(self.actors.contains_key(&0).then_some((0, Some(0))))
+            .map(|actor| (actor, actor.player))
+            .chain(self.room_script_id.map(|id| (&self.actors[&id], Some(0))))
+            .chain(self.actors.get(&0).map(|actor| (actor, Some(0))))
+            .map(|(actor, player)| {
+                if actor.emitter.is_some() {
+                    emitter_ids.push(actor.id);
+                }
+                (actor.id, player)
+            })
             .collect();
         let edges: [Vec<Rc<str>>; 4] = std::array::from_fn(|slot| {
             let now = inputs[slot].bits();
@@ -1429,11 +1438,6 @@ impl Runtime {
                 })
                 .collect()
         });
-        let emitter_ids: Vec<_> = scripted
-            .iter()
-            .map(|(id, _)| *id)
-            .filter(|id| self.actors[id].emitter.is_some())
-            .collect();
         if !emitter_ids.is_empty() {
             let start = (self.tick % emitter_ids.len() as u64) as usize;
             for id in emitter_ids[start..].iter().chain(&emitter_ids[..start]) {
@@ -1471,13 +1475,12 @@ impl Runtime {
                 self.run(id, "animation_finished", &inputs, &mut actions);
             }
             let Some(actor) = self.actors.get(&id) else { continue };
-            let script_jump = actor
-                .sprite
-                .as_ref()
-                .is_some_and(|s| self.game.sprites[s].script_jump);
             if let Some(slot) = player.filter(|_| actor.standard_movement) {
+                let jump = inputs[slot].x
+                    && !self.inputs[slot].x
+                    && actor.sprite.as_ref().is_none_or(|sprite| !self.game.sprites[sprite].script_jump);
                 self.engine(id, inputs[slot], 0, [4., 0., 0.], "", &mut actions);
-                if !script_jump && inputs[slot].x && !self.inputs[slot].x {
+                if jump {
                     self.engine(id, inputs[slot], 1, [8., 0., 0.], "", &mut actions);
                 }
             }
@@ -1598,13 +1601,6 @@ impl Runtime {
         self.cross_exit(&inputs)
     }
 
-    fn input_slot(&self, id: u32) -> Option<usize> {
-        self.actors
-            .get(&id)
-            .and_then(|actor| actor.player)
-            .or((id == 0 || self.room_script_id == Some(id)).then_some(0))
-    }
-
     fn assign_player(&mut self, entity: u32, player: Option<usize>) {
         if !self.entity_ids.contains(&entity) || self.actors[&entity].player == player {
             return;
@@ -1714,38 +1710,43 @@ impl Runtime {
         if actor.clone_pending {
             return false;
         }
-        let Some(program) = actor
-            .sprite
-            .as_ref()
-            .and_then(|sprite| self.programs.get(sprite))
-            .and_then(|events| events.get(event))
-        else {
-            return false;
-        };
-        let previous = if event == "tick" {
+        let tick = event == "tick";
+        let previous = if tick {
             actor.tick_script.take()
         } else {
             actor.scripts.remove(event)
         };
         let mut machine = match previous {
-            Some(machine) if event != "tick" && start => {
+            Some(machine) if !tick && start => {
                 actor.scripts.insert(event.into(), machine);
                 return true;
             }
             Some(machine) => machine,
-            None if start => match payload {
-                ScriptPayload::Numbers(values) => vm::Machine::new(program.clone(), values),
-                ScriptPayload::UsedItem(item) => {
-                    vm::Machine::new(program.clone(), [0; 2]).with_used_item(item)
+            None => {
+                let Some(program) = actor
+                    .sprite
+                    .as_ref()
+                    .and_then(|sprite| self.programs.get(sprite))
+                    .and_then(|events| events.get(event))
+                else {
+                    return false;
+                };
+                if !start {
+                    return true;
                 }
-            },
-            None => return true,
+                match payload {
+                    ScriptPayload::Numbers(values) => vm::Machine::new(program.clone(), values),
+                    ScriptPayload::UsedItem(item) => {
+                        vm::Machine::new(program.clone(), [0; 2]).with_used_item(item)
+                    }
+                }
+            }
         };
         let slot = actor
             .player
             .or((id == 0 || self.room_script_id == Some(id)).then_some(0));
-        let input = slot.map_or(Input::default(), |slot| inputs[slot]);
-        let result = machine.run(self, id, event, input, actions);
+        let (input, previous) = slot.map_or((Input::default(), 0), |slot| (inputs[slot], self.prior_buttons[slot]));
+        let result = machine.run(self, id, event, input, previous, actions);
         if self.actors.get(&id).is_some_and(|actor| actor.clone_deleting) {
             if let Some(body) = self.remove_entity_record(id).and_then(|actor| actor.body) {
                 self.world.remove(body);
@@ -1753,7 +1754,7 @@ impl Runtime {
             return true;
         }
         match result {
-            Ok(finished) if event == "tick" => {
+            Ok(finished) if tick => {
                 if finished {
                     machine.restart();
                 }

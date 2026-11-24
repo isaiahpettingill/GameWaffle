@@ -65,16 +65,42 @@ const commands = {constant:10, load:11, store:12, calc:13, branch:14, jump:15, w
 const buttons = ['up','down','left','right','a','b','x','menu'];
 
 export function compileScript(script,modules={},trace,registry){
-  const result=compileEvents(script,modules,trace,registry);
-  for(const [name,r] of Object.entries(script.routines??{})){
+  const routines=Object.entries(script.routines??{});
+  validateScriptDefinition(script,modules,routines,registry);
+  const context={
+    collections:registry?.collections??validateCollections(script.collections),
+    aliases:registry?.propertyAliases??propertyAliases(script.declarations?.globals,script.declarations?.flags,registry?.items),
+  };
+  const result=compileEvents(script,script.events,modules,trace,registry,context);
+  for(const [name,r] of routines){
     const args=r.params.map((_,index)=>defaults[paramType(r,index)]);
     const block=r.body?{op:'call',name,args}:{op:validation,value:{call:name,args}};
-    try{compileEvents({...script,events:{start:[block]}},modules,undefined,registry);}
+    try{compileEvents(script,{start:[block]},modules,undefined,registry,context);}
     catch(error){if(error.node===block || !error.node)error.node=r;throw error;}
   }
   return result;
 }
-function compileEvents(script, modules, trace, registry) {
+function validateScriptDefinition(script,modules,routines,registry) {
+  const constants=script.constants??{};
+  if(typeof constants!=='object'||Array.isArray(constants)||Object.keys(constants).length>128)
+    throw Error('Use up to 128 constants per script');
+  for(const [name,value] of Object.entries(constants)){
+    if(!variableName(name)||!constantType(value))throw Error('Invalid constant '+name);
+  }
+  if(registry&&!registry.gameScript&&(script.collections||Object.values(script.declarations??{}).some(group=>Object.keys(group).length)))
+    throw Error('Use the Game script for global declarations, including resources');
+  for(const [name,value] of Object.entries(script.declarations?.resources??{})){
+    if(!variableName(name)||!validResourceText(value))throw Error('Invalid text resource '+name);
+  }
+  for(const name of script.imports??[])if(!Object.hasOwn(modules,name))throw Error('Unknown module '+name);
+  for(const [name,r] of routines){
+    if(!variableName(name) || Object.hasOwn(Blocks,name) || name==='wait' || !Array.isArray(r.params) ||
+       r.params.some(p=>!variableName(p)) || new Set(r.params).size!==r.params.length ||
+       r.params.length>maxParameters || (r.paramTypes!=null && (!Array.isArray(r.paramTypes) || r.paramTypes.length!==r.params.length ||
+       r.paramTypes.some(type=>!types.includes(type)))))throw Error('Invalid routine '+name);
+  }
+}
+function compileEvents(script, sourceEvents, modules, trace, registry, {collections,aliases}) {
   let unit=script, parameters=new Map(), active=new Set(), current;
   function call(name,args,isFunction,run,checkArgument){
     const parts=name.split('.');
@@ -94,33 +120,13 @@ function compileEvents(script, modules, trace, registry) {
     for(const [param,binding] of bindings)if(!binding.used)checkArgument(binding.value,binding.type,param);
     return result;
   }
-  const constants=script.constants??{};
-  if(typeof constants!=='object'||Array.isArray(constants)||Object.keys(constants).length>128)
-    throw Error('Use up to 128 constants per script');
-  for(const [name,value] of Object.entries(constants)){
-    if(!variableName(name)||!constantType(value))throw Error('Invalid constant '+name);
-  }
-  if(registry&&!registry.gameScript&&(script.collections||Object.values(script.declarations??{}).some(group=>Object.keys(group).length)))
-    throw Error('Use the Game script for global declarations, including resources');
-  for(const [name,value] of Object.entries(script.declarations?.resources??{})){
-    if(!variableName(name)||!validResourceText(value))throw Error('Invalid text resource '+name);
-  }
-  for(const name of script.imports??[])if(!Object.hasOwn(modules,name))throw Error('Unknown module '+name);
-  for(const [name,r] of Object.entries(script.routines??{})){
-    if(!variableName(name) || Object.hasOwn(Blocks,name) || name==='wait' || !Array.isArray(r.params) ||
-       r.params.some(p=>!variableName(p)) || new Set(r.params).size!==r.params.length ||
-       r.params.length>maxParameters || (r.paramTypes!=null && (!Array.isArray(r.paramTypes) || r.paramTypes.length!==r.params.length ||
-       r.paramTypes.some(type=>!types.includes(type)))))throw Error('Invalid routine '+name);
-  }
   try {
   let scriptBorder=false,requiresAbi13=false,requiresAbi14=false,requiresAbi15=false,requiresAbi16=false,requiresAbi17=false,tileSensing=false;
   const dependencies = new Set(), shaderUses=new Set(), backgroundUses = new Set(), shaderPresets = new Set(), fontUses = new Set();
-  const collections=registry?.collections??validateCollections(script.collections);
-  const aliases=registry?.propertyAliases??propertyAliases(script.declarations?.globals,script.declarations?.flags,registry?.items);
   let scriptGravity=false,scriptJump=false,requiresAbi10=false,requiresAbi12=false;
   const events = {};
   let nodes = 0;
-  for (const [event, body] of Object.entries(script.events ?? {})) {
+  for (const [event, body] of Object.entries(sourceEvents ?? {})) {
     if (!Events.includes(event)&&!inputEvent(event)&&!receivedEvent(event)&&!timerEvent(event)&&!controllerEvent(event)) throw Error(`Unknown script event: ${event}`);
     if(controllerEvent(event)){
       if(registry&&!registry.gameScript)throw Error('Use controller connection events in the Game script');
@@ -134,12 +140,21 @@ function compileEvents(script, modules, trace, registry) {
     }
     if(inputEvent(event)&&registry?.controls&&!Object.hasOwn(registry.controls,event.split('.')[1]))throw Error('Map action in the Game script: '+event);
     if(receivedEvent(event)&&registry?.events&&!Object.hasOwn(registry.events,event.slice(9)))throw Error('Choose an event from Game → Events');
-    const bytes = [], names = [], constants = [], reals = [];
+    const bytes = [], names = {values:[]}, constants = {values:[]}, reals = {values:[]};
     let checking = 0;
     const intern = (pool,value) => {
       if(checking)return 0;
-      let index = pool.indexOf(value);
-      if (index < 0) { index = pool.length; pool.push(value); }
+      const values=pool.values;
+      // Keep the tiny pools common in editor scripts cheap and index larger ones.
+      if(values.length<32){
+        const index=values.indexOf(value);
+        return index<0?values.push(value)-1:index;
+      }
+      if(!pool.index)pool.index=new Map(values.map((entry,index)=>[entry,index]));
+      const found=pool.index.get(value);
+      if(found!==undefined)return found;
+      const index=values.push(value)-1;
+      pool.index.set(value,index);
       return index;
     };
     const named = (name,scope) => {
@@ -198,7 +213,10 @@ function compileEvents(script, modules, trace, registry) {
         return 'real';
       } else if (typeof value === 'number' || typeof value === 'boolean') {
         if (typeof value === 'number' && !Number.isSafeInteger(value)) throw Error('Use an exact integer in expressions');
-        emit(commands.constant,target,...word(intern(constants,Number(value))));
+        const number=Number(value);
+        // CBOR's JavaScript writer encodes larger Numbers as floats.
+        const integer=number >= -0x100000000 && number <= 0xffffffff ? number : BigInt(number);
+        emit(commands.constant,target,...word(intern(constants,integer)));
         return typeof value==='boolean'?'boolean':'integer';
       } else if(value?.call){
         current=value;
@@ -541,7 +559,7 @@ function compileEvents(script, modules, trace, registry) {
     }
     sequence(body,0);
     if (bytes.length >= 65535) throw Error('Script bytecode exceeds 64 KiB');
-    if (bytes.length) events[event] = { b:typeof Buffer === "undefined" ? Uint8Array.from(bytes) : Buffer.from(bytes), n:names, k:constants, ...(reals.length ? {f:reals} : {}) };
+    if (bytes.length) events[event] = { b:typeof Buffer === "undefined" ? Uint8Array.from(bytes) : Buffer.from(bytes), n:names.values, k:constants.values, ...(reals.values.length ? {f:reals.values} : {}) };
   }
   return { events, dependencies, backgroundUses, scriptBorder, shaderUses, shaderPresets, fontUses, scriptGravity, scriptJump, requiresAbi10, requiresAbi12, requiresAbi13, requiresAbi14, requiresAbi15, requiresAbi16, requiresAbi17, tileSensing };
   } catch(error){error.node=current;throw error;}

@@ -1,3 +1,5 @@
+import {decodeFrame} from '../src/frame.mjs';
+import {decodeSave} from '../src/save.mjs';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {compileProject} from '../src/compiler.mjs';
@@ -101,9 +103,9 @@ assert.equal(cartridge.runtimeAbi,15);
 initSync({module:await readFile('web-built/runtime/runtime_bg.wasm')});
 const runtime=Runtime.from_cartridge(pack(cartridge));
 const step=(mask=0)=>{
-  const frame=JSON.parse(runtime.step_buttons(mask));
+  const frame=decodeFrame(runtime.step_buttons(mask));
   assert.equal(frame.events.find(event=>event.kind==='script_error')?.message,undefined);
-  return {frame,...JSON.parse(runtime.save_game())};
+  return {frame,...decodeSave(runtime.save_game())};
 };
 const {frame,globals,flags}=step();
 assert.deepEqual(frame.viewport,[104,72,128,96]);
@@ -141,9 +143,9 @@ end
 `);
 const adaptive=await compileProject('demo',{project,scripts:new Map([['game',startupCamera]])});
 const adaptiveRuntime=Runtime.from_cartridge_with_view(pack(adaptive),undefined,1,undefined,400,300,false);
-assert.equal(JSON.parse(adaptiveRuntime.save_game()).globals.startup_width,'200');
-assert.deepEqual(JSON.parse(adaptiveRuntime.snapshot()).viewport.slice(2),[200,150]);
+assert.equal(decodeSave(adaptiveRuntime.save_game()).globals.startup_width,'200');
+assert.deepEqual(decodeFrame(adaptiveRuntime.snapshot()).viewport.slice(2),[200,150]);
 adaptiveRuntime.set_camera_window(520,320,false);
-assert.deepEqual(JSON.parse(adaptiveRuntime.snapshot()).viewport.slice(2),[260,160]);
+assert.deepEqual(decodeFrame(adaptiveRuntime.snapshot()).viewport.slice(2),[260,160]);
 adaptiveRuntime.free();
 console.log('Passed viewport geometry, tile contact, Unicode text, numeric reporters, saved random state, and shared Blockly reporter conversion');

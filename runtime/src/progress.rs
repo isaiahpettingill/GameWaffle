@@ -2,6 +2,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 
 const MAX_SAVE_BYTES: usize = 4 * 1024 * 1024;
+const SAVE_HEADER: &[u8; 6] = b"GWSV\x00\x01";
 fn keyboard_player() -> u8 { 1 }
 fn is_zero(value: &u32) -> bool { *value == 0 }
 
@@ -576,13 +577,27 @@ struct Save {
     counters: BTreeMap<String, i32>,
 }
 
+impl Save {
+    fn decode(data: &[u8]) -> Result<Self, String> {
+        if data.len() > MAX_SAVE_BYTES {
+            return Err("Save is too large".into());
+        }
+        let mut payload = data.strip_prefix(SAVE_HEADER).ok_or("Unsupported GameWaffle save version")?;
+        let state = ciborium::from_reader(&mut payload).map_err(|error| error.to_string())?;
+        if !payload.is_empty() {
+            return Err("Unexpected data after save".into());
+        }
+        Ok(state)
+    }
+}
+
 #[wasm_bindgen]
 impl Runtime {
     pub fn set_seed(&mut self, seed: u32) {
         self.seed = seed.max(1);
         self.rng = self.seed;
     }
-    pub fn save_game(&self) -> Result<String, String> {
+    pub fn save_game(&self) -> Result<Vec<u8>, String> {
         let mut memory = self.memory.clone();
         memory.insert(self.room.clone(), self.room_memory());
         let state = Save {
@@ -612,17 +627,20 @@ impl Runtime {
             removed: self.removed.clone(),
             counters: self.counters.clone(),
         };
-        let save = serde_json::to_string(&state).map_err(|error| error.to_string())?;
+        let mut save = SAVE_HEADER.to_vec();
+        ciborium::into_writer(&state, &mut save).map_err(|error| error.to_string())?;
         if save.len() > MAX_SAVE_BYTES {
             return Err("Save is too large".into());
         }
         Ok(save)
     }
-    pub fn load_game(&mut self, data: &str) -> Result<(), String> {
-        if data.len() > MAX_SAVE_BYTES {
-            return Err("Save is too large".into());
-        }
-        let mut state: Save = serde_json::from_str(data).map_err(|e| e.to_string())?;
+    pub fn load_game(&mut self, data: &[u8]) -> Result<(), String> {
+        self.load_state(Save::decode(data)?)
+    }
+}
+
+impl Runtime {
+    fn load_state(&mut self, mut state: Save) -> Result<(), String> {
         if state.version != 1
             || state.game != self.game.id
             || !self.game.rooms.contains_key(&state.room)
@@ -858,7 +876,7 @@ struct RollbackActor {
 
 #[cfg(feature = "rollback")]
 #[derive(Deserialize, Serialize)]
-struct Rollback<W> {
+struct Rollback<W, C> {
     version: u8,
     room: String,
     layout: String,
@@ -870,7 +888,7 @@ struct Rollback<W> {
     view_size: [u32; 2],
     restored: bool,
     gates_dirty: bool,
-    checkpoint: Option<String>,
+    checkpoint: Option<C>,
     checkpoint_requested: bool,
     transition: Option<String>,
     retry: bool,
@@ -901,7 +919,7 @@ impl Runtime {
             view_size: self.view_size,
             restored: self.restored,
             gates_dirty: self.gates_dirty,
-            checkpoint: self.checkpoint.clone(),
+            checkpoint: self.checkpoint.as_deref().map(serde_bytes::Bytes::new),
             checkpoint_requested: self.checkpoint_requested,
             transition: self.transition.clone(),
             retry: self.retry,
@@ -912,13 +930,13 @@ impl Runtime {
     }
 
     /// Restore solver contacts, rigid bodies and script scheduler state for an exact replay.
-    pub fn load_rollback(&mut self, save: &str, physics: &[u8]) -> Result<(), String> {
+    pub fn load_rollback(&mut self, save: &[u8], physics: &[u8]) -> Result<(), String> {
         let bytes =
             miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(physics, 64 * 1024 * 1024)
                 .map_err(|_| "Invalid rollback data")?;
-        let state: Rollback<World> =
+        let state: Rollback<World, serde_bytes::ByteBuf> =
             ciborium::from_reader(bytes.as_slice()).map_err(|error| error.to_string())?;
-        let portable: Save = serde_json::from_str(save).map_err(|error| error.to_string())?;
+        let portable = Save::decode(save)?;
         let valid = state.version == 1
             && portable.room == state.room
             && self
@@ -943,7 +961,7 @@ impl Runtime {
         if !valid {
             return Err("Rollback state does not match this cartridge".into());
         }
-        self.load_game(save)?;
+        self.load_state(portable)?;
         if self.actors.len() != state.actors.len()
             || self
                 .actors
@@ -965,7 +983,7 @@ impl Runtime {
         self.view_size = state.view_size;
         self.restored = state.restored;
         self.gates_dirty = state.gates_dirty;
-        self.checkpoint = state.checkpoint;
+        self.checkpoint = state.checkpoint.map(serde_bytes::ByteBuf::into_vec);
         self.checkpoint_requested = state.checkpoint_requested;
         self.transition = state.transition;
         self.retry = state.retry;

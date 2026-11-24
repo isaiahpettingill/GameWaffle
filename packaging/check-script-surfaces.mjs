@@ -1,3 +1,5 @@
+import {decodeFrame,decodeWireFrame} from '../src/frame.mjs';
+import {decodeSave} from '../src/save.mjs';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {compileProject} from '../src/compiler.mjs';
@@ -136,34 +138,70 @@ assert.equal(cartridge.runtimeAbi,13);
 assert.equal(cartridge.controls.pause_game,cartridge.controls.menu);
 assert.deepEqual(cartridge.menus.pause,{title:'Pause',options:['Resume']});
 initSync({module:await readFile('web-built/runtime/runtime_bg.wasm')});
+const loops=parseScript(`on tick
+repeat 75
+ repeat 2
+  change global.updates by 1
+ end
+end
+repeat (9007199254740991 * 2048)
+ change global.large by 1
+ wait(1)
+end
+end`);
+const loopCartridge=pack(await compileProject('demo',{project,scripts:new Map([['game',loops]])}));
+const fused=Runtime.from_cartridge(loopCartridge), singleStep=Runtime.from_cartridge(loopCartridge);
+let inspected=false;
+globalThis.waffleBreak=()=>!inspected;
+globalThis.waffleInspect=bytes=>{
+  assert.equal(decodeWireFrame(bytes).room,'yard');
+  inspected=true;
+};
+singleStep.enable_debug();
+try{
+  for(let tick=0;tick<8;tick++){
+    assert.deepEqual(fused.step_buttons(0),singleStep.step_buttons(0));
+    assert.deepEqual(fused.save_game(),singleStep.save_game());
+  }
+  const saved=decodeSave(fused.save_game());
+  assert.equal(saved.globals.updates,'150');
+  assert.ok(Number(saved.globals.large)>0);
+  assert.ok(inspected);
+  assert.throws(()=>fused.load_game(new TextEncoder().encode('{}')),/Unsupported GameWaffle save version/);
+}finally{
+  fused.free();
+  singleStep.free();
+  delete globalThis.waffleBreak;
+  delete globalThis.waffleInspect;
+}
 const oversized=parseScript('object page\n'+Array.from({length:32},(_,i)=>
   '  field_'+i+': string = "'+'a'.repeat(3072)+'"').join('\n')+'\nend\ninventory pages: page\non tick\n'+
   '  inventory_append("pages", "page")\nend');
 const big=Runtime.from_cartridge(pack(await compileProject('demo',{project,scripts:new Map([['game',oversized]])})));
 let budgetError=false;
-for(let i=0;i<30&&!budgetError;i++)budgetError=JSON.parse(big.step_buttons(0)).events.some(event=>/collections are full/.test(event.message??''));
+for(let i=0;i<30&&!budgetError;i++)budgetError=decodeFrame(big.step_buttons(0)).events.some(event=>/collections are full/.test(event.message??''));
 assert.ok(budgetError);
 const boundedSave=big.save_game();
 big.load_game(boundedSave);
-assert.ok(JSON.parse(big.save_game()).collections.inventories.pages.length<30);
+assert.ok(decodeSave(big.save_game()).collections.inventories.pages.length<30);
 big.free();
 const brokenStartup=parseScript('on game startup\n set_display_resolution(1, 1)\nend');
 const broken=pack(await compileProject('demo',{project,scripts:new Map([['game',brokenStartup]])}));
 assert.throws(()=>Runtime.from_cartridge(broken),/Game script game_startup/);
 const runtime=Runtime.from_cartridge(pack(cartridge));
 const withGamepad=Runtime.from_cartridge_with_controllers(pack(cartridge),undefined,1,1);
-assert.equal(JSON.parse(withGamepad.save_game()).globals['bool.connected_at_start'],'1');
+assert.equal(decodeSave(withGamepad.save_game()).globals['bool.connected_at_start'],'1');
 withGamepad.step_buttons(0);
 withGamepad.set_connected_players(1);
 withGamepad.step_buttons(0);
-assert.equal(JSON.parse(withGamepad.save_game()).globals.disconnections,'1');
+assert.equal(decodeSave(withGamepad.save_game()).globals.disconnections,'1');
 withGamepad.free();
 const frame=buttons=>{
-  const snapshot=JSON.parse(runtime.step_buttons(buttons));
+  const snapshot=decodeFrame(runtime.step_buttons(buttons));
   assert.deepEqual(snapshot.events.filter(event=>event.kind==='script_error'),[]);
   return snapshot;
 };
-assert.deepEqual(JSON.parse(runtime.snapshot()).gameSettings.display.resolution,[320,180]);
+assert.deepEqual(decodeFrame(runtime.snapshot()).gameSettings.display.resolution,[320,180]);
 let current=frame(0);
 assert.equal(current.roomSettings.zoom,1.5);
 assert.equal(current.roomSettings.cameraHeight,144);
@@ -178,7 +216,7 @@ runtime.set_connected_players(3);
 current=frame(0);
 assert.equal(current.actors.find(actor=>actor.name==='Spare').player,1);
 for(let i=0;i<85;i++)current=frame(0);
-const saved=JSON.parse(runtime.save_game());
+const saved=decodeSave(runtime.save_game());
 assert.equal(saved.globals.score,'3');
 assert.equal(saved.globals.connections,'1');
 assert.ok(runtime.jit_executions()>0,'WebAssembly ran a generated numeric kernel');
@@ -187,7 +225,7 @@ interpreted.set_jit_enabled(false);
 interpreted.step_buttons(0);
 interpreted.set_connected_players(3);
 for(let i=0;i<86;i++)interpreted.step_buttons(0);
-assert.equal(JSON.parse(interpreted.save_game()).globals['real.energy'],saved.globals['real.energy']);
+assert.equal(decodeSave(interpreted.save_game()).globals['real.energy'],saved.globals['real.energy']);
 assert.equal(interpreted.jit_executions(),0);
 interpreted.free();
 assert.deepEqual(saved.collections.arrays.ranks,[{Integer:1},{Integer:8},{Integer:4}]);
@@ -204,8 +242,8 @@ assert.equal(current.actors.find(actor=>actor.name==='Hero').player,1);
 assert.equal(current.actors.find(actor=>actor.name==='Spare').player,0);
 const checkpoint=runtime.save_game();
 runtime.reset();
-assert.equal(JSON.parse(runtime.snapshot()).actors.find(actor=>actor.name==='Hero').player,0);
+assert.equal(decodeFrame(runtime.snapshot()).actors.find(actor=>actor.name==='Hero').player,0);
 runtime.load_game(checkpoint);
-assert.equal(JSON.parse(runtime.snapshot()).actors.find(actor=>actor.name==='Hero').player,1);
+assert.equal(decodeFrame(runtime.snapshot()).actors.find(actor=>actor.name==='Hero').player,1);
 runtime.free();
 console.log('Passed Game and room initialization, typed collections, tile events, controller assignment, drawing, Wasm JIT parity, and save restoration');

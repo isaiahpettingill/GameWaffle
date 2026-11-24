@@ -66,7 +66,7 @@ for(const [body, expected] of [
 ]){
   assert.throws(()=>compileScript(parseScript(typedSource+'\non start\n'+body+'\nend\n')),expected);
 }
-assert.throws(()=>compileScript(parseScript('on tick\nsay(text.unknown)\nend'),{},undefined,{text:{}}),/Add text key/);
+assert.throws(()=>compileScript(parseScript('on tick\nsay(text.unknown)\nend'),{},undefined,{text:{}}),/Add .*key .*unknown/);
 console.log('Passed typed literals and routine arguments, text round trips, and type errors');
 
 for (const [number,zero] of [['-8','0'],['0.25','0.0']]) {

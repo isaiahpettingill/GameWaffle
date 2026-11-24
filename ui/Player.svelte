@@ -1,10 +1,12 @@
 <script>
+  import {decodeFrame} from '../src/frame.mjs';
   import {Square,RotateCcw,Save,FolderOpen,Volume2,VolumeX,Maximize,Settings2} from '@lucide/svelte';
   import productIcon from '../packaging/gamewaffle.svg?inline';
   import { onMount } from 'svelte';
   import { unpack } from '../src/cartridge.mjs';
   import { buttons } from '../src/schema.mjs';
   import { createRuntime } from './runtime.js';
+  import { accessSaveSlot } from './save-store.js';
   import { drawRoom, loadAtlas } from './render.js';
   import { createAudio } from './audio.js';
 
@@ -14,7 +16,7 @@
   let touch = $state(false), muted = $state(true), players = $state(1);
   let status = $state('Loading cartridge…'), error = $state(''), lanSlots = $state([]);
   let runtime, atlasImages = {}, socket, loop, last = 0, elapsed = 0, loadVersion = 0;
-  let slot=$state(1);
+  let slot=$state(1), savePending=$state(false);
   const audio = createAudio();
   const keys = new Set(), fingers = new Map(), taps = new Set();
   const embedded = document.getElementById('gamewaffle-cartridge');
@@ -63,7 +65,7 @@
     atlasImages = {[room]:firstAtlas};
     audio.setCart(next);
     error = '';
-    show(JSON.parse(runtime.snapshot()));
+    show(decodeFrame(runtime.snapshot()));
     status = 'Local game';
   }
   function show(frame,paint=true) {
@@ -108,6 +110,7 @@
       await load(new Uint8Array(await response.arrayBuffer()));
       status = 'Connecting…';
       const connection = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/lan`);
+      connection.binaryType = 'arraybuffer';
       socket = connection;
       connection.onopen = () => {
         if (socket !== connection) return;
@@ -116,9 +119,12 @@
       };
       connection.onmessage = event => {
         if (socket !== connection) return;
-        const msg = JSON.parse(event.data);
-        if (msg.kind === 'slots') lanSlots = msg.slots;
-        if (msg.kind === 'snapshot') show(msg.data);
+        if (typeof event.data !== 'string') {
+          show(decodeFrame(new Uint8Array(event.data)));
+        } else {
+          const msg = JSON.parse(event.data);
+          if (msg.kind === 'slots') lanSlots = msg.slots;
+        }
       };
       connection.onclose = () => {
         if (socket !== connection) return;
@@ -186,7 +192,7 @@
           runtime.set_view_size(Number(canvas.dataset.viewWidth)||canvas.width,Number(canvas.dataset.viewHeight)||canvas.height);
           const mask = data.reduce((bits,input,slot)=>buttons.reduce((value,button,index)=>
             input[button] ? value | (1 << (slot*8+index)) : value,bits),0) >>> 0;
-          show(JSON.parse(runtime.step_buttons(mask)),false);
+          show(decodeFrame(runtime.step_buttons(mask)),false);
           updated=true;
         }
       }
@@ -241,13 +247,23 @@
     try { muted = await audio.toggle(); }
     catch { error = 'Audio is unavailable in this browser.'; }
   }
-  function progress(write){
+  async function progress(write){
+    if(!runtime||socket||savePending)return;
+    const engine=runtime, saveSlot=slot;
+    savePending=true;
     try {
-      const key=JSON.stringify(['GameWaffle',runtime.save_id(),slot]);
-      if(write)localStorage.setItem(key,runtime.save_game());
-      else {const saved=localStorage.getItem(key);if(!saved)throw Error('This slot is empty');runtime.load_game(saved);clear();show(JSON.parse(runtime.snapshot()));}
-      status=(write?'Saved':'Loaded')+' slot '+slot;error='';
-    }catch(err){error=String(err.message??err);}
+      const saved=await accessSaveSlot(engine.save_id(),saveSlot,write?engine.save_game():undefined);
+      if(engine!==runtime||socket)return;
+      if(!write){
+        if(!saved)throw Error('This slot is empty');
+        engine.load_game(saved);
+        clear();
+        show(decodeFrame(engine.snapshot()));
+      }
+      status=(write?'Saved':'Loaded')+' slot '+saveSlot;error='';
+    }catch(err){
+      if(engine===runtime&&!socket)error=String(err.message??err);
+    }finally{savePending=false;}
   }
   function localReset() {
     disconnect();
@@ -289,8 +305,8 @@
       {#if playtest}<button class="stop" onclick={stop} title="Stop playtest (Esc)"><Square/>Stop</button>{/if}
       <button onclick={localReset} disabled={!cart} title="Restart game"><RotateCcw/>Reset</button>
       <label>Slot <select bind:value={slot}>{#each [1,2,3] as n}<option value={n}>{n}</option>{/each}</select></label>
-      <button disabled={!cart||status==='LAN game'} onclick={()=>progress(true)}><Save/>Save</button>
-      <button disabled={!cart||status==='LAN game'} onclick={()=>progress(false)}><FolderOpen/>Load</button>
+      <button disabled={!cart||status==='LAN game'||savePending} onclick={()=>progress(true)}><Save/>Save</button>
+      <button disabled={!cart||status==='LAN game'||savePending} onclick={()=>progress(false)}><FolderOpen/>Load</button>
       <button class="icon" title={muted?'Enable audio':'Mute audio'} aria-label={muted?'Enable audio':'Mute audio'} onclick={sound} aria-pressed={!muted}>{#if muted}<VolumeX/>{:else}<Volume2/>{/if}</button>
       {#if document.fullscreenEnabled}<button class="icon" aria-label="Fullscreen" title="Fullscreen" onclick={()=>document.fullscreenElement?document.exitFullscreen():shell.requestFullscreen().catch(()=>{})}><Maximize/></button>{/if}
       <button class="icon" aria-label="Player options" title="Player options" aria-expanded={options} onclick={()=>options=!options}><Settings2/></button>

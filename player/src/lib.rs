@@ -938,7 +938,7 @@ fn save_slot(runtime: &mut Runtime, slot: u8, write: bool) -> Result<(), Error> 
         std::fs::write(&temp, runtime.save_game()?)?;
         std::fs::rename(temp, path)?;
     } else {
-        runtime.load_game(&std::fs::read_to_string(path)?)?;
+        runtime.load_game(&std::fs::read(path)?)?;
     }
     Ok(())
 }

@@ -209,19 +209,19 @@ impl Core {
         Ok(())
     }
 }
-fn checkpoint(bytes: &[u8]) -> Option<&str> {
+fn checkpoint(bytes: &[u8]) -> Option<&[u8]> {
     let len = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?) as usize;
     if len == 0 || len > SAVE_SIZE - 4 {
         return None;
     }
-    std::str::from_utf8(bytes.get(4..4 + len)?).ok()
+    bytes.get(4..4 + len)
 }
-fn write_checkpoint(bytes: &mut [u8], save: &str) -> bool {
+fn write_checkpoint(bytes: &mut [u8], save: &[u8]) -> bool {
     if bytes.len() < save.len() + 4 {
         return false;
     }
     bytes[..4].copy_from_slice(&(save.len() as u32).to_le_bytes());
-    bytes[4..4 + save.len()].copy_from_slice(save.as_bytes());
+    bytes[4..4 + save.len()].copy_from_slice(save);
     true
 }
 thread_local! {

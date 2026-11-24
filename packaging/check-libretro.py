@@ -2,6 +2,7 @@
 import ctypes as c
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 import sys
 
@@ -71,7 +72,18 @@ def capture():
     buf = c.create_string_buffer(state_size())
     assert save(buf, len(buf))
     length = int.from_bytes(buf.raw[:4], 'little')
-    return buf, json.loads(buf.raw[4:4 + length])
+    portable = buf.raw[4:4 + length]
+    assert portable.startswith(b'GWSV\0\1')
+    result = subprocess.check_output(
+        ['node', '--input-type=module', '-e', '''
+            import {readFileSync} from 'node:fs';
+            import {decodeSave} from './src/save.mjs';
+            console.log(JSON.stringify(decodeSave(readFileSync(0)).players));
+        '''],
+        input=portable,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+    return buf, {'players': json.loads(result)}
 
 
 for _ in range(5):

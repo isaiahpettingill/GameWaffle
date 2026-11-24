@@ -1,4 +1,5 @@
 import {createRuntime} from './runtime.js';
+import {decodeFrame,decodeWireFrame} from '../src/frame.mjs';
 let control, runtime, lastActor=0, location, frames=0;
 let breakEvent='', breakPc=0, breakActor=0;
 globalThis.waffleBreak=(actor,event,pc)=>{
@@ -9,7 +10,7 @@ globalThis.waffleBreak=(actor,event,pc)=>{
 };
 globalThis.waffleInspect=state=>{
   Atomics.store(control,0,0);
-  postMessage({stop:location,state:JSON.parse(state)});
+  postMessage({stop:location,state:decodeWireFrame(state)});
   // Wait here to retain the VM registers, physics tick, and event call stack.
   while(Atomics.load(control,0)===0)Atomics.wait(control,0,0);
   // A breakpoint can change while the worker is stopped.
@@ -24,12 +25,12 @@ onmessage=async({data})=>{
     control=new Int32Array(data.buffer);
     runtime=await createRuntime(data.bytes,data.room);
     runtime.enable_debug();
-    postMessage({frame:JSON.parse(runtime.snapshot())});
+    postMessage({frame:decodeFrame(runtime.snapshot())});
     function frame(){
       try{
         readBreakpoint();
-        const state=JSON.parse(runtime.step_buttons(Atomics.load(control,1)));
-        postMessage({frame:state,...(++frames%15===0?{state:JSON.parse(runtime.inspect_actor(Atomics.load(control,4)||lastActor))}:{})});
+        const state=decodeFrame(runtime.step_buttons(Atomics.load(control,1)));
+        postMessage({frame:state,...(++frames%15===0?{state:decodeWireFrame(runtime.inspect_actor(Atomics.load(control,4)||lastActor))}:{})});
         setTimeout(frame,1000/60);
       }catch(e){postMessage({error:String(e)});}
     }

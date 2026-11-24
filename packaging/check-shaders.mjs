@@ -1,3 +1,4 @@
+import {decodeFrame} from '../src/frame.mjs';
 import assert from 'node:assert/strict';
 import {cp,mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -96,7 +97,7 @@ end
   initSync({module:await readFile('web-built/runtime/runtime_bg.wasm')});
   const runtime=Runtime.from_cartridge(pack(cart));
   try{
-    const frame=JSON.parse(runtime.step_buttons(0));
+    const frame=decodeFrame(runtime.step_buttons(0));
     assert.deepEqual(frame.events.filter(event=>event.kind==='script_error'),[]);
     assert.deepEqual(frame.roomSettings.shaderPipeline.map(pass=>pass.shader),['my_shader','preset:fog']);
     assert.deepEqual(frame.gameSettings.postprocessing.map(pass=>pass.shader),['preset:scanlines','my_shader']);
@@ -105,7 +106,7 @@ end
     const save=runtime.save_game();
     runtime.reset();
     runtime.load_game(save);
-    const restored=JSON.parse(runtime.snapshot());
+    const restored=decodeFrame(runtime.snapshot());
     assert.deepEqual(restored.roomSettings.shaderPipeline,frame.roomSettings.shaderPipeline);
     assert.deepEqual(restored.gameSettings.postprocessing,frame.gameSettings.postprocessing);
   }finally{runtime.free();}
@@ -149,7 +150,7 @@ end
   const gradientRuntime=Runtime.from_cartridge(pack(gradientCart));
   try{
     const step=(input=0)=>{
-      const frame=JSON.parse(gradientRuntime.step_buttons(input));
+      const frame=decodeFrame(gradientRuntime.step_buttons(input));
       assert.deepEqual(frame.events.filter(event=>event.kind==='script_error'),[]);
       return frame.roomSettings;
     };
@@ -176,7 +177,7 @@ end
     const checkpoint=gradientRuntime.save_game();
     assert.equal(step(16).backgroundGradient.foci[1],null);
     gradientRuntime.load_game(checkpoint);
-    assert.deepEqual(JSON.parse(gradientRuntime.snapshot()).roomSettings.backgroundGradient,radial.backgroundGradient);
+    assert.deepEqual(decodeFrame(gradientRuntime.snapshot()).roomSettings.backgroundGradient,radial.backgroundGradient);
     assert.equal(step(128)?.backgroundGradient,undefined);
   }finally{gradientRuntime.free();}
   console.log('Passed shader upload and graph compilation, pipeline scope and uniform defaults, gradient rendering and save restoration');

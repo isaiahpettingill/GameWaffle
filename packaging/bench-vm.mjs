@@ -5,6 +5,7 @@ import {pathToFileURL} from 'node:url';
 import {compileProject} from '../src/compiler.mjs';
 import {pack} from '../src/pack.mjs';
 import {parseScript} from '../src/wafflescript.mjs';
+import {decodeSave} from '../src/save.mjs';
 
 const project=JSON.parse(await readFile('demo/project.json','utf8'));
 const inputs=[['integer updates','change global.total by 7'],
@@ -34,7 +35,8 @@ for(const root of process.argv.slice(2).length?process.argv.slice(2):['web-built
       const start=performance.now();
       for(let i=0;i<15000;i++)runtime.step_buttons(16);
       const elapsed=performance.now()-start;
-      const saved=JSON.parse(runtime.save_game());
+      const savedBytes=runtime.save_game();
+      const saved=typeof savedBytes==='string'?JSON.parse(savedBytes):decodeSave(savedBytes);
       if(jit===undefined)assert.equal(saved.globals.total,String((2000+15000)*iterations*7));
       else{
         assert.ok(Number(saved.globals['real.total'])>.99);

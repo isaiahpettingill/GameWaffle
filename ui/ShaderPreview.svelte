@@ -1,4 +1,5 @@
 <script>
+  import {decodeFrame} from '../src/frame.mjs';
   import {onMount} from 'svelte';
   import {Pause,Play} from '@lucide/svelte';
   import {unpack} from '../src/cartridge.mjs';
@@ -65,7 +66,8 @@
       if(playing&&elapsed>=1000/30){
         const frames=Math.floor(elapsed/(1000/60));
         elapsed-=frames*(1000/60);
-        for(let i=0;i<frames;i++)snapshot=JSON.parse(runtime.step_buttons(0));
+        runtime.advance_buttons(0,frames);
+        snapshot=decodeFrame(runtime.snapshot());
         needsPaint=true;
       }else if(!playing)elapsed=0;
       if(needsPaint&&atlases[snapshot.room]?.image){
@@ -96,7 +98,7 @@
     const resize=new ResizeObserver(()=>{
       const bounds=stage.getBoundingClientRect();
       runtime?.set_camera_window(Math.floor(bounds.width),Math.floor(bounds.height),true);
-      if(runtime&&!playing)snapshot=JSON.parse(runtime.snapshot());
+      if(runtime&&!playing)snapshot=decodeFrame(runtime.snapshot());
       needsPaint=true;
     });
     resize.observe(stage);
@@ -108,7 +110,7 @@
       const bounds=stage.getBoundingClientRect();
       const engine=await createRuntime(bytes,start,0,[Math.floor(bounds.width),Math.floor(bounds.height)]);
       if(abort.signal.aborted){engine.free();return;}
-      runtime=engine;cart=current;snapshot=JSON.parse(engine.snapshot());
+      runtime=engine;cart=current;snapshot=decodeFrame(engine.snapshot());
       prefetch(snapshot.room);status='';
       raf=requestAnimationFrame(tick);
     })().catch(error=>{if(!abort.signal.aborted)loadError=String(error.message??error);});

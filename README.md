@@ -272,7 +272,7 @@ On each device, open `http://HOST_IP:4871/player.html`. Select the number of pla
 
 Use the [SDK reference](docs/sdk.md) for cartridge layout, block source, and host APIs. Cartridges use format version 2.
 
-LAN clients connect to `/lan` with WebSocket. Send a `join` message to request player slots. The host returns their slot numbers in `slots`. Send an `input` message with the button states for each client slot. The host sends `snapshot` messages at 30 Hz. Get the matching cartridge from `/lan.waffle`.
+LAN clients connect to `/lan` with WebSocket. Send a `join` message to request player slots. The host returns their slot numbers in `slots`. Send an `input` message with the button states for each client slot. The host sends binary snapshots at 30 Hz. Get the matching cartridge from `/lan.waffle`.
 
 The runtime uses [Rapier2D](https://rapier.rs/) with four-lane SIMD, enhanced determinism, and thin LTO in release builds. Web builds require WebAssembly SIMD128. Desktop builds use SSE2 on x86-64 and NEON on ARM64.
 
@@ -400,6 +400,8 @@ Run `npm run check` to test the Rust runtime, build the players, and check game
 logic, WaffleScript, and desktop export. To test the editor at four screen
 widths, install playwright-core 1.58.2 and set CHROME_BIN to your Chromium
 executable. Run `npm run check:editor`.
+
+After building, run `node packaging/bench-runtime.mjs` to measure script parsing and compilation, cartridge loading, and WebAssembly frame delivery. Pass Wasm build directories to compare them on identical cartridges. Use `--write-fixtures DIR` to keep the benchmark cartridges for native runs. For native timing, run `cargo run --release --manifest-path runtime/Cargo.toml --example bench-runtime`, optionally passing cartridge files after `--`. Use Node's `--cpu-prof` to capture a profile of the Wasm benchmark.
 
 To test the packages without publishing a release, run **Build GameWaffle** on a development branch.
 

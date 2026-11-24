@@ -81,7 +81,11 @@ bakes one language into the cartridge, filling missing keys from the default tab
 
 Load the cartridge with `Runtime::from_cartridge(bytes, room)`. Use `None` for the starting room. Call `step_inputs([Input; 4])` at 60 Hz. Read actors and events with `view()`. Use `scripted_global`, `flag`, and `local` to inspect script values. These calls return exact integer values as decimal strings.
 
-The Wasm host can call `step_buttons(mask)`. Each player uses one byte of the mask. Assign bit 0 to Up, bit 1 to Down, bit 2 to Left, and bit 3 to Right. Assign bits 4 through 7 to A, B, X, and Start. The return value is a JSON snapshot.
+The Wasm host can call `step_buttons(mask)`. Each player uses one byte of the mask. Assign bit 0 to Up, bit 1 to Down, bit 2 to Left, and bit 3 to Right. Assign bits 4 through 7 to A, B, X, and Start. The return value is a CBOR snapshot as a `Uint8Array`. Use `decodeFrame(bytes)` from `src/frame.mjs` in JavaScript. Call `advance_buttons(mask, ticks)` to advance without encoding a snapshot, then read the final state with `snapshot()` when needed.
+
+In the CBOR payload, `actors.data` contains 44 bytes per actor in little-endian order. Each row has two `u32` IDs (actor and clone source), seven `f32` values (x, y, width, height, angle, facing, health), an `i32` layer, and a `u32` flags word. A clone source of zero means the actor is not a clone. Bit 0 in the flags word indicates vertical flip. The remaining bits are zero for an unassigned player or one plus the player slot. `actors.details` contains one array per actor with image, name, shadow, and health bar.
+
+`save_game()` returns a versioned binary save. Six header bytes (`47 57 53 56 00 01`) precede its CBOR payload. Pass the entire byte buffer to `load_game(bytes)`.
 
 Call `reset()` to restore the starting room and initial values. A script error includes the actor ID, event name, and error text.
 

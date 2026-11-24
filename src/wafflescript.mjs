@@ -11,6 +11,7 @@ const constantLocations = new WeakMap();
 const detachedComment='#@detached ';
 function readDetachedBlocks(source){
   const detached=[];
+  if(!source.includes(detachedComment))return detached;
   for(const line of source.split('\n')){
     if(!line.startsWith(detachedComment))continue;
     try{
@@ -23,9 +24,14 @@ function readDetachedBlocks(source){
 function error(message,from,to){throw Object.assign(Error(message),{from,to});}
 
 export function parseScript(source){
-  const pattern = /[ \t\r]+|#[^\n]*|\n|"(?:\\.|[^"\\\n])*"|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[A-Za-z_]\w*|<=|>=|==|!=|./gy;
+  const pattern = /[ \t\r]*(?:#[^\n]*|(\n|"(?:\\.|[^"\\\n])*"|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[A-Za-z_]\w*|<=|>=|==|!=|.))?/y;
   const tokens=[];
-  for(const m of source.matchAll(pattern))if(!/^[ \t\r#]/.test(m[0]))tokens.push({s:m[0],at:m.index});
+  while(pattern.lastIndex<source.length){
+    const match=pattern.exec(source);
+    if(!match[0])break;
+    const token=match[1];
+    if(token!==undefined)tokens.push({s:token,at:pattern.lastIndex-token.length});
+  }
   let i=0;
   const peek=()=>tokens[i]?.s;
   const fail=msg=>error(msg,tokens[i]?.at??source.length,(tokens[i]?.at??source.length)+(peek()?.length??0));

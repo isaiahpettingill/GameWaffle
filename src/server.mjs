@@ -1,3 +1,4 @@
+import {decodeWireFrame} from './frame.mjs';
 import {prepareAssetUpload} from './asset-upload.mjs';
 import {compileShaderGraph} from './compile-shader-graph.mjs';
 import {propertyAliases,validateCollections} from './collections.mjs';
@@ -569,7 +570,9 @@ if (lan) {
       return current;
     });
     runtime.set_connected_players(slots.reduce((mask,state,slot)=>state?mask|(1<<slot):mask,1));
-    const data = JSON.parse(runtime.step(JSON.stringify(input)));
+    const mask = input.reduce((bits, state, slot)=>buttons.reduce((value, button, index)=>
+      state[button] ? value | (1 << (slot*8+index)) : value, bits),0) >>> 0;
+    const data = decodeWireFrame(runtime.step_buttons(mask));
     outgoingSounds.push(...data.sounds);
     outgoingEvents.push(...data.events);
     if (++count % 2) return;
@@ -577,7 +580,7 @@ if (lan) {
     data.events = outgoingEvents;
     outgoingSounds = [];
     outgoingEvents = [];
-    const snapshot = JSON.stringify({kind:'snapshot',data});
+    const snapshot = encodeCbor(data);
     for (const {client} of connections) wsSend(client,snapshot);
   },1000/60);
   setInterval(()=>{

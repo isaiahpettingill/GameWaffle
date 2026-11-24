@@ -1,3 +1,5 @@
+import {decodeFrame,decodeWireFrame} from '../src/frame.mjs';
+import {decodeSave} from '../src/save.mjs';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {compileProject} from '../src/compiler.mjs';
@@ -69,11 +71,11 @@ assert.equal(cartridge.runtimeAbi,14);
 initSync({module:await readFile('web-built/runtime/runtime_bg.wasm')});
 const runtime=Runtime.from_cartridge(pack(cartridge));
 const step=(buttons=0)=>{
-  const snapshot=JSON.parse(runtime.step_buttons(buttons));
+  const snapshot=decodeFrame(runtime.step_buttons(buttons));
   assert.deepEqual(snapshot.events.filter(event=>event.kind==='script_error'),[]);
   return snapshot;
 };
-const globals=()=>JSON.parse(runtime.save_game()).globals;
+const globals=()=>decodeSave(runtime.save_game()).globals;
 try{
   const initial=step();
   const original=initial.actors.find(actor=>actor.name==='Original');
@@ -97,8 +99,8 @@ try{
   assert.equal(globals().copied_on_start,'41');
   assert.equal(globals().parent,String(original.id));
   assert.equal(globals().clone_ticks,'1');
-  assert.equal(JSON.parse(runtime.inspect_actor(original.id)).locals.points,'99');
-  assert.equal(JSON.parse(runtime.inspect_actor(clone.id)).locals.points,'42');
+  assert.equal(decodeWireFrame(runtime.inspect_actor(original.id)).locals.points,'99');
+  assert.equal(decodeWireFrame(runtime.inspect_actor(clone.id)).locals.points,'42');
 
   runtime.load_game(runtime.save_game());
   assert.ok(step().actors.some(actor=>actor.id===clone.id));
@@ -117,14 +119,14 @@ try{
 
   assert.deepEqual(step(64).gameSettings.display.resolution,[320,180]);
   runtime.load_game(baseline);
-  assert.equal(JSON.parse(runtime.snapshot()).gameSettings?.display,undefined);
+  assert.equal(decodeFrame(runtime.snapshot()).gameSettings?.display,undefined);
 }finally{runtime.free();}
 const initClone=await compileProject('demo',{project:{...project,flags:{clone_on_init:true}},scripts});
 const initialized=Runtime.from_cartridge(pack(initClone));
 try{
-  assert.ok(JSON.parse(initialized.step_buttons(0)).actors.some(actor=>actor.cloneOf));
-  assert.equal(JSON.parse(initialized.save_game()).globals.clone_ticks,undefined);
+  assert.ok(decodeFrame(initialized.step_buttons(0)).actors.some(actor=>actor.cloneOf));
+  assert.equal(decodeSave(initialized.save_game()).globals.clone_ticks,undefined);
   initialized.step_buttons(0);
-  assert.equal(JSON.parse(initialized.save_game()).globals.clone_ticks,'1');
+  assert.equal(decodeSave(initialized.save_game()).globals.clone_ticks,'1');
 }finally{initialized.free();}
 console.log('Passed cloning, independent locals, clone startup and deletion, save restoration, and room cleanup');
