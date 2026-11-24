@@ -1,6 +1,6 @@
 // Bake the visible edge of a fixed neighbor. A 512-pixel camera can see 256
 // pixels past its center. Moving actors belong to the active simulation.
-import {PNG} from 'pngjs';
+import {decodePng} from './png.mjs';
 import {seamlessNeighbor} from './room-geometry.mjs';
 import {byteCache} from './compile-cache.mjs';
 const decodedAtlases=byteCache(48*1024*1024);
@@ -10,7 +10,7 @@ export function addSeams(rooms,atlases,sprites,packAtlas){
     if(!originals.has(id)){
       const png=atlases[id].png;
       let decoded=decodedAtlases.get(png);
-      if(!decoded){decoded=PNG.sync.read(png);decodedAtlases.put(png,decoded,decoded.data.length);}
+      if(!decoded){decoded=decodePng(png);decodedAtlases.put(png,decoded,decoded.data.length);}
       originals.set(id,decoded);
     }
     return originals.get(id);

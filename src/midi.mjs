@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {encode as encodeQoa} from 'qoa-format';
+import {runCodec} from './asset-codec.mjs';
 import {byteCache} from './compile-cache.mjs';
 
 const audioCache=byteCache(48*1024*1024);
@@ -22,6 +22,6 @@ export async function compileMidi(midi,font){
   const render=await renderer;
   const samples=render(midi,font,sampleRate);
   const count=samples.length/2;
-  const data=encodeQoa({sampleRate,channelData:[samples.subarray(0,count),samples.subarray(count)]});
+  const data=runCodec('encode_stereo_qoa',sampleRate,samples.subarray(0,count),samples.subarray(count));
   return audioCache.put(key,data,data.byteLength);
 }

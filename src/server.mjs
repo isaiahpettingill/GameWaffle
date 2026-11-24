@@ -6,7 +6,7 @@ import {checkUpdate,update,exportDesktop,nativeTarget} from './desktop.mjs';
 import {parseScript,formatScript,locations} from './wafflescript.mjs';
 import {compileScript} from './script.mjs';
 import {loadModules} from './modules.mjs';
-import {pack} from './pack.mjs';
+import {pack,preparePack} from './pack.mjs';
 import {fileHistory} from './file-history.mjs';
 import {recoveryStore} from './recovery.mjs';
 import {projectStore} from './project-store.mjs';
@@ -44,9 +44,11 @@ const wasm = await readFile('web-built/runtime/runtime_bg.wasm');
 initSync({ module: wasm });
 
 let cartridge = cartFile ? null : await compileProject(root,{store});
-let bytes = cartFile ? await readFile(resolve(cartFile)) : pack(cartridge);
-let editorBytes = cartridge ? pack(cartridge,{editor:true}) : null;
-let previewKey = cartridge ? thumbnailKey(cartridge) : '';
+let packProject = cartridge ? preparePack(cartridge) : null;
+let bytes = cartFile ? await readFile(resolve(cartFile)) : packProject(false);
+let editorBytes;
+let thumbnails = cartridge ? thumbnailData(cartridge) : null;
+let previewKey = thumbnails ? thumbnailKey(thumbnails) : '';
 let runtime;
 try{runtime=createRuntime(bytes,lan?0:1);}
 catch(error){console.error('Could not load the cartridge: '+String(error?.message??error));process.exit(1);}
@@ -106,21 +108,28 @@ function explicitBehavior(project) {
   return migrated;
 }
 
-function thumbnailKey(cart) {
-  return createHash('sha256').update(encodeCbor([cart.tilePreviews,cart.spritePreviews,cart.coverArt])).digest('hex');
+function thumbnailData({tilePreviews,spritePreviews,coverArt}) {
+  return encodeCbor({tilePreviews,spritePreviews,coverArt});
+}
+function thumbnailKey(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
 }
 
 async function recompile(project, scripts, save, sourceStore=store) {
   const next = await compileProject(root, { project, scripts, store:sourceStore });
-  const updated = pack(next);
-  const preview = pack(next,{editor:true});
+  const packNext = preparePack(next);
+  const updated = packNext(false);
+  const preview = thumbnailData(next);
+  const key = thumbnailKey(preview);
   const simulation = createRuntime(updated);
   try {
     await save();
     cartridge = next;
+    packProject = packNext;
     bytes = updated;
-    editorBytes = preview;
-    previewKey = thumbnailKey(next);
+    editorBytes = undefined;
+    thumbnails = preview;
+    previewKey = key;
     revision++;
     sourceError = '';
   } finally { simulation.free(); }
@@ -292,7 +301,8 @@ const server = createServer(async (req, res) => {
       }
       if (url.pathname === '/api/room-art' && req.method === 'GET')
         return send(res,200,await previewRoomArt(url.searchParams.get('path'),store.read,Number(url.searchParams.get('frame')??0)),'image/png');
-      if (url.pathname === '/api/preview' && req.method === 'GET') return send(res,200,editorBytes,'application/octet-stream');
+      if (url.pathname === '/api/thumbnails' && req.method === 'GET') return send(res,200,thumbnails,'application/octet-stream');
+      if (url.pathname === '/api/preview' && req.method === 'GET') return send(res,200,editorBytes??=packProject(true),'application/octet-stream');
       if (url.pathname === '/api/status' && req.method === 'GET') return send(res, 200, {revision, sourceError});
       if (url.pathname === '/api/rebuild' && req.method === 'POST') {
         await change(() => recompile(undefined, undefined, () => {}));

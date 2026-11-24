@@ -12,7 +12,7 @@ const id=await studioBuildId();
 let ready=false;
 try{
   await Promise.all(['site/projects.html','site/index.html','runtime/runtime_bg.wasm','runtime/runtime.js',
-    'png-codec/png-codec_bg.wasm','png-codec/png-codec.cjs',
+    'asset-codec/asset-codec_bg.wasm','asset-codec/asset-codec.cjs',
     'standalone/gamewaffle-player.html'].map(p=>access('web-built/'+p)));
   ready=(await readFile('web-built/studio-build-id','utf8'))===id;
 }catch{}

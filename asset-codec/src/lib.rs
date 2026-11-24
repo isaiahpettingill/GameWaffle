@@ -2,6 +2,10 @@ use png::{BitDepth, ColorType, DeflateCompression, Encoder, Filter};
 use std::collections::{HashMap, hash_map::Entry};
 use wasm_bindgen::prelude::*;
 
+mod aseprite;
+mod audio;
+mod image;
+
 #[wasm_bindgen]
 pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
     let bytes = width

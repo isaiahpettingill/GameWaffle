@@ -18,10 +18,9 @@ import { initialScript, buttons, effects, platformGravity, roomBorder } from './
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { PNG } from 'pngjs';
-import { encodePng } from './png.mjs';
+import { decodePng, encodePng } from './png.mjs';
 import { COVER_SIZE, coverCropRect } from './cover.mjs';
-import { encode as encodeQoa } from 'qoa-format';
+import {runCodec} from './asset-codec.mjs';
 import { readAseprite, tagFrames } from './ase.mjs';
 import { decodeCbor } from './cartridge.mjs';
 import {loadModules} from './modules.mjs';
@@ -139,34 +138,13 @@ function atlas(images) {
   return atlasCache.put(key,{entries,png},png.length+list.length*96);
 }
 
-function wavToQoa(b) {
-  if (b.toString('ascii', 0, 4) !== 'RIFF' || b.toString('ascii', 8, 12) !== 'WAVE') throw Error('Invalid WAV header');
-  let format, data;
-  for (let offset = 12; offset + 8 <= b.length;) {
-    const size = b.readUInt32LE(offset + 4);
-    if (offset + 8 + size > b.length) throw Error('Truncated WAV chunk');
-    const chunk = b.subarray(offset + 8, offset + 8 + size);
-    if (b.toString('ascii', offset, offset + 4) === 'fmt ') format = chunk;
-    if (b.toString('ascii', offset, offset + 4) === 'data') data = chunk;
-    offset += 8 + size + size % 2;
-  }
-  if (!format || !data || format.length < 16) throw Error('WAV is missing format or samples');
-  let type = format.readUInt16LE(0);
-  if (type === 0xfffe && format.length >= 40) type = format.readUInt16LE(24);
-  const channels = format.readUInt16LE(2), sampleRate = format.readUInt32LE(4), bits = format.readUInt16LE(14);
-  const bytes = bits / 8;
-  if (![1,2].includes(channels) || !sampleRate || sampleRate > 384000 || !(type === 1 && [8,16,24,32].includes(bits) || type === 3 && bits === 32))
-    throw Error('Use mono or stereo PCM or float32 WAV, or set compress to false');
-  const count = Math.floor(data.length / bytes / channels);
-  if (!count) throw Error('WAV contains no complete samples');
-  const channelData = Array.from({ length: channels }, () => new Float32Array(count));
-  for (let i = 0; i < count; i++) for (let c = 0; c < channels; c++) {
-    const offset = (i * channels + c) * bytes;
-    const value = type === 3 ? data.readFloatLE(offset) : bits === 8 ? (data[offset] - 128) / 128
-      : data.readIntLE(offset, bytes) / (2 ** (bits - 1));
-    channelData[c][i] = Number.isFinite(value) ? Math.max(-1, Math.min(1, value)) : 0;
-  }
-  return encodeQoa({ channelData, sampleRate });
+const wavCache=byteCache(48*1024*1024);
+function wavToQoa(bytes) {
+  const key=createHash('sha256').update(bytes).digest('hex');
+  const cached=wavCache.get(key);
+  if(cached)return cached;
+  const audio=runCodec('wav_to_qoa',bytes);
+  return wavCache.put(key,audio,audio.byteLength);
 }
 
 const artFile = /\.(ase|aseprite|png)$/i;
@@ -180,8 +158,7 @@ async function readArt(file,read) {
   if(cached)return cached;
   let art;
   if(png){
-    if(data.length<24||data.readUInt32BE(16)>4096||data.readUInt32BE(20)>4096)throw Error('PNG exceeds 4096 pixels per side');
-    const {width,height,data:rgba}=PNG.sync.read(data);
+    const {width,height,data:rgba}=decodePng(data);
     art={width,height,tags:[],frames:[{duration:100,rgba}]};
   }else art=readAseprite(data);
   return artCache.put(key,{...art,revision:key},art.frames.reduce((bytes,frame)=>bytes+frame.rgba.length,0));

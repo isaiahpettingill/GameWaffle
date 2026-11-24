@@ -13,7 +13,7 @@ if (process.argv.includes('--native')) {
   process.exit(0);
 }
 if (!process.argv.includes('--player-only')) {
-  execFileSync(process.execPath,['src/build-png.mjs'],options);
+  execFileSync(process.execPath,['src/build-assets.mjs'],options);
   if (process.argv.includes('--check-demo')) execFileSync(process.execPath,['src/compiler.mjs'],options);
 }
 execFileSync('cargo', ['build','--locked','--manifest-path','runtime/Cargo.toml','--release','--target','wasm32-unknown-unknown'], options);

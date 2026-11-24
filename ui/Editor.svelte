@@ -38,7 +38,7 @@
   import ExportDialog from './ExportDialog.svelte';
   import Physics from './Physics.svelte';
   import { tileSizes } from '../src/script.mjs';
-  import { unpack, decodeCbor, encodeCbor } from '../src/cartridge.mjs';
+  import { decodeCbor, encodeCbor } from '../src/cartridge.mjs';
   import {growSeamNeighbors} from '../src/room-geometry.mjs';
   import RoomMap from './RoomMap.svelte';
   import { instanceNames, newInstanceName, spriteDragType } from '../src/instances.mjs';
@@ -270,10 +270,10 @@
   let previewVersion=0;
   async function updatePreviews(key) {
     const version=++previewVersion;
-    const response=await fetch('./api/preview',{cache:'no-store'});
+    const response=await fetch('./api/thumbnails',{cache:'no-store'});
     if(!response.ok)throw Error('Could not open project preview');
-    const next=unpack(new Uint8Array(await response.arrayBuffer()));
-    let tiles=next.tilePreviews??Object.fromEntries(Object.entries(next.thumbnails??{}).map(([id,bytes])=>[id,{variants:[bytes]}]));
+    const next=decodeCbor(new Uint8Array(await response.arrayBuffer()));
+    let tiles=next.tilePreviews??{};
     if(project && JSON.stringify(project.tiles??{})!==JSON.stringify(JSON.parse(savedProject).tiles??{})){
       const r=await fetch('./api/tile-previews',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tiles:project.tiles??{},size:project.tileSize??24})});
       if(!r.ok)throw Error((await r.json()).error);

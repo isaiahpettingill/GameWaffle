@@ -104,7 +104,7 @@
     });
     resize.observe(stage);
     (async()=>{
-      const response=await fetch('./api/preview',{signal:abort.signal});
+      const response=await fetch('./game.waffle',{signal:abort.signal});
       if(!response.ok)throw Error('Cannot load the room preview');
       const bytes=new Uint8Array(await response.arrayBuffer());
       const current=unpack(bytes),start=Object.hasOwn(current.rooms,room)?room:current.start;
