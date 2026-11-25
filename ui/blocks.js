@@ -5,37 +5,48 @@ import './block-picker.js';
 import {installBlockSelection} from './block-selection.js';
 import {wheelPixels} from './pixel-display.js';
 import {branchBody,branchCondition} from './conditional-block.js';
-import { Events, Blocks, buttons, inputEvent, receivedEvent, timerEvent, controllerEvent, messageInputs, entityQueries, reporters, roomCommands, gradientCommands, gameCommands, tileCommands, drawingCommands, collectionCommands, commandScopeError, valueInput } from '../src/schema.mjs';
+import { Events, Blocks, buttons, inputEvent, receivedEvent, timerEvent, controllerEvent, messageInputs, entityQueries, reporters, gradientCommands, tileCommands, drawingCommands, collectionCommands, commandScopeError, valueInput } from '../src/schema.mjs';
 import {roomShaders} from '../src/room-shaders.mjs';
 import {initScope,initialPhysicsFields,physicsModes} from '../src/init-properties.mjs';
 import { conditionalBranches, constantType, parseParameters, variableName } from '../src/script.mjs';
 import {callArguments, callBlock, definitionBlock, enclosingRoutine, registerRoutineBlocks, routineParameters, routineSignature} from './routine-blocks.js';
-import { argumentInput, logicDefinitions, logicStatements, collectionReporterType, collectionReporters, reporterBlock, reporterBlockType, readValue, slot, queryPicker, referenceSlot, roomReadings } from './logic-blocks.js';
+import { argumentInput, logicDefinitions, logicStatements, collectionReporterType, collectionReporters, entityQueryStyle, reporterBlock, reporterBlockType, readValue, slot, queryPicker, referenceSlot, roomReadings } from './logic-blocks.js';
 
 Blockly.setLocale(English);
 
 const groups = {
   events: {name:'Events',color:'#925321',commands:['emit_event','emit_event_with_entity']},
   control: {name:'Control',color:'#925321'},
-  sensing: {name:'Input & sensing',color:'#22665b'},
-  operators: {name:'Operators',color:'#4d6729'},
+  input: {name:'Input',color:'#22665b',commands:['set_first_controller','assign_entity_player']},
+  operators: {name:'Math & logic',color:'#4d6729'},
   variables: {name:'Variables',color:'#8a472f'},
-  motion: {name:'Motion',color:'#315d99',commands:['velocity','set_position','move_by','apply_gravity','force','impulse','jump_force','walk','jump','chase']},
-  looks: {name:'Looks & sound',color:'#6a499c',commands:['animate','animate_once','flip_sprite_x','flip_sprite_y','set_sprite_rotation','rotate_sprite','set_sprite_shadow','set_health_bar','sound','burst','burst_at','emit','emit_for','set_emitter','stop_fx','say','ask','counter','bar','show_menu','show_inventory']},
-  world: {name:'World & camera',color:'#345d79',commands:['spawn','remove_self','room','checkpoint','retry_checkpoint','follow_player','follow','group_camera','camera','release_camera',...roomCommands.filter(op=>!gradientCommands.includes(op))]},
-  gradient: {name:'Background gradient',color:'#665283',commands:gradientCommands},
-  shaders: {name:'Shaders',color:'#805584'},
-  game: {name:'Game settings',color:'#345d79',commands:gameCommands},
-  tile: {name:'Tile',color:'#784f89',commands:tileCommands},
-  drawing: {name:'Drawing',color:'#594aad',commands:drawingCommands},
-  collections: {name:'Collections',color:'#725b26',commands:collectionCommands},
-  items: {name:'Legacy',color:'#725b26',commands:['use_selected_item','give','take','give_player','take_player','count_player','use_player_item','item_icon','fire']},
-  entities: {name:'Entities',color:'#337479',commands:['clone_entity','delete_clone','move_entity','entity_velocity','force_entity','push_entity','set_respawn','respawn_when','damage_entity','heal_entity','break_entity','remove_entity','set_entity_visible','assign_entity_player','set_entity_persistence','set_entity_always_active','set_entity_layer','set_entity_team','set_entity_max_health','set_entity_friction','add_component','remove_component','set_entity_integer','set_entity_real','set_entity_boolean','set_entity_string']},
-  combat: {name:'Combat',color:'#933c56',commands:['damage','fire_projectile']},
-  text: {name:'Text',color:'#5a536d',commands:['draw_text','set_hud_font','hide']},
   routines: {name:'Routines',color:'#773e78'},
+  motion: {name:'Motion',color:'#315d99',commands:['velocity','entity_velocity','set_position','move_by','move_entity',
+    'force','force_entity','impulse','push_entity','set_entity_friction','apply_gravity','jump_force','jump','walk','chase']},
+  entities: {name:'Entities',color:'#337479',commands:['spawn','clone_entity','delete_clone','remove_self','remove_entity','set_entity_visible',
+    'set_respawn','respawn_when','set_entity_persistence','set_entity_always_active','add_component','remove_component',
+    'set_entity_integer','set_entity_real','set_entity_boolean','set_entity_string']},
+  combat: {name:'Combat',color:'#933c56',commands:['damage','damage_entity','heal_entity','break_entity','fire_projectile',
+    'set_entity_team','set_entity_max_health','set_health_bar']},
+  tile: {name:'Tiles',color:'#784f89',commands:tileCommands},
+  world: {name:'Room',color:'#345d79',commands:['room','set_room_border','set_room_gravity','checkpoint','retry_checkpoint']},
+  camera: {name:'Camera',color:'#475d8a',commands:['camera_follow_entity','follow_player','group_camera','follow','camera',
+    'camera_zoom','set_camera_bottom_inset','reset_room_camera','set_default_camera','set_split_screen']},
+  background: {name:'Background',color:'#665283',commands:['set_room_background','set_room_background_image',...gradientCommands]},
+  looks: {name:'Appearance',color:'#6a499c',commands:['animate','animate_once','flip_sprite_x','flip_sprite_y','set_sprite_rotation',
+    'rotate_sprite','set_sprite_shadow','set_entity_layer','set_room_depth_sort','burst','burst_at','emit','set_emitter','emit_for','stop_fx']},
+  shaders: {name:'Shaders',color:'#805584',commands:['set_room_shader','reset_room_shader']},
+  sound: {name:'Sound',color:'#885268',commands:['sound','set_room_music','set_room_ambience']},
+  display: {name:'Display',color:'#345d79',commands:['set_display_resolution','set_adaptive_display']},
+  drawing: {name:'Drawing',color:'#594aad',commands:drawingCommands},
+  text: {name:'Text & HUD',color:'#5a536d',commands:['draw_text','set_hud_font','counter','bar','hide','say','ask','show_menu','set_minimap']},
+  collections: {name:'Collections',color:'#725b26',commands:collectionCommands},
+  items: {name:'Legacy items',color:'#725b26',commands:['show_inventory','use_selected_item','give','take','give_player','take_player',
+    'count_player','use_player_item','item_icon']},
 };
-const commandStyles = Object.fromEntries(Object.entries(groups).flatMap(([style,group])=>(group.commands??[]).map(id=>[id,style])));
+// Older commands still need styling when existing code is opened or pasted.
+const commandStyles = {release_camera:'camera',fire:'combat',
+  ...Object.fromEntries(Object.entries(groups).flatMap(([style,group])=>(group.commands??[]).map(id=>[id,style])))};
 const eventLabels = {
   start:'room starts', game_startup:'game starts', use_item:'an item is used', restored:'a save loads', tick:'every tick',
   a:'A is pressed', b:'B is pressed', x:'X is pressed', menu:'Start is pressed',
@@ -96,7 +107,7 @@ Blockly.defineBlocksWithJsonArray([
   eventDefinition(worldHat,worldEvents),
   eventDefinition(roomHat,roomEvents),
   eventDefinition(tileHat,tileEvents),
-  {type:controllerHat,message0:'When player %1 %2',nextStatement:'waffle',style:'events',args0:[
+  {type:controllerHat,message0:'When player %1 %2',nextStatement:'waffle',style:'input',args0:[
     {type:'field_dropdown',name:'player',options:['2','1','3','4'].map(slot=>[slot,slot])},
     {type:'field_dropdown',name:'edge',options:[['connects','controller_connected'],['disconnects','controller_disconnected']]},
   ]},
@@ -134,14 +145,14 @@ const collectionScalars=['integer','real','boolean','string'];
 const declarationName=text=>({type:'field_input',name:'name',text});
 const collectionStack=(name,check)=>({type:'input_statement',name,check});
 Blockly.common.defineBlocksWithJsonArray([
-  {type:'waffle_bind_input',message0:'Input action %1 %2',style:'events',
+  {type:'waffle_bind_input',message0:'Input action %1 %2',style:'input',
     args0:[declarationName('jump'),collectionStack('entries','waffle_input_binding')]},
-  {type:'waffle_input_binding',message0:'Bind to %1',style:'events',
+  {type:'waffle_input_binding',message0:'Bind to %1',style:'input',
     args0:[{type:'field_dropdown',name:'button',options:buttons.map(id=>[id,id])}],
     previousStatement:'waffle_input_binding',nextStatement:'waffle_input_binding'},
-  {type:'waffle_define_menu',message0:'Menu %1 · title %2 %3',style:'events',
+  {type:'waffle_define_menu',message0:'Menu %1 · title %2 %3',style:'text',
     args0:[declarationName('pause'),{type:'field_input',name:'title',text:'Pause'},collectionStack('entries','waffle_menu_option')]},
-  {type:'waffle_menu_option',message0:'Menu option %1',style:'events',
+  {type:'waffle_menu_option',message0:'Menu option %1',style:'text',
     args0:[{type:'field_input',name:'label',text:'Resume'}],previousStatement:'waffle_menu_option',nextStatement:'waffle_menu_option'},
   {type:'waffle_object_decl',message0:'Object type %1 %2',style:'collections',
     args0:[declarationName('item'),collectionStack('properties','waffle_property_definition')]},
@@ -195,7 +206,7 @@ registerRoutineBlocks(registry);
 registerShaderBlocks(registry,menu);
 Blockly.Blocks[inputHat]={init(){
   const data=registry(this);
-  this.jsonInit({type:inputHat,message0:'When %1 is %2',args0:[menu('action',()=>data.actions,'Select action',buttonLabels),{type:'field_dropdown',name:'edge',options:[['pressed','pressed'],['released','released']]}],nextStatement:'waffle',style:'events'});
+  this.jsonInit({type:inputHat,message0:'When %1 is %2',args0:[menu('action',()=>data.actions,'Select action',buttonLabels),{type:'field_dropdown',name:'edge',options:[['pressed','pressed'],['released','released']]}],nextStatement:'waffle',style:'input'});
 }};
 Blockly.Blocks[receivedHat]={init(){
   const data=registry(this);
@@ -379,7 +390,7 @@ const playerShadow=n=>({type:'waffle_player',fields:{value:String(n)}});
 const theme = Blockly.Theme.defineTheme('gamewaffle',{
   name:'gamewaffle',base:Blockly.Themes.Classic,
   blockStyles:Object.fromEntries(Object.entries(groups).map(([style,{color}])=>[style,{
-    colourPrimary:color,...(style==='events'?{hat:'cap'}:{}),
+    colourPrimary:color,...(['events','input'].includes(style)?{hat:'cap'}:{}),
   }])),
   componentStyles:{
     workspaceBackgroundColour:'#1e1e2e',toolboxBackgroundColour:'#181825',toolboxForegroundColour:'#e0e3f0',
@@ -398,6 +409,16 @@ const reporterChoices=(group,namedEntity=false)=>Object.entries(reporters).filte
     kind:'block',...reporterBlock(name,params.map(([kind,value])=>kind==='tile'?undefined:value),
       (type,value)=>type==='entity'&&namedEntity?namedEntitySlot():slot(value)),
   }));
+const entityChoices=(style,hasTileContext)=>Object.entries(entityQueries)
+  .filter(([id])=>entityQueryStyle(id)===style&&(id!=='on_tile_top'||hasTileContext))
+  .map(([id,[,,params]])=>({
+    ...block('entity_'+id),
+    inputs:Object.fromEntries(params.map(([type,value],index)=>{
+      const picker=queryPicker(id,index);
+      return ['arg'+index,picker?referenceSlot(picker):id==='controller_connected'?{shadow:playerShadow(value)}
+        :type==='integer'?namedEntitySlot():slot(value)];
+    })),
+  }));
 const colorSlot=value=>({shadow:{type:'waffle_color',fields:{value}}});
 const colorInput=(id,key)=>key==='color'||id==='set_health_bar'&&['fill','track'].includes(key);
 const commands = (style,scope) => (groups[style].commands??[])
@@ -413,55 +434,49 @@ const commands = (style,scope) => (groups[style].commands??[])
 const category = (style,contents) => ({kind:'category',name:groups[style].name,colour:groups[style].color,contents});
 const toolbox = (isRoom,isGame=false,isTile=false,isModule=false) => {
   const scope=isModule?null:{roomScript:isRoom,gameScript:isGame,tileScript:isTile};
-  const picks=style=>commands(style,scope);
   const init=hat=>({...block(hat),next:{block:{type:'waffle_init_properties'}}});
-  return [
-  ...(!isModule?[category('events',[...(isGame?[init('game_startup'),block('controller_event'),block('bind_input'),block('input_binding'),block('define_menu'),block('menu_option')]:[]),
-    block(isTile?'tile_event':isRoom?'room_event':'world_event'),init('init'),block('init_properties'),
-    ...(!isRoom&&!isGame?[block('init_body',{mode:'static'}),block('init_property',{name:'density'},{value:1})]:[]),
-    block('tick'),block('timer'),block('received_event'),...picks('events'),
-    ...(!isRoom&&!isTile?[block('clone_start')]:[]),
-    block('input_event',{action:'a',edge:'pressed'})])]:[category('events',picks('events'))]),
-  category('control',[{...block('if',null,{condition:false}),extraState:{otherwise:false}},block('if',null,{condition:false}),
-    block('repeat',null,{times:5}),block('while',null,{condition:false}),block('wait',null,{ticks:1})]),
-  category('sensing',[block('action',{action:'a'}),block('pressed',{pressed:'a'}),block('released',{released:'a'}),
-    block('button',{button:'a'}),block('event_sender'),block('actor',{actor:'event_entity'}),...(isRoom?[block('room_reading')]:[
-      block('grounded'),block('actor_condition'),block('actor_condition',{actor:'is_player'}),
-      block('actor',{actor:'x'}),block('actor_real',{actor:'x_real'}),
-    ]),...reporterChoices('sensing',isRoom||isTile)]),
-  category('operators',[block('whole'),block('real'),block('bool'),
-    ...['add','subtract','multiply','divide','remainder'].map(operation=>block('arithmetic',{operation},{left:4,right:2})),
-    block('compare',{operation:'equal'},{left:0,right:0}),
-    block('boolean_op',{operation:'and'},{left:false,right:false}),block('not',null,{left:false}),
-    block('math_unary',{operation:'sqrt'},{left:{real:9}}),block('math_unary',{operation:'sin'},{left:{real:45}}),
-    block('math_binary',{operation:'pow'},{left:{real:2},right:{real:2}}),
-    block('conversion',{operation:'to_real'},{left:0}),block('conversion',{operation:'round'},{left:{real:0.5}}),
-    ...reporterChoices('operators'),block('none')]),
-  {...category('variables',[]),custom:'WAFFLE_VARIABLES'},
-  ...(isGame||isModule?[category('game',picks('game'))]:[]),
-  ...(isRoom||isModule?[{...category('shaders',[block('apply_shaders'),block('shader_pass')]),name:isModule?'Shaders':isGame?'Display shaders':'Room shaders'}]:[]),
-  ...['tile','motion','looks','world','gradient','combat'].map(style=>category(style,picks(style))).filter(entry=>entry.contents.length),
-  category('collections',[...(isGame?[block('object_decl'),block('object_property',null,{default:null}),block('inventory_decl'),
-    block('inventory_type'),block('array_decl'),block('properties_decl')]:[]),...picks('collections'),...Object.entries(collectionReporters).map(([name,[,keys]])=>({
-    kind:'block',type:collectionReporterType(name),inputs:keys.includes('index')?{index:slot(1)}:{},
-  }))]),
-  category('entities',[
-    ...(!isTile?[block('last_clone'),...(!isRoom?[block('actor_condition',{actor:'is_clone'})]:[])]:[]),
-    ...(!isRoom?[block('self')]:[]),
-    ...Object.entries(entityQueries).filter(([id])=>id!=='on_tile_top'||isTile||isModule).map(([id,[,,params]])=>({
-      ...block('entity_'+id),
-      inputs:Object.fromEntries(params.map(([,value],index)=>{
-        const picker=queryPicker(id,index);
-        return ['arg'+index,picker?referenceSlot(picker):id==='controller_connected'?{shadow:playerShadow(value)}:params[index][0]==='integer'?namedEntitySlot():slot(value)];
-      })),
-    })),
-    ...picks('entities'),
-  ]),
-  category('drawing',picks('drawing')),
-  category('text',[block('localized',{key:''}),block('string'),...reporterChoices('text'),...picks('text')]),
-  category('items',[block('item'),block('item_key'),block('actor',{actor:'used_item'}),...picks('items')]),
-  {...category('routines',[]),custom:'WAFFLE_ROUTINES'},
-  ];
+  const choices={
+    events:[...(isModule?[]:[...(isGame?[init('game_startup'),block('declare',{kind:'events',name:'started'},{value:'Started'})]:[]),
+      init('init'),block('init_properties'),
+      ...(!isRoom&&!isGame?[block('init_body',{mode:'static'}),block('init_property',{name:'density'},{value:1})]:[]),
+      block('tick'),block('timer'),block('received_event'),
+      block(isTile?'tile_event':isRoom?'room_event':'world_event',{event:isTile?'begin_contact':'start'}),
+      ...(!isRoom&&!isTile?[block('clone_start')]:[])]),block('event_sender'),block('event_entity')],
+    control:[{...block('if',null,{condition:false}),extraState:{otherwise:false}},
+      block('repeat',null,{times:5}),block('while',null,{condition:false}),block('wait',null,{ticks:1})],
+    input:[...(isGame?[block('bind_input'),block('input_binding'),block('controller_event')]:[]),
+      ...(!isModule?[block('input_event',{action:'a',edge:'pressed'})]:[]),
+      block('action',{action:'a'}),block('pressed',{pressed:'a'}),block('released',{released:'a'}),block('button',{button:'a'})],
+    operators:[block('whole'),block('real'),block('bool'),block('arithmetic',{operation:'add'},{left:4,right:2}),
+      block('compare',{operation:'equal'},{left:0,right:0}),
+      block('boolean_op',{operation:'and'},{left:false,right:false}),block('not',null,{left:false}),
+      block('math_unary',{operation:'sin'},{left:{real:45}}),block('math_binary',{operation:'pow'},{left:{real:2},right:{real:2}}),
+      block('conversion',{operation:'to_real'},{left:0}),block('none')],
+    motion:isRoom?[]:[block('grounded')],
+    entities:[...(!isRoom?[block('self'),block('actor',{actor:'x'}),block('actor_real',{actor:'x_real'}),
+      block('actor_condition',{actor:'moving'})]:[]),...(!isTile?[block('last_clone')]:[])],
+    shaders:isRoom||isModule?[block('apply_shaders'),block('shader_pass')]:[],
+    text:[...(isGame?[block('define_menu'),block('menu_option')]:[]),
+      ...(isRoom?[block('room_reading',{actor:'answer'})]:[]),block('localized',{key:''}),block('string')],
+    collections:[...(isGame?[block('object_decl'),block('object_property',null,{default:null}),block('inventory_decl'),
+      block('inventory_type'),block('array_decl'),block('properties_decl')]:[]),
+      ...Object.entries(collectionReporters).map(([name,[,keys]])=>({
+        kind:'block',type:collectionReporterType(name),inputs:keys.includes('index')?{index:slot(1)}:{},
+      }))],
+    items:[block('item'),block('item_key'),block('actor',{actor:'used_item'})],
+  };
+  const custom={variables:'WAFFLE_VARIABLES',routines:'WAFFLE_ROUTINES'};
+  const startersFirst=['events','input','shaders'];
+  return Object.keys(groups).flatMap(style=>{
+    if(custom[style])return [{...category(style,[]),custom:custom[style]}];
+    const blocks=choices[style]??[], statements=commands(style,scope);
+    const contents=[...(startersFirst.includes(style)?[...blocks,...statements]:[...statements,...blocks]),...entityChoices(style,isTile||isModule),
+      ...reporterChoices(style,isRoom||isTile)];
+    if(!contents.length)return [];
+    const entry=category(style,contents);
+    if(style==='shaders'&&!isModule)entry.name=isGame?'Display shaders':'Room shaders';
+    return [entry];
+  });
 };
 
 export const blockCategories=(isRoom,isGame,isTile,isModule)=>toolbox(isRoom,isGame,isTile,isModule).map(category=>category.name);
@@ -578,8 +593,8 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
   });
   workspace.registerButtonCallback('WAFFLE_MANAGE_CONSTANTS',onEditConstants);
   workspace.registerToolboxCategoryCallback('WAFFLE_VARIABLES',()=>[
-    ...(data.gameScript?[...['globals','flags','events','constants'].map((kind,index)=>block('declare',{kind,name:['score','ready','started','lives'][index]},
-      {value:[0,false,'Started',3][index]}))]:[]),
+    ...(data.gameScript?['globals','flags','constants'].map((kind,index)=>block('declare',{kind,name:['score','ready','lives'][index]},
+      {value:[0,false,3][index]})):[]),
     ...(data.gameScript?[]:[{kind:'button',text:'Manage constants…',callbackKey:'WAFFLE_MANAGE_CONSTANTS'}]),
     ...Object.keys({...currentReferences.gameConstants,...constants}).map(name=>block('constant',{name})),
     block('set',null,{value:0}),block('change',null,{value:1}),block('get'),

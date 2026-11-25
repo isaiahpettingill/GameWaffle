@@ -107,7 +107,7 @@ For GLSL, run `glslangValidator -V color-grade.frag -o color-grade.spv`. Studio 
 
 ## Background gradients
 
-Use **Background gradient** blocks in a Room script to draw a gradient behind room art. Linear gradients have a start and end point and up to eight indexed color stops. Radial gradients blend up to eight colored foci over the room's background color. Positions run from 0 to 1 across the viewport, and radial radii are measured in units of its shorter side. Move or recolor a stop or focus by setting the same slot again.
+Use **Background** in a Room script to set the background color or image and draw gradients behind room art. Linear gradients have a start and end point and up to eight indexed color stops. Radial gradients blend up to eight colored foci over the room's background color. Positions run from 0 to 1 across the viewport, and radial radii are measured in units of its shorter side. Move or recolor a stop or focus by setting the same slot again.
 
 ```wafflescript
 on init
@@ -141,7 +141,7 @@ Use [demo/project.json](demo/project.json) as an example. Put art and audio file
 
 ## Write game logic
 
-Open **Code**, select **Blocks**, then select **Logic**. The **Set** and **Get** blocks use a scope and a name. Select the same scope and name each time you use a value.
+Open **Code**, select **Blocks**, then select **Variables**. The **Set** and **Get** blocks use a scope and a name. Select the same scope and name each time you use a value.
 
 | Scope | Duration | Initial value |
 |---|---|---|
@@ -157,7 +157,7 @@ WaffleScript has integers, reals, booleans, and strings. Use an explicit convers
 
 ## Viewport, tiles, math, and text
 
-Use **Input & sensing** to test whether an entity overlaps the viewport, reaches a viewport edge, reaches a room edge, or touches a tile. The viewport reporters give the visible rectangle in room pixels after camera zoom and clamping. Tile checks can match an asset from the project or a behavior such as solid, one-way, ladder, fluid, sensor, breakable, or decorative. **This entity** means the entity running the script. Select **the top face** to check for an entity standing on the tile.
+Use **Camera** for viewport bounds and overlap checks. The viewport reporters give the visible rectangle in room pixels after camera zoom and clamping. Use **Room** for room-edge checks and **Tiles** for tile contact. Tile checks can match an asset from the project or a behavior such as solid, one-way, ladder, fluid, sensor, breakable, or decorative. **This entity** means the entity running the script. Select **the top face** to check for an entity standing on the tile.
 
 ```wafflescript
 on tick
@@ -170,7 +170,7 @@ on tick
 end
 ```
 
-**Operators** includes arithmetic, rounding, trig, clamp, interpolation, and seeded random numbers. `math.mod(-5, 3)` returns `1` and `-5 % 3` returns `-2`. **Text** includes joining, length, letter, slice, search, replacement, case conversion, trimming, and numeric formatting. Letter positions and inclusive slice bounds start at 1 and count Unicode code points. A missing letter returns an empty string and a missing substring position returns 0.
+**Math & logic** includes arithmetic, rounding, trig, clamp, interpolation, and seeded random numbers. `math.mod(-5, 3)` returns `1` and `-5 % 3` returns `-2`. **Text & HUD** includes joining, length, letter, slice, search, replacement, case conversion, trimming, and numeric formatting. Letter positions and inclusive slice bounds start at 1 and count Unicode code points. A missing letter returns an empty string and a missing substring position returns 0.
 
 ## Text resources
 
@@ -334,7 +334,7 @@ Use a camera block to follow an instance, show a position, or follow a selected 
 
 ## Items, dialogue, and saves
 
-Use **Collections** to declare an inventory, add objects, and read or update their fields. Use **Looks & sound** to show a counter, message, or game menu. Press A to advance dialogue.
+Use **Collections** to declare an inventory, add objects, and read or update their fields. Use **Text & HUD** to show a counter, message, or game menu. Press A to advance dialogue.
 
 Import a custom font in **Assets → Bitfonts**. Use **Set HUD font** or pick a font on a text block to change it from a script.
 
@@ -364,7 +364,7 @@ GameWaffle uses the [0BSD license](LICENSE).
 
 Select an entity in **Entities → Particles**. Select an effect and set the rate in particles per second. Each instance has its own emitter. The presets include sparks, dust, smoke, flame, bubbles, rain, and snow.
 
-Use **Looks & sound** in Blockly for bursts, continuous effects, and stop commands. Emitted particles finish their movement after the source disappears. The runtime limits a room to 2,048 live particles and 256 new particles per tick. Particles use a separate random sequence from room connections.
+Use **Appearance** in Blockly for bursts, continuous effects, and stop commands. Emitted particles finish their movement after the source disappears. The runtime limits a room to 2,048 live particles and 256 new particles per tick. Particles use a separate random sequence from room connections.
 
 Use an active flag on a sprite, tile, instance, or map layer to control when it exists. A flag change also updates collision and pathfinding for conditional solid tiles. Combine conditions on a definition and its placement to require both.
 
@@ -446,7 +446,7 @@ This preset uses the contrast-sensitive edge reconstruction used by Lemuroid's H
 
 To make an entity playable, select it in **Entities**. Select a player and **Place player in room**. Click the map to place the instance. To assign an existing instance, select it and set **Controlled by**. An actor without a script starts with built-in movement. Clear **Built-in movement** to control movement from its script.
 
-In the **Game script**, use an **Input action** block with **Bind to** blocks, or write `input jump = a, x`. Under **On tick**, read the action’s held, pressed, or released state from **Input & sensing**. Define menus in the same script with **Menu** and **Menu option**, or write `menu pause = "Pause", "Resume", "Quit"`.
+In the **Game script**, use an **Input action** block with **Bind to** blocks from **Input**, or write `input jump = a, x`. Under **On tick**, read the action’s held, pressed, or released state from **Input**. Define menus in the same script with **Menu** and **Menu option** from **Text & HUD**, or write `menu pause = "Pause", "Resume", "Quit"`.
 
 ## Entity clones
 

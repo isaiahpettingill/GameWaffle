@@ -20,6 +20,7 @@ const conversions = ['to_real','to_integer','floor','ceil','round','trunc'];
 const readingLabels = {
   id: 'ID', x: 'X position', y: 'Y position', vx: 'X velocity', vy: 'Y velocity',
   grounded: 'touching ground', other: 'other entity', other_player: 'other player',
+  event_entity: 'entity from event',
   damage: 'damage received', last_spawn: 'last spawned entity', last_clone:'last clone', clone_source:'clone source', is_clone:'a clone', answer: 'dialogue answer',
   menu_choice:'menu choice', menu_item:'selected inventory item', menu_id:'last menu ID', used_item:'item just used', item_count: 'item count result', moving: 'moving', is_player: 'player-controlled',
   x_real:'X position', y_real:'Y position', vx_real:'X velocity', vy_real:'Y velocity', health_real:'health',
@@ -58,9 +59,15 @@ const entityLabels={
   boolean:'Boolean %2 of\n%1',
   string:'String %2 of\n%1',
 };
+export function entityQueryStyle(id) {
+  if(id==='controller_connected')return 'input';
+  if(id==='on_tile_top')return 'tile';
+  if(id==='health')return 'combat';
+  return 'entities';
+}
 const definitions = {
   ...Object.fromEntries(Object.entries(entityQueries).map(([id,[label, result, params]])=>[
-    'entity_'+id, ['entities',entityLabels[id]??label,params.map((_,index)=>input('arg'+index)),result==='boolean'?'condition':'value'],
+    'entity_'+id, [entityQueryStyle(id),entityLabels[id]??label,params.map((_,index)=>input('arg'+index)),result==='boolean'?'condition':'value'],
   ])),
   instance_ref:['entities','%1',[text('value','')],'value'],
   self:['entities','This entity',[],'value','The entity running this script.'],
@@ -69,14 +76,15 @@ const definitions = {
   function_call:['routines','%1 %2 %3',[text('name','score'),input('a'),input('b')],'value'],
   param:['routines','Parameter %1',[text('name','amount')],'value'],
   call:['routines','Call %1 %2 %3',[text('name','apply'),input('a'),input('b')]],
-  player:['items','%1',[options('value',['1','2','3','4'])],'value'],
+  player:['input','%1',[options('value',['1','2','3','4'])],'value'],
   none:['operators','default',[],'optional','Use the command’s default value.'],
-  event_sender:['sensing','Event sender',[],'value','The entity that emitted the event.'],
-  grounded:['sensing','Touching ground?',[],'condition','True when this entity is standing on a surface.'],
+  event_sender:['events','Event sender',[],'value','The entity that emitted the event.'],
+  event_entity:['events','Entity from event',[],'value','The entity passed along with the event.'],
+  grounded:['motion','Touching ground?',[],'condition','True when this entity is standing on a surface.'],
   last_clone:['entities','Last clone',[],'value'],
-  pressed:['sensing','%1 just pressed?',[text('pressed','x')],'condition','True on the first tick of a press.'],
-  released:['sensing','%1 just released?',[text('released','x')],'condition','True on the first tick after a release.'],
-  action:['sensing','%1 is down?', [text('action','jump')],'condition','True every tick while the input action is held.'],
+  pressed:['input','%1 just pressed?',[text('pressed','x')],'condition','True on the first tick of a press.'],
+  released:['input','%1 just released?',[text('released','x')],'condition','True on the first tick after a release.'],
+  action:['input','%1 is down?', [text('action','jump')],'condition','True every tick while the input action is held.'],
   item_key:['items','Item reference %1',[text('item','coin')],'value','Compare this to the item just used.'],
   item:['items','Count of %1',[text('item','coin')],'value'],
   integer:['operators','%1',[number('value',0)],'value'],
@@ -89,11 +97,11 @@ const definitions = {
   bool:['operators','%1',[options('value',['true','false'])],'condition'],
   get:['variables','%1 %2',[options('scope',scopes,scopeLabels),text('name','score')],'value'],
   constant:['variables','Constant %1',[text('name','')],'value'],
-  actor:['sensing','My %1',[options('actor',[...readings,...stringReadings],readingLabels)],'value'],
-  room_reading:['sensing','Room %1',[options('actor',roomReadings,readingLabels)],'value'],
-  actor_real:['sensing','My %1 (real)',[options('actor',realReadings,readingLabels)],'value'],
-  actor_condition:['sensing','Am I %1?',[options('actor',conditions.slice(1),readingLabels)],'condition'],
-  button:['sensing','Button %1 is down?',[options('button',buttons,buttonLabels)],'condition','Read a controller button directly.'],
+  actor:['entities','My %1',[options('actor',[...readings,...stringReadings],readingLabels)],'value'],
+  room_reading:['text','Room %1',[options('actor',roomReadings,readingLabels)],'value'],
+  actor_real:['entities','My %1 (real)',[options('actor',realReadings,readingLabels)],'value'],
+  actor_condition:['entities','Am I %1?',[options('actor',conditions.slice(1),readingLabels)],'condition'],
+  button:['input','Button %1 is down?',[options('button',buttons,buttonLabels)],'condition','Read a controller button directly.'],
   calc:['operators','%1 %2 %3',binary([...arithmetic,...comparisons,...booleanOperators]),'value'],
   arithmetic:['operators','%1 %2 %3',binary(arithmetic),'value'],
   compare:['operators','%1 %2 %3',binary(comparisons),'condition'],
@@ -174,6 +182,7 @@ export function readValue(block) {
     case 'grounded': return {actor:'grounded'};
     case 'last_clone': return {actor:'last_clone'};
     case 'event_sender': return {actor:'event_sender'};
+    case 'event_entity': return {actor:'event_entity'};
     case 'pressed': return {pressed:field('pressed')};
     case 'self': return {actor:'id'};
     case 'released': return {released:field('released')};
@@ -220,6 +229,7 @@ export function writeValue(value,imports) {
   if (value.text!==undefined) return {type:prefix+'localized',fields:{key:value.text}};
   if(value.actor==='id')return {type:prefix+'self'};
   if(value.actor==='event_sender')return {type:prefix+'event_sender'};
+  if(value.actor==='event_entity')return {type:prefix+'event_entity'};
   if(value.actor==='grounded')return {type:prefix+'grounded'};
   if(value.actor==='last_clone')return {type:prefix+'last_clone'};
   if(value.pressed)return {type:prefix+'pressed',fields:{pressed:value.pressed}};

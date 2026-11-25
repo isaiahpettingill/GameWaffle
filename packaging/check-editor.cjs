@@ -4,13 +4,22 @@ const os=require('node:os');
 const path=require('node:path');
 const assert=require('node:assert/strict');
 const initializers=rows=>(rows??[]).flatMap(row=>row.op==='init_properties'?row.body:[row]);
+async function openPalette(view,workspace,name){
+  const category=view.getByLabel('Block category',{exact:true});
+  if(await category.isVisible())await category.selectOption({label:name});
+  else await workspace.getByRole('treeitem',{name,exact:true}).click();
+  return workspace.locator('.blocklyToolboxFlyout');
+}
+async function checkPalette(view,workspace,name,{includes,excludes=[]}){
+  const flyout=await openPalette(view,workspace,name);
+  for(const type of includes)await flyout.locator('.blocklyBlockCanvas > .waffle_'+type).waitFor();
+  for(const type of excludes)assert.equal(await flyout.locator('.blocklyBlockCanvas > .waffle_'+type).count(),0,name+' should omit '+type);
+}
 async function checkBlockLayout(page,tab){
   const workspace=page.locator('.block-workspace:visible');
   await workspace.locator('.blocklySvg:visible').first().waitFor();
-  const category=page.getByLabel('Block category',{exact:true});
-  for(const name of ['Combat','Entities','Routines']){
-    if(await category.isVisible())await category.selectOption({label:name});
-    else await workspace.locator('.blocklyToolboxCategory').filter({hasText:name}).click();
+  for(const name of ['Combat','Entities','Routines','Sound']){
+    await openPalette(page,workspace,name);
     const fit=await workspace.evaluate(element=>{
       const bounds=element.getBoundingClientRect();
       const flyout=element.querySelector('.blocklyToolboxFlyout');
@@ -25,7 +34,7 @@ async function checkBlockLayout(page,tab){
       };
     });
     assert.ok(fit.count>0 && fit.allVisible && fit.canvasSpace>20,tab+' should fit the '+name+' palette');
-    if(name==='Combat')assert.ok(fit.clearBelow,'A short palette leaves the canvas underneath available');
+    if(name==='Sound')assert.ok(fit.clearBelow,'A short palette leaves the canvas underneath available');
   }
   await page.getByRole('button',{name:'Fit blocks',exact:true}).click();
   await workspace.locator('.blocklyToolboxFlyout').waitFor({state:'hidden'});
@@ -91,6 +100,12 @@ for(const width of [1280,800,390,320]){
       await game.locator('.blocklySvg:visible').waitFor();
       assert.equal(await game.getByLabel('Script file').inputValue(),'game');
       assert.equal(await game.evaluate(editor=>Boolean(editor.closest('dialog'))),false);
+      if(width===1280){
+        const workspace=game.locator('.block-workspace');
+        await checkPalette(game,workspace,'Input',{includes:['bind_input','controller_event','entity_controller_connected','set_first_controller']});
+        await checkPalette(game,workspace,'Display shaders',{includes:['apply_shaders','shader_pass'],excludes:['set_room_shader','reset_room_shader']});
+        await game.getByRole('button',{name:'Fit blocks',exact:true}).click();
+      }
       for(const [button,title] of [['Room defaults…','New room defaults'],['Project settings…','Project settings']]){
         await game.getByRole('button',{name:button,exact:true}).click();
         const settings=page.getByRole('dialog',{name:title});
@@ -385,9 +400,9 @@ for(const width of [1280,800,390,320]){
     await page.getByLabel('Choose color',{exact:true}).fill('#f38ba8');
     await page.getByLabel('Choose color',{exact:true}).press('Escape');
     await page.waitForFunction(async()=> (await(await fetch('./api/script/maker')).json()).events.start[0].fill==='#f38ba8');
-    await page.getByRole('treeitem',{name:'Operators'}).click();
+    await page.getByRole('treeitem',{name:'Math & logic'}).click();
     await page.locator('.blocklyFlyout').getByText('sin (°)',{exact:true}).waitFor();
-    await page.getByRole('treeitem',{name:'Operators'}).click();
+    await page.getByRole('treeitem',{name:'Math & logic'}).click();
     const stageActors=page.getByRole('region',{name:'Entities on the stage'});
     await stageActors.getByRole('button',{name:'pilot',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('select[aria-label="Script file"]')?.value==='entity:pilot');
@@ -886,8 +901,17 @@ await addBranch.click();
 await authoring.getByRole('button',{name:'Add else',exact:true}).click();
 await chain.locator('image[alt="Remove else branch"]').waitFor();
 const roomCategories=await roomWorkspace.locator('.blocklyToolboxCategoryLabel').allTextContents();
-assert.ok(roomCategories.includes('World & camera')&&roomCategories.includes('Entities'));
-assert.ok(!roomCategories.includes('Motion')&&!roomCategories.includes('Combat'));
+assert.ok(!roomCategories.includes('Display')&&!roomCategories.includes('Display shaders'));
+await checkPalette(roomCode,roomWorkspace,'Background',{includes:['set_room_background','set_room_background_image','set_background_gradient']});
+await checkPalette(roomCode,roomWorkspace,'Events',{includes:['event_sender','event_entity','received_event','emit_event']});
+await checkPalette(roomCode,roomWorkspace,'Camera',{includes:['camera_zoom','follow_player','reporter_camera_touching_edge'],excludes:['set_room_background','release_camera']});
+await checkPalette(roomCode,roomWorkspace,'Room',{includes:['set_room_border','reporter_camera_touching_room_edge'],excludes:['camera_zoom']});
+await checkPalette(roomCode,roomWorkspace,'Room shaders',{includes:['apply_shaders','shader_pass','set_room_shader','reset_room_shader']});
+await checkPalette(roomCode,roomWorkspace,'Sound',{includes:['sound','set_room_music','set_room_ambience']});
+await checkPalette(roomCode,roomWorkspace,'Tiles',{includes:['reporter_tile_touching','reporter_tile_touching_kind'],excludes:['set_tile_playback','entity_on_tile_top']});
+await checkPalette(roomCode,roomWorkspace,'Motion',{includes:['move_entity','force_entity'],excludes:['move_by','velocity']});
+await checkPalette(roomCode,roomWorkspace,'Combat',{includes:['damage_entity','heal_entity'],excludes:['damage','fire','fire_projectile']});
+await roomCode.getByRole('button',{name:'Fit blocks',exact:true}).click();
 const clipboardBlock=roomWorkspace.locator('.waffle_event_sender');
 await clipboardBlock.click();
 await authoring.keyboard.press('Control+c');
@@ -935,6 +959,9 @@ await pastedStack.waitFor({state:'detached'});
 assert.equal(await pastedDrawText.count(),0,'Undo removes the whole pasted group');
 await scriptFile.selectOption('tile:water:0');
 await until('Tile script picker',async()=>await scriptFile.inputValue()==='tile:water:0');
+const tileCode=authoring.getByRole('region',{name:'Tile code'});
+await checkPalette(tileCode,tileCode.locator('.block-workspace'),'Tiles',{includes:['reporter_tile_touching','entity_on_tile_top','set_tile_playback','set_tile_friction']});
+await tileCode.getByRole('button',{name:'Fit blocks',exact:true}).click();
 await clickBlock(authoring.locator('.blocklyBlockCanvas .waffle_init > .blocklyPath[role=figure]'));
 await authoring.keyboard.press('Control+v');
 await authoring.locator('.blocklyBlockCanvas .waffle_camera_zoom.gw-detached .waffle_set_room_shader').waitFor();
@@ -972,6 +999,14 @@ await until('Clone script saved',async()=>{
 await authoring.getByRole('button',{name:'Blocks',exact:true}).click();
 for(const type of ['clone_start','clone_entity','delete_clone'])
   await authoring.locator('.blocklyBlockCanvas .waffle_'+type).waitFor();
+const entityCode=authoring.getByRole('region',{name:'Entity code'});
+const entityWorkspace=entityCode.locator('.block-workspace');
+await checkPalette(entityCode,entityWorkspace,'Combat',{includes:['fire_projectile','damage','damage_entity'],excludes:['fire']});
+for(const [category,type] of [['Control','if'],['Math & logic','arithmetic']]){
+  const flyout=await openPalette(entityCode,entityWorkspace,category);
+  assert.equal(await flyout.locator('.blocklyBlockCanvas > .waffle_'+type).count(),1);
+}
+await entityCode.getByRole('button',{name:'Fit blocks',exact:true}).click();
 await authoring.getByRole('button',{name:'Text',exact:true}).click();
 assert.match(await authoring.locator('.cm-content').innerText(),/on clone\s+delete_clone\(\)/);
 await authoring.locator('.cm-content').fill(`on tick
@@ -986,7 +1021,7 @@ await until('Sensing and operators saved from text',async()=>{
   return unit.events?.tick?.[0]?.condition?.right?.call==='tile.touching';
 });
 await authoring.getByRole('button',{name:'Blocks',exact:true}).click();
-const canvas=authoring.locator('.blocklyBlockCanvas');
+const canvas=entityWorkspace.locator('.blocklyBlockCanvas:not(.blocklyFlyout *)');
 for(const type of ['camera_touching_edge','tile_touching','string_letter','string_join','math_mod'])
   await canvas.locator('.waffle_reporter_'+type).waitFor();
 const tileContact=canvas.locator('.waffle_reporter_tile_touching');

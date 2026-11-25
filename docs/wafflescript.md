@@ -29,7 +29,7 @@ For couch play, use `set_first_controller(1)` to start assigning gamepads at Pla
 
 ## Room scripts
 
-Pick a room from **Room scripts** in the script file menu. This keeps the current stage and editor view. Selecting a room in the sidebar also selects its script. Use **World & camera** for the room controls. A room script starts on each entry, runs its own tick, and reads controller 1. The room inspector supplies defaults on each entry. When you load a save, the current room state is restored before `on restored`.
+Pick a room from **Room scripts** in the script file menu. This keeps the current stage and editor view. Selecting a room in the sidebar also selects its script. Use **Room** for room settings and **Camera** for camera controls. A room script starts on each entry, runs its own tick, and reads controller 1. The room inspector supplies defaults on each entry. When you load a save, the current room state is restored before `on restored`.
 
 ```ruby
 on start
@@ -53,7 +53,7 @@ Choose a placed entity from the searchable **Find entity** block or connect an e
 
 ## Sprite shadows
 
-In an entity script, open **Looks & sound → Set sprite shadow**. **Behind** draws an offset silhouette that follows the current animation, rotation, and flips. **Ground** draws a shadow at the sprite’s feet in top-down rooms and on the nearest surface below it in platformer rooms. Set opacity from 0 to 100. Choose **None** to clear the shadow.
+In an entity script, open **Appearance → Set sprite shadow**. **Behind** draws an offset silhouette that follows the current animation, rotation, and flips. **Ground** draws a shadow at the sprite’s feet in top-down rooms and on the nearest surface below it in platformer rooms. Set opacity from 0 to 100. Choose **None** to clear the shadow.
 
 ```ruby
 on start
@@ -63,7 +63,7 @@ end
 
 ## Health and physics objects
 
-In an entity script, use **Looks & sound → Show health bar** to display that entity’s health above its sprite. Bars start off. Pick the fill and background colors, or pass hex colors in text. The bar fills relative to **Starting health** in the entity’s physics settings.
+In an entity script, use **Combat → Show health bar** to display that entity’s health above its sprite. Bars start off. Pick the fill and background colors, or pass hex colors in text. The bar fills relative to **Starting health** in the entity’s physics settings.
 
 ```ruby
 on start
@@ -89,7 +89,7 @@ end
 
 In the room inspector, open **Shader** to pick an effect and adjust its strength. Fog, Volumetric lighting, and Lens flare add screen-space lighting over the scene. Snow, Rain, and Wind animate over the scene. HUD text and the minimap stay clear.
 
-A room script can switch presets with **World & camera → Set room shader**. Strength takes a number from 0 to 100. Choose **None** to turn the effect off. Use **Reset room shader** to restore the inspector preset and its settings.
+A room script can switch presets with **Room shaders → Set room shader**. Strength takes a number from 0 to 100. Choose **None** to turn the effect off. Use **Reset room shader** to restore the inspector preset and its settings.
 
 ```ruby
 on tick
@@ -148,8 +148,8 @@ end
 ```
 
 In Blocks, start with **Events → On tick**, add **Control → If**, and plug an
-**Input & sensing** block into its condition. Combine checks with **and**, **or**,
-and **not** from **Operators**. A down check runs its branch on every tick the input is held.
+**Input** block into its condition. Combine checks with **and**, **or**,
+and **not** from **Math & logic**. A down check runs its branch on every tick the input is held.
 A just-pressed or just-released check runs its branch once per transition.
 
 For example, this applies horizontal force while a direction is held and jumps
@@ -217,7 +217,7 @@ Use matching numeric types in arithmetic and comparisons. Convert integers with
 `math.trunc`, and booleans with `math.to_integer`. Use an integer count for `repeat` and `wait`. Use `change global.score by 1`
 to add to a numeric variable.
 
-The **Operators** palette includes absolute value, min/max, square root, power,
+The **Math & logic** palette includes absolute value, min/max, square root, power,
 natural log, exponential, sine, cosine, tangent, and inverse trig.
 Trig takes degrees and inverse trig returns degrees. Use `math.atan2(y, x)`
 for a direction angle. `entity.x_real`, `entity.y_real`, `entity.vx_real`,
@@ -287,7 +287,7 @@ blocks for changing these rules from a script. Set the rule while the entity
 is present. Pending respawns are carried in saved games.
 
 Persistent particle emitters preserve their emission phase when a script
-sets the same effect each tick. The **Looks & sound** palette also supports
+sets the same effect each tick. The **Appearance** palette also supports
 timed emitters and bursts at an offset. Emission is shared between active
 entities when the room hits its particle budget.
 
