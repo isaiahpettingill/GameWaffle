@@ -472,7 +472,21 @@ end
 
 Open **Game script** from the **Game** tab or the script picker. The starter script declares globals, flags, events, and constants. Its **On game startup** stack sets display resolution, camera behavior, the minimap, and the first gamepad's player slot. Keyboard input belongs to Player 1. Use **Controller connected?** or Game script events such as `on controller connected 2` and `on controller disconnected 2`. Removing a gamepad leaves the other gamepads in their slots. Use **Assign player** or **Set entity visible** to control who can play an entity and when it appears.
 
-**Game → Room defaults…** supplies values for new rooms. Studio copies them into each room's **On init** stack when it creates the room. Edit that stack to change an existing room's camera, background, borders, gravity, music, ambience, or shader. The background picker edits the same stack. An **On init** stack runs once per entity or tile instance and again when a fresh room is created during play. Use **On tick** for behavior that should repeat each frame.
+Add **On init** from Events to get the matching **Init properties** block for the current script. The **On game startup** block comes with **Init game properties**. Keep this block first under its trigger, then add any other startup logic below it. Initialization runs once for each new room, entity, or scripted tile. Use **On tick** for behavior that should repeat each frame.
+
+**Game → Room defaults…** supplies values for new rooms. Studio copies them into each new room's **Init room properties** block. Edit that block to change the room's camera, background, borders, gravity, music, ambience, or shader. The background picker edits the same script.
+
+Inside **Init entity properties** or **Init tile properties**, use **Initial body** and **Initial property** to override the type's physics defaults. These values must be literals. The compiler bakes them into the entity type or tile variant, so a static tile with only these values needs no runtime script. For example, to configure a fluid tile variant:
+
+```wafflescript
+on init
+  init_properties
+    property mode = "fluid"
+    property density = 2.5
+    property drag = 3
+  end
+end
+```
 
 Tile scripts are selectable by variant. Aseprite tags marked `:animated:` seed an animation command in the tile script. The script can select a frame, advance frames, set playback, change friction, and respond to an entity contacting the tile. Event handlers can read the sender and an optional entity payload. **Every** and **After** timers take seconds.
 

@@ -1,6 +1,7 @@
 import { actorReadings, Blocks, Events, inputEvent, receivedEvent, timerEvent, controllerEvent, Opcodes, messageInputs, entityQueries, reporters, commandScopeError, collectionCommands, collectionQueries, valueInput } from './schema.mjs';
 import {inventoryTypes,propertyAliases,propertyType,scalarTypes,validateCollections} from './collections.mjs';
 import {validResourceText} from './resource-tables.mjs';
+import {compileInitProperties} from './init-properties.mjs';
 
 const variableScopes = {local:0,global:1,flag:2,local_real:9,global_real:10,local_bool:11,global_bool:12,local_string:13,global_string:14};
 export const scopes = Object.keys(variableScopes);
@@ -71,14 +72,15 @@ export function compileScript(script,modules={},trace,registry){
     collections:registry?.collections??validateCollections(script.collections),
     aliases:registry?.propertyAliases??propertyAliases(script.declarations?.globals,script.declarations?.flags,registry?.items),
   };
-  const result=compileEvents(script,script.events,modules,trace,registry,context);
+  const {events,physics}=compileInitProperties(script.events,registry);
+  const result=compileEvents(script,events,modules,trace,registry,context);
   for(const [name,r] of routines){
     const args=r.params.map((_,index)=>defaults[paramType(r,index)]);
     const block=r.body?{op:'call',name,args}:{op:validation,value:{call:name,args}};
     try{compileEvents(script,{start:[block]},modules,undefined,registry,context);}
     catch(error){if(error.node===block || !error.node)error.node=r;throw error;}
   }
-  return result;
+  return physics?{...result,initPhysics:physics}:result;
 }
 function validateScriptDefinition(script,modules,routines,registry) {
   const constants=script.constants??{};
@@ -383,6 +385,8 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
       for (const block of list) {
         enter(depth);
         current=block;
+        if(block.op==='init_properties')throw Error('Connect one Init properties block directly below On init or On game startup');
+        if(block.op==='init_property')throw Error('Put static physics properties inside Init properties');
         if (block.op===validation)expression(block.value,0,depth+1);
         else if (block.op==='call')call(block.name,block.args,false,r=>sequence(r.body,depth+1),(arg,type,name)=>checkArgument(arg,type,name,depth));
         else if (block.op === 'set' || block.op === 'change') {

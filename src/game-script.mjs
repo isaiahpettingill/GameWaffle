@@ -12,7 +12,7 @@ export function initialGameScript(project,{examples=false}={}){
   const startup=[display,{op:'set_default_camera',target:camera.groupCamera?'group':'player'},
     {op:'set_minimap',mode:project.minimap??'off'},{op:'set_first_controller',player:2}];
   return {
-    events:{init:[],game_startup:startup},
+    events:{init:[],game_startup:[{op:'init_properties',body:startup}]},
     declarations:{globals:{...(examples?{score:0}:{}),...project.variables},
       flags:{...(examples?{level_complete:false}:{}),...project.flags},
       events:{...(examples?{level_finished:'Level finished'}:{}),...project.events},

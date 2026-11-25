@@ -122,8 +122,8 @@
       }
       for (const {item,index} of orderedLayers(view)) {
         if (!item.collidable || hidden[index]) continue;
-        for (const [x,y,id] of item.cells) {
-          const type = tiles[id]?.physics?.mode ?? previewModes[id] ?? 'static';
+        for (const [x,y,id,variantIndex] of item.cells) {
+          const type = previewModes[id]?.[tileVariant(id,x,y,variantIndex)] ?? tiles[id]?.physics?.mode ?? 'static';
           const color = collision[type];
           if (!color) continue;
           ctx.fillStyle = color + '65';

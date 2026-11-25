@@ -1,4 +1,5 @@
 import {platformGravity, roomBorder} from './schema.mjs';
+import {initStatements} from './init-properties.mjs';
 import {shaderPresets} from './shader-presets.mjs';
 
 export const roomScriptPath=id=>`scripts/rooms/${id}.cbor`;
@@ -6,16 +7,16 @@ export const roomSettingKeys=['cameraZoom','cameraBottomInset','border','closedE
   'backgroundImage','backgroundParallax','ySort','music','ambience','shader','groupCamera'];
 
 export function changeRoomView(unit,from,to){
-  const before=initialRoomScript({view:from}).events.init;
-  const after=initialRoomScript({view:to}).events.init;
+  const before=initStatements(initialRoomScript({view:from}));
+  const after=initStatements(initialRoomScript({view:to}));
   const changes=new Map();
-  const init=unit.events?.init??[];
+  const init=initStatements(unit);
   for(const op of ['set_room_gravity','set_room_border','set_room_depth_sort']){
     const previous=before.find(block=>block.op===op);
     const replacement=after.find(block=>block.op===op);
-    const index=init.findLastIndex(block=>block.op===op);
+    const current=init.findLast(block=>block.op===op);
     const operand=Object.keys(previous).find(key=>key!=='op');
-    if(index>=0&&init[index][operand]===previous[operand])changes.set(index,replacement);
+    if(current&&current[operand]===previous[operand])changes.set(current,replacement);
   }
   return changes;
 }
@@ -44,5 +45,5 @@ export function initialRoomScript(room,defaults={}){
   }
   if(settings.groupCamera===true)start.push({op:'group_camera'});
   else if(settings.groupCamera===false)start.push({op:'follow_player',player:1});
-  return {events:{init:start}};
+  return {events:{init:[{op:'init_properties',body:start}]}};
 }

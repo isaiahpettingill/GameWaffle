@@ -135,10 +135,11 @@ export function reporterBlock(name,args,inputSlot=(_,value,fallback)=>slot(value
 }
 
 export function logicDefinitions(conditionShape) {
+  const physicsLiterals=new Set(['whole','integer','real','bool','none']);
   return Object.entries(definitions).map(([id,[style,message0,args0,output,tooltip]])=>({
     type:prefix+id,style,message0,args0,tooltip,
     inputsInline:!args0.some(arg=>arg.type==='input_statement'),
-    ...(output ? {output:output==='optional'?'WaffleNone':'WaffleValue',
+    ...(output ? {output:physicsLiterals.has(id)?[output==='optional'?'WaffleNone':'WaffleValue','WafflePhysicsLiteral']:'WaffleValue',
       ...(output==='condition'?{outputShape:conditionShape}:{})} : {previousStatement:'waffle',nextStatement:'waffle'}),
   }));
 }

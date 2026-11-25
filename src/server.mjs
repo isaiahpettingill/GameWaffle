@@ -332,13 +332,15 @@ const server = createServer(async (req, res) => {
           const unit=source!=null?parseScript(source):old?decodeCbor(old):initialRoomScript(room);
           const replacements=changeRoomView(unit,previous,view);
           let nextSource=source;
-          for(const [index,block] of [...replacements].sort(([left],[right])=>right-left)){
+          const changes=[...replacements];
+          if(source!=null)changes.sort(([left],[right])=>locations.get(right).from-locations.get(left).from);
+          for(const [current,block] of changes){
             if(source!=null){
-              const loc=locations.get(unit.events.init[index]);
+              const loc=locations.get(current);
               const text=formatScript({events:{init:[block]}}).split('\n')[1].trim();
               nextSource=nextSource.slice(0,loc.from)+text+nextSource.slice(loc.to);
             }
-            unit.events.init[index]=block;
+            Object.assign(current,block);
           }
           room.view=view;
           room.script=path;

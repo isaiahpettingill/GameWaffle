@@ -3,6 +3,7 @@ const fs=require('node:fs/promises');
 const os=require('node:os');
 const path=require('node:path');
 const assert=require('node:assert/strict');
+const initializers=rows=>(rows??[]).flatMap(row=>row.op==='init_properties'?row.body:[row]);
 async function checkBlockLayout(page,tab){
   const workspace=page.locator('.block-workspace:visible');
   await workspace.locator('.blocklySvg:visible').first().waitFor();
@@ -255,8 +256,8 @@ for(const width of [1280,800,390,320]){
     await roomSource.fill(changedRoom);
     await until('Room camera init',async()=>{
       const unit=await(await page.request.get(url+'/api/room-script/yard')).json();
-      return unit.events.init.some(row=>row.op==='camera_zoom'&&row.zoom.real===1.5)&&
-        unit.events.init.some(row=>row.op==='set_camera_bottom_inset'&&row.tiles===2);
+      return initializers(unit.events.init).some(row=>row.op==='camera_zoom'&&row.zoom.real===1.5)&&
+        initializers(unit.events.init).some(row=>row.op==='set_camera_bottom_inset'&&row.tiles===2);
     },page);
     await nav.getByText('Game',{exact:true}).click();
     await page.getByRole('button',{name:'Text',exact:true}).click();
@@ -266,7 +267,7 @@ for(const width of [1280,800,390,320]){
     await gameSource.fill(previousGame.replace(/set_adaptive_display\([^\n]*\)/,'set_display_resolution(320, 180)'));
     await until('Fixed Game resolution',async()=>{
       const unit=await(await page.request.get(url+'/api/game-script')).json();
-      return unit.events.game_startup.some(row=>row.op==='set_display_resolution'&&row.width===320&&row.height===180);
+      return initializers(unit.events.game_startup).some(row=>row.op==='set_display_resolution'&&row.width===320&&row.height===180);
     },page);
     const fixedPlayer=await browser.newPage({viewport:{width:1000,height:660}});
     try{
@@ -280,7 +281,7 @@ for(const width of [1280,800,390,320]){
       await checkDisplay();
     }finally{await fixedPlayer.close();}
     await gameSource.fill(previousGame);
-    await until('Adaptive resolution',async()=> (await(await page.request.get(url+'/api/game-script')).json()).events.game_startup.some(row=>row.op==='set_adaptive_display'),page);
+    await until('Adaptive resolution',async()=> initializers((await(await page.request.get(url+'/api/game-script')).json()).events.game_startup).some(row=>row.op==='set_adaptive_display'),page);
     await nav.getByText('Room',{exact:true}).click();
     await page.locator('summary').filter({hasText:'Tools'}).click();
     await page.getByRole('button',{name:'Debug room'}).click();
@@ -341,8 +342,8 @@ for(const width of [1280,800,390,320]){
     await gameCode.getByRole('button',{name:'Text',exact:true}).click();
     const resourceSource=gameCode.getByLabel('WaffleScript source');
     const baseGame=await resourceSource.innerText();
-    await resourceSource.fill('resource legacy_label = "Legacy"\n'+baseGame.replace('on game startup\n',
-      'on game startup\n  global_string.start_prompt = R["greeting"]\n'));
+    await resourceSource.fill('resource legacy_label = "Legacy"\n'+baseGame.replace(/(^on game startup\n[\s\S]*?)(^end$)/m,
+      '$1  global_string.start_prompt = R["greeting"]\n$2'));
     const getGameScript=async()=> (await(await page.request.get(url+'/api/game-script')).json());
     const promptReference=async()=> (await getGameScript()).events.game_startup.find(row=>row.name==='start_prompt')?.value?.text;
     await until('Resource reference',async()=>await promptReference()==='greeting',page);
@@ -597,7 +598,9 @@ const newRoom=authoring.getByRole('dialog',{name:'New Room'});
 await newRoom.getByLabel('Room name').fill('Upper Deck!');
 await newRoom.getByRole('button',{name:'Create room'}).click();
 await until('New room',async()=> (await readProject()).rooms.upper_deck?.title==='Upper Deck!');
-assert.equal((await getRoomInit('upper_deck')).find(row=>row.op==='camera_zoom').zoom,1.75);
+const upperDeckInit=await getRoomInit('upper_deck');
+assert.equal(upperDeckInit[0].op,'init_properties');
+assert.equal(initializers(upperDeckInit).find(row=>row.op==='camera_zoom').zoom,1.75);
 assert.deepEqual(await getRoomInit('yard'),oldYardInit);
 
 await views.getByRole('button',{name:'Assets',exact:true}).click();
@@ -860,11 +863,25 @@ await authoring.locator('.blocklyBlockCanvas .waffle_draw_text.gw-detached').wai
 await authoring.keyboard.press('Escape');
 assert.equal(await authoring.locator('.blocklyBlockCanvas .gw-block-selected').count(),0);
 await authoring.getByRole('button',{name:'Text',exact:true}).click();
-await authoring.locator('.cm-content').fill('on init\n  set_tile_playback("still")\nend\n');
+await authoring.locator('.cm-content').fill(`on init
+  init_properties
+    property mode = "fluid"
+    property density = 2.5
+    set_tile_playback("still")
+  end
+end
+`);
 await until('Tile playback saved',async()=>{
   const unit=await(await authoring.request.get(url+'/api/tile-script/water/0')).json();
-  return unit.events?.init?.[0]?.mode==='still';
+  return unit.events?.init?.[0]?.body?.[2]?.mode==='still';
 });
+await authoring.getByRole('button',{name:'Blocks',exact:true}).click();
+const propertyBlock=authoring.locator('.blocklyBlockCanvas .waffle_init > .waffle_init_properties');
+await propertyBlock.getByText(/Init\s+tile\s+properties/).waitFor();
+await propertyBlock.locator('.waffle_init_body').waitFor();
+await propertyBlock.locator('.waffle_init_property').getByText('Density',{exact:true}).waitFor();
+await authoring.getByRole('button',{name:'Text',exact:true}).click();
+assert.match(await authoring.locator('.cm-content').innerText(),/property density = 2\.5/);
 await scriptFile.selectOption('entity:maker');
 await until('Entity script picker',async()=>await scriptFile.inputValue()==='entity:maker');
 await authoring.getByRole('button',{name:'Text',exact:true}).click();

@@ -4,6 +4,7 @@
   const viewIcons={world:Network,room:RoomIcon,actors:SquareUserRound,blocks:Blocks,assets:Images,shaders:Sparkles,resources:Database,game:Settings2};
   import { buttons, platformGravity } from '../src/schema.mjs';
   import {roomSettingKeys} from '../src/room-script.mjs';
+  import {initStatements} from '../src/init-properties.mjs';
   import {propertyAliases} from '../src/collections.mjs';
   import PagedList from './PagedList.svelte';
   import AssetLibrary from './AssetLibrary.svelte';
@@ -294,7 +295,7 @@
     }
     const nextTiles=Object.fromEntries(Object.entries(tiles).map(([id,data])=>
       [id,data.variants.map((bytes,index)=>png('tile/'+id+'/'+index,bytes))]));
-    const nextModes=Object.fromEntries(Object.entries(tiles).map(([id,data])=>[id,data.mode]));
+    const nextModes=Object.fromEntries(Object.entries(tiles).map(([id,data])=>[id,data.variantModes??data.variants.map(()=>data.mode)]));
     const nextSprites=Object.fromEntries(Object.entries(next.spritePreviews??{}).map(([id,bytes])=>[id,png('sprite/'+id,bytes)]));
     const nextCover=next.coverArt?png('cover',next.coverArt):'';
     await Promise.allSettled(created.map(({image})=>image.decode()));
@@ -450,15 +451,21 @@
     const unit=await request(endpoint);
     const parsed=unit.source!=null?parseScript(unit.source):null;
     const init=unit.events.init??=[];
-    const existing=init.findLastIndex(block=>block.op==='set_room_background_image');
-    const block=existing>=0?{...init[existing],image:path}:{op:'set_room_background_image',image:path,scroll:1};
-    if(existing>=0)init[existing]=block;else init.push(block);
+    const existing=initStatements(unit).findLast(block=>block.op==='set_room_background_image');
+    const group=init[0]?.op==='init_properties'?init[0]:null;
+    const block=existing?{...existing,image:path}:{op:'set_room_background_image',image:path,scroll:1};
+    if(existing)Object.assign(existing,block);else (group?.body??init).push(block);
     if(parsed){
       const snippet=formatScript({events:{init:[block]}});
       const source=unit.source,command=snippet.split('\n')[1];
       const oldCommands=parsed.events.init;
-      const old=locations.get(oldCommands?.[existing]);
+      const old=locations.get(initStatements(parsed).findLast(row=>row.op==='set_room_background_image'));
       if(old)unit.source=source.slice(0,old.from)+command.trimStart()+source.slice(old.to);
+      else if(group){
+        const {to}=locations.get(oldCommands[0]);
+        const at=source.lastIndexOf('\n',to-1)+1;
+        unit.source=source.slice(0,at)+'  '+command+'\n'+source.slice(at);
+      }
       else if(oldCommands){
         const last=locations.get(oldCommands.at(-1));
         const from=last?source.indexOf('\n',last.to)+1:/^\s*on[ \t]+init\b[^\n]*\n/m.exec(source)?.index;
@@ -770,7 +777,7 @@
   function saveScript(id,isRoom,isGame,data,isTile){
     if(isTile){status='Script saved';return;}
     if(isRoom){
-      const background=data.events?.init?.findLast(row=>row.op==='set_room_background_image')?.image;
+      const background=initStatements(data).findLast(row=>row.op==='set_room_background_image')?.image;
       if(background==null)delete roomBackgrounds[id];else roomBackgrounds[id]=background;
       const baseline=JSON.parse(savedProject);
       for(const key of roomSettingKeys){delete project.rooms[id][key];if(baseline.rooms[id])delete baseline.rooms[id][key];}
@@ -1472,7 +1479,7 @@
         {/if}
       {:else}
         {@const target=tab==='blocks' ? sprite : inspector}
-        <div class="heading row"><h2>Physics settings</h2></div>
+        <div class="heading row"><h2>Physics defaults</h2></div>
         {#if target}
           <p class="asset-name">{tab==='blocks'||assetKind==='sprite' ? spriteId : tileId}</p>
           {#if tab==='assets' && assetKind==='tile' && tile}

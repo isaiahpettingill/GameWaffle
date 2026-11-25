@@ -102,7 +102,11 @@ export function parseScript(source){
     }
     while(peek()!==undefined && !['end','else','elif'].includes(peek())){
       const start=tokens[i].at;let row;
-      if(eat('apply_shaders')){
+      if(peek()==='init_properties'&&tokens[i+1]?.s==='\n'){
+        i++;eol();row={op:'init_properties',body:body()};need('end');
+      }else if(peek()==='property'&&identifier.test(tokens[i+1]?.s??'')&&tokens[i+2]?.s==='='){
+        i++;const name=id();need('=');row={op:'init_property',name,value:expr()};
+      }else if(eat('apply_shaders')){
         eol();
         const passes=[];
         while(!eat('end')){
@@ -313,6 +317,12 @@ export function formatScript(script){
   function body(rows,n){
     const pad='  '.repeat(n);
     for(const b of rows){
+      if(b.op==='init_properties'){
+        lines.push(pad+'init_properties');body(b.body,n+1);lines.push(pad+'end');continue;
+      }
+      if(b.op==='init_property'){
+        lines.push(pad+'property '+b.name+' = '+value(b.value));continue;
+      }
       if(b.op==='apply_shaders'){
         lines.push(pad+'apply_shaders');
         for(const pass of b.passes){

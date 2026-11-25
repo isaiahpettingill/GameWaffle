@@ -15,6 +15,7 @@ import {propertyAliases,validateCollections} from './collections.mjs';
 import {pack} from './pack.mjs';
 import {defaultFont,readBitfont} from './font.mjs';
 import { initialScript, buttons, effects, platformGravity, roomBorder } from './schema.mjs';
+import {initStatements,physicsModes} from './init-properties.mjs';
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -70,11 +71,10 @@ const integer = (n, min, max, label) => {
   if (!Number.isInteger(n)) throw Error(`Expected an integer for ${label}`);
   return number(n, min, max, label);
 };
-const modes = ['none','static','dynamic','kinematic','sensor','ladder','one_way','breakable','fluid'];
 
 function props(value = {}, defaultMode) {
   const mode = value.mode ?? defaultMode;
-  if (!modes.includes(mode)) throw Error(`Unknown physics mode: ${mode}`);
+  if (!physicsModes.includes(mode)) throw Error(`Unknown physics mode: ${mode}`);
   if (value.mass != null) number(value.mass, .0001, 100_000, 'mass');
   return { mode, mass: value.mass, density: number(value.density ?? 1, .0001, 100_000, 'density'),
     friction: number(value.friction ?? .35, 0, 1, 'friction'), elasticity: number(value.elasticity ?? 0, 0, 1, 'elasticity'),
@@ -367,7 +367,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     tileSensing||=script.tileSensing;
     dependencies.set(id,script.dependencies);
     spriteFonts.set(id,script.fontUses);
-    sprites[id] = { clips, components:components(sprite.components), respawn:respawnRule(sprite.respawn,flagValues), scriptJump:sprite.legacyBuiltInJump==null?script.scriptJump:!sprite.legacyBuiltInJump, scriptGravity:sprite.gravityMode!=null?sprite.gravityMode==='script':Boolean(sprite.scriptGravity||script.scriptGravity), program:script.events, physics: props(sprite.physics, 'none'), width: sprite.width ?? ase.width,
+    sprites[id] = { clips, components:components(sprite.components), respawn:respawnRule(sprite.respawn,flagValues), scriptJump:sprite.legacyBuiltInJump==null?script.scriptJump:!sprite.legacyBuiltInJump, scriptGravity:sprite.gravityMode!=null?sprite.gravityMode==='script':Boolean(sprite.scriptGravity||script.scriptGravity), program:script.events, physics: props({...sprite.physics,...script.initPhysics}, 'none'), width: sprite.width ?? ase.width,
       height: sprite.height ?? ase.height, layer: sprite.layer ?? 0, animation: sprite.animation ?? 'default',
       emitter:sprite.emitter?{effect:sprite.emitter.effect,rate:sprite.emitter.rate,offset:sprite.emitter.offset??[0,0]}:null, alwaysActive:sprite.alwaysActive??false, team: sprite.team ?? 0, projectile: sprite.projectile };
     number(sprites[id].width, 1, 8192, 'sprite width');
@@ -420,7 +420,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     tiles[id] = {
       variants: variants.map((indices, v) => indices.map((i, f) => register(`tile/${id}/${v}/${f}`, ase, i, flags))),
       physics: props(tile.physics, flags.includes('fluid') ? 'fluid' : 'static'),
-      hosts:[],
+      hosts:[],variantPhysics:[],
     };
     const compiled=tiles[id];
     const sequence=compiled.variants.flat();
@@ -430,11 +430,14 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       const unit=scripts.get(key)??(bytes?decodeCbor(bytes):null);
       if(!unit)continue;
       const script=compileScript(unit,await loadModules(unit,read),undefined,{...registry,tileScript:true});
+      if(script.initPhysics)compiled.variantPhysics[variant]=props({...compiled.physics,...script.initPhysics},compiled.physics.mode);
+      // A variant with only baked properties has no runtime script host.
+      if(!Object.keys(script.events).length)continue;
       const name='@tile/'+id+'/'+variant;
       const clip=frames=>({frames,repeat:0,durationMs:frames.reduce((total,frame)=>total+frame.ms,0)});
       const clips={default:clip([compiled.variants[variant][0]]),sequence:clip(sequence)};
       for(const [index,frame] of sequence.entries())clips['frame_'+index]=clip([frame]);
-      sprites[name]={clips,program:script.events,physics:compiled.physics,width:size,height:size,layer:0,animation:'default',team:0};
+      sprites[name]={clips,program:script.events,physics:compiled.variantPhysics[variant]??compiled.physics,width:size,height:size,layer:0,animation:'default',team:0};
       dependencies.set(name,script.dependencies);spriteFonts.set(name,script.fontUses);
       compiled.hosts[variant]=name;
       runtimeAbi=Math.max(runtimeAbi,scriptAbi(script),12);
@@ -541,7 +544,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     let scriptHost, scriptBorder=gameScript?.scriptBorder,roomTileSensing=tileSensing;
     const tileCells=new Map();
     if(unit){
-      const background=unit.events?.init?.findLast(block=>block.op==='set_room_background_image');
+      const background=initStatements(unit).findLast(block=>block.op==='set_room_background_image');
       roomPreviewBackgrounds[id]=background?.image??'';
       const script=compileScript(unit,await loadModules(unit,read),undefined,{...registry,roomScript:true});
       runtimeAbi=Math.max(runtimeAbi,scriptAbi(script));
@@ -607,7 +610,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         const selected=variant ?? ((x * 37 + y * 17) % tile.variants.length);
         const clip = tile.variants[selected];
         if (!clip) throw Error(`Unknown variant for ${tileId}`);
-        const physics = layer.collidable ? tile.physics : { ...tile.physics, mode: 'none' };
+        const definition=tile.variantPhysics[selected]??tile.physics;
+        const physics = layer.collidable ? definition : { ...definition, mode: 'none' };
         const gates=conditions(layer,project.tiles[tileId]);
         const host=tile.hosts[selected];
         const dynamic = host || gates.length>0 || !['static','none'].includes(physics.mode);
@@ -711,7 +715,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     return encodePng(width, height, data);
   }
   const tilePreviews = Object.fromEntries(Object.entries(tiles).map(([id, tile]) =>
-    [id, { mode: tile.physics.mode, variants: tile.variants.map(clip => thumbnail(clip[0])) }]));
+    [id, { mode: tile.physics.mode, variantModes: tile.variants.map((_,index)=>tile.variantPhysics[index]?.mode??tile.physics.mode),
+      variants: tile.variants.map(clip => thumbnail(clip[0])) }]));
   const spritePreviews = Object.fromEntries(Object.entries(sprites).filter(([id])=>!id.startsWith('@')).map(([id, sprite]) =>
     [id, thumbnail((sprite.clips[sprite.animation] ?? sprite.clips.default).frames[0])]));
   const coverArt=await compileCover(project.coverImage,project.coverCrop,read);

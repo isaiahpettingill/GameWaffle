@@ -13,7 +13,7 @@ export function initialScript(actor){
   if(actor?.team!=null)init.push({op:'set_entity_team',entity:self,team:actor.team});
   if(actor?.emitter)init.push({op:'set_emitter',effect:actor.emitter.effect,rate:actor.emitter.rate,
     x:actor.emitter.offset?.[0]??0,y:actor.emitter.offset?.[1]??0});
-  if(init.length)events.init=init;
+  events.init=[{op:'init_properties',body:init}];
   if(actor?.scriptGravity&&actor.gravityMode!=='room')events.tick=[{op:'apply_gravity',modifier:null}];
   return {events};
 }

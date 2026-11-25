@@ -6,6 +6,7 @@ import {installBlockSelection} from './block-selection.js';
 import {branchBody,branchCondition} from './conditional-block.js';
 import { Events, Blocks, buttons, inputEvent, receivedEvent, timerEvent, controllerEvent, messageInputs, entityQueries, reporters, roomCommands, gradientCommands, gameCommands, tileCommands, drawingCommands, collectionCommands, commandScopeError, valueInput } from '../src/schema.mjs';
 import {roomShaders} from '../src/room-shaders.mjs';
+import {initScope,initialPhysicsFields,physicsModes} from '../src/init-properties.mjs';
 import { conditionalBranches, constantType, parseParameters, variableName } from '../src/script.mjs';
 import {callArguments, callBlock, definitionBlock, enclosingRoutine, registerRoutineBlocks, routineParameters, routineSignature} from './routine-blocks.js';
 import { argumentInput, logicDefinitions, logicStatements, collectionReporterType, collectionReporters, reporterBlock, reporterBlockType, readValue, slot, queryPicker, referenceSlot, roomReadings } from './logic-blocks.js';
@@ -45,6 +46,7 @@ const tileEvents = worldEvents;
 const eventBlock = 'waffle_event', worldHat = 'waffle_world_event', roomHat='waffle_room_event', inputHat = 'waffle_input_event', receivedHat='waffle_received_event';
 const tileHat='waffle_tile_event',timerHat='waffle_timer',controllerHat='waffle_controller_event';
 const legacyResourceDeclaration='waffle_legacy_resource_declaration';
+const initConnections=['waffle','waffle_init_properties'];
 const conditionShape = new Blockly.zelos.ConstantProvider().SHAPES.HEXAGONAL;
 const logic = Object.fromEntries(logicDefinitions(conditionShape).map(spec=>[spec.type,spec]));
 const commandType = id => 'waffle_'+id+(messageInputs[id]?'_text':'');
@@ -105,9 +107,17 @@ Blockly.defineBlocksWithJsonArray([
   ...Object.keys(messageInputs).map(id=>blockDefinition(id,true)),
   ...Object.values(logic).filter(spec=>!['waffle_call','waffle_function_call','waffle_param'].includes(spec.type)),
   {type:'waffle_tick',message0:'On tick',nextStatement:'waffle',style:'events',tooltip:'Run this stack on each simulation tick.'},
-  {type:'waffle_init',message0:'On init',nextStatement:'waffle',style:'events'},
+  {type:'waffle_init',message0:'On init',nextStatement:initConnections,style:'events'},
   {type:'waffle_clone_start',message0:'When cloned',nextStatement:'waffle',style:'events'},
-  {type:'waffle_game_startup',message0:'On game startup',nextStatement:'waffle',style:'events'},
+  {type:'waffle_game_startup',message0:'On game startup',nextStatement:initConnections,style:'events'},
+  {type:'waffle_init_body',message0:'Initial body: %1',style:'events',previousStatement:'waffle',nextStatement:'waffle',
+    tooltip:'The compiler creates the body with this mode.',
+    args0:[{type:'field_dropdown',name:'mode',options:physicsModes.map(mode=>[mode.replaceAll('_',' '),mode])}]},
+  {type:'waffle_init_property',message0:'Initial %1 = %2',style:'events',previousStatement:'waffle',nextStatement:'waffle',
+    tooltip:'Use a literal. The compiler bakes this value into the body.',args0:[
+      {type:'field_dropdown',name:'name',options:Object.entries(initialPhysicsFields).map(([key,label])=>[label,key])},
+      {type:'input_value',name:'value',check:'WafflePhysicsLiteral'},
+    ]},
   {type:'waffle_declare',message0:'Declare %1 %2 = %3',style:'variables',args0:[
     {type:'field_dropdown',name:'kind',options:[['global','globals'],['flag','flags'],['event','events'],['constant','constants']]},
     {type:'field_input',name:'name',text:'score'}, {type:'input_value',name:'value',check:'WaffleValue'},
@@ -156,6 +166,13 @@ const eventMenu=data=>menu('event',()=>data.events,'Choose event',()=>data.event
 function registry(block) {
   return registries.get(block.workspace.targetWorkspace??block.workspace)??{items:[],actions:buttons,sprites:[],animations:['default'],keys:[],menus:[],events:[],fonts:[],names:[],components:[],fields:[],rooms:[],tiles:[],sounds:[],flags:[],backgrounds:[]};
 }
+Blockly.Blocks.waffle_init_properties={init(){
+  const scope=initScope(registry(this));
+  this.jsonInit({type:'waffle_init_properties',message0:'Init '+scope+' properties %1',style:'events',
+    tooltip:'Configure the starting properties for this '+scope+'.',
+    args0:[{type:'input_statement',name:'body',check:'waffle'}],
+    previousStatement:'waffle_init_properties',nextStatement:'waffle'});
+}};
 for(const [name,[style,message0,result,parameters]] of Object.entries(reporters)){
   const type=reporterBlockType(name);
   const tileContact=name.startsWith('tile.');
@@ -396,9 +413,12 @@ const category = (style,contents) => ({kind:'category',name:groups[style].name,c
 const toolbox = (isRoom,isGame=false,isTile=false,isModule=false) => {
   const scope=isModule?null:{roomScript:isRoom,gameScript:isGame,tileScript:isTile};
   const picks=style=>commands(style,scope);
+  const init=hat=>({...block(hat),next:{block:{type:'waffle_init_properties'}}});
   return [
-  ...(!isModule?[category('events',[...(isGame?[block('game_startup'),block('controller_event'),block('bind_input'),block('input_binding'),block('define_menu'),block('menu_option')]:[]),
-    block(isTile?'tile_event':isRoom?'room_event':'world_event'),block('init'),block('tick'),block('timer'),block('received_event'),...picks('events'),
+  ...(!isModule?[category('events',[...(isGame?[init('game_startup'),block('controller_event'),block('bind_input'),block('input_binding'),block('define_menu'),block('menu_option')]:[]),
+    block(isTile?'tile_event':isRoom?'room_event':'world_event'),init('init'),block('init_properties'),
+    ...(!isRoom&&!isGame?[block('init_body',{mode:'static'}),block('init_property',{name:'density'},{value:1})]:[]),
+    block('tick'),block('timer'),block('received_event'),...picks('events'),
     ...(!isRoom&&!isTile?[block('clone_start')]:[]),
     block('input_event',{action:'a',edge:'pressed'})])]:[category('events',picks('events'))]),
   category('control',[{...block('if',null,{condition:false}),extraState:{otherwise:false}},block('if',null,{condition:false}),
@@ -814,9 +834,14 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
       }
       const inputs = {}, fields = {};
       let extraState;
+      let type=commandType(op);
       const value = (key,fallback)=>{inputs[key]=encodeValue(data[key]===undefined?fallback:data[key],fallback);};
       const stack = key=>{const block=encodeStack(data[key]??[]);if(block)inputs[key]={block};};
-      if(op==='apply_shaders'){
+      if(op==='init_properties')stack('body');
+      else if(op==='init_property'){
+        if(data.name==='mode'){type='waffle_init_body';fields.mode=data.value;}
+        else{fields.name=data.name;value('value',1);}
+      }else if(op==='apply_shaders'){
         Object.assign(inputs,encodeShaderPipeline({passes:data.passes},registryData.shaders,encodeValue));
       }else if (logicStatements.has(op)) {
         if (op==='set' || op==='change') {
@@ -846,7 +871,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
           else fields[key]=data[key]??fallback;
         }
       } else continue;
-      next = {type:commandType(op),fields,inputs,...(extraState?{extraState}:{}),...(next ? {next:{block:next}} : {})};
+      next = {type,fields,inputs,...(extraState?{extraState}:{}),...(next ? {next:{block:next}} : {})};
     }
     return next;
   }
@@ -859,7 +884,10 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
       const field=key=>block.getFieldValue(key);
       const value=(key,fallback)=>block.getInputTargetBlock(key) ? readValue(block.getInputTargetBlock(key)) : fallback;
       const stack=key=>decodeStack(block.getInputTargetBlock(key));
-      if(op==='apply_shaders')result.push(decodeShaderPipeline(block,registryData.shaders));
+      if(op==='init_properties')result.push({op,body:stack('body')});
+      else if(op==='init_body')result.push({op:'init_property',name:'mode',value:field('mode')});
+      else if(op==='init_property')result.push({op,name:field('name'),value:value('value',1)});
+      else if(op==='apply_shaders')result.push(decodeShaderPipeline(block,registryData.shaders));
       else if(op==='call')result.push({op,name:field('name'),args:callArguments(block)});
       else if (op==='set' || op==='change') result.push({op,scope:field('scope'),name:field('name'),value:value('value',variableDefault(field('scope'),op==='change'?1:0))});
       else if (op==='wait') result.push({op,ticks:value('ticks',1)});
