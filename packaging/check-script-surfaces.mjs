@@ -20,7 +20,7 @@ const project={name:'Script surfaces',tileSize:24,start:'yard',
 };
 const kernel=Array.from({length:9},()=> ' * 1.02 - 0.01').reduce((body,op)=>'('+body+op+')','global_real.energy');
 const game=parseScript(`object effect
-  strength: real = 1.5
+  strength: real = 1
 end
 object item
   amount: integer = 1
@@ -50,7 +50,9 @@ menu pause = "Pause", "Resume"
 on init
   inventory_append("backpack", "item")
   inventory_create_child("backpack", 1, "enchantment")
-  inventory_set("backpack", 1, "enchantment.strength", 2.0)
+  global_real.initial_strength = inventory.get("backpack", 1, "enchantment.strength")
+  inventory_set("backpack", 1, "enchantment.strength", 2)
+  global_real.updated_strength = inventory.get("backpack", 1, "enchantment.strength")
   inventory_set("game", 1, "amount", 8)
   inventory_set("players", 2, "ready", true)
   inventory_set("game", 1, "globals.score", 2)
@@ -244,6 +246,8 @@ assert.equal(current.actors.find(actor=>actor.name==='Spare').player,1);
 for(let i=0;i<85;i++)current=frame(0);
 const saved=decodeSave(runtime.save_game());
 assert.equal(saved.globals.score,'3');
+assert.equal(saved.globals['real.initial_strength'],'1');
+assert.equal(saved.globals['real.updated_strength'],'2');
 assert.equal(saved.globals.connections,'1');
 assert.ok(runtime.jit_executions()>0,'WebAssembly ran a generated numeric kernel');
 const interpreted=Runtime.from_cartridge(pack(cartridge));

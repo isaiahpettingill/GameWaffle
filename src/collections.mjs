@@ -19,7 +19,10 @@ export function validateCollections(input={}){
     for(const [name,field] of Object.entries(fields)){
       if(!variableName(name)||typeof field?.type!=='string')throw Error('Invalid property on '+id);
       if(scalarTypes.includes(field.type)){
-        if(Object.hasOwn(field,'default')&&constantType(field.default)!==field.type)throw Error(`Default for ${id}.${name} must be ${field.type}`);
+        if(Object.hasOwn(field,'default')){
+          const type=constantType(field.default);
+          if(type!==field.type&&!(field.type==='real'&&type==='integer'))throw Error(`Default for ${id}.${name} must be ${field.type}`);
+        }
       }else{
         if(Object.hasOwn(field,'default'))throw Error('Object properties are created through their inventory paths');
         height=Math.max(height,1+visit(field.type));

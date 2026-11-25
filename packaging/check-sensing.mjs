@@ -177,15 +177,21 @@ console.log('Passed viewport geometry, tile contact, Unicode text, numeric repor
 const pixelProject={name:'Pixel physics',start:'room',tileSize:24,physicsUnits:'pixels',
   sprites:{body:{source:'assets/sprites/key.png',width:8,height:8,physics:{mode:'dynamic',mass:64}}},
   rooms:{room:{cols:16,rows:12,gravity:384,entities:[{sprite:'body',name:'Mover',player:0,x:108,y:108}]}}};
-const pixelScript=parseScript(`on tick
+const pixelScript=parseScript(`def half(speed: real)
+  return speed / 2
+end
+on tick
   global.vx = entity.vx
   global_real.vx = entity.vx(entity.id)
+  global_real.vy = entity.vy_real
   global_real.mass = entity.mass
   global_real.target_mass = entity.mass(entity.id)
   global_real.gravity = physics.gravity()
 end
 on a
-  entity_velocity(entity.id, 48, 0)
+  local_real.limit = 48
+  velocity(math.clamp(50.25, -48, local_real.limit), -3.5)
+  entity_velocity(entity.id, entity.vx_real + half(1), entity.vy_real)
   impulse(640, 0)
   push_entity(entity.id, 640, 0)
   force(3840, 0)
@@ -199,7 +205,7 @@ pixelRuntime.advance_buttons(16,1);
 pixelRuntime.advance_buttons(0,1);
 const pixelGlobals=decodeSave(pixelRuntime.save_game()).globals;
 assert.equal(pixelGlobals.vx,'70');
-for(const [key,value] of Object.entries({'real.vx':70,'real.mass':64,'real.target_mass':64,'real.gravity':120}))
-  assert.ok(Math.abs(Number(pixelGlobals[key])-value)<.001,key);
+for(const [key,value] of Object.entries({'real.vx':70.5,'real.vy':-1.5,'real.mass':64,'real.target_mass':64,'real.gravity':120}))
+  assert.ok(Math.abs(Number(pixelGlobals[key])-value)<.001,`${key}: expected ${value}, got ${pixelGlobals[key]}`);
 pixelRuntime.free();
 console.log('Passed pixel gravity, velocity, mass, force, and impulse checks');

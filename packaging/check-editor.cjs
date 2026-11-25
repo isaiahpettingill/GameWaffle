@@ -587,6 +587,7 @@ for(const width of [1280,800,390,320]){
     await page.getByRole('button',{name:'Text',exact:true}).click();
     const typedCode=`on tick
   local.target = entity.find("maker")
+  velocity(17, 1)
   local_real.speed = math.sin(30.0)
   local_bool.run = local_real.speed > 0.0
   if local_bool.run
@@ -610,6 +611,11 @@ end
     await search.fill('runner');
     await search.press('Enter');
     await page.waitForFunction(async()=> (await(await fetch('./api/script/pilot')).json()).events?.tick?.some(row=>row.value?.call==='entity.find'&&row.value.args[0]==='runner'));
+    await page.locator('.blocklyBlockCanvas').getByText('17',{exact:true}).click();
+    const inlineNumber=page.locator('.blocklyHtmlInput');
+    await inlineNumber.fill('0.75');
+    await inlineNumber.press('Enter');
+    await page.waitForFunction(async()=> (await(await fetch('./api/script/pilot')).json()).events?.tick?.some(row=>row.op==='velocity'&&row.x?.real===0.75));
 
 
   }

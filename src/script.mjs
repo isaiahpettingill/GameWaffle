@@ -193,13 +193,18 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
     }
     const requireType = (actual, expected, context, target) => {
       if (actual===expected) return;
+      if (expected==='real' && actual==='integer') {
+        promoteReal(target);
+        return;
+      }
       if (expected==='boolean' && (actual==='integer'||actual==='real')) {
         const zero=target+1;
         expression(actual==='real'?{real:0}:0,zero,0);
         emit(commands.calc,target,operations.indexOf('not_equal'),target,zero);
         return;
       }
-      throw Error(context+' requires '+(expected==='integer'?'an ':'a ')+expected+' value');
+      const hint=expected==='integer'&&actual==='real'?'. Use an explicit conversion such as math.to_integer.':'';
+      throw Error(context+' requires '+(expected==='integer'?'an ':'a ')+expected+' value'+hint);
     };
     function checkArgument(value,type,name,depth) {
       const node=current;
@@ -249,8 +254,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
               if(!isNumeric(actual))throw Error(value.call+' requires numeric values');
               if(actual==='integer')integerRegisters.push(register);
               if(actual==='real'||numeric===undefined)numeric=actual;
-            }else if(type==='real'&&actual==='integer')promoteReal(register);
-            else requireType(actual,Array.isArray(type)||type==='tile'?'string':type==='entity'?'integer':type,value.call,register);
+            }else requireType(actual,Array.isArray(type)||type==='tile'?'string':type==='entity'?'integer':type,value.call,register);
           }
           if(numeric==='real')for(const register of integerRegisters)promoteReal(register);
           emit(Opcodes.reporter,target,reporterCodes.indexOf(value.call),...Array.from({length:3},(_,i)=>word(params[i]?target+i:target)).flat());
@@ -378,12 +382,11 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
       }
       const boolean = logic.includes(name);
       if(toInteger.includes(name)&&type==='integer')return 'integer';
-      if(realMath.includes(name)&&type==='integer'){
-        promoteReal(target);
+      if (boolean) requireType(type,'boolean',name,target);
+      else if (realMath.includes(name) || toInteger.includes(name)) {
+        requireType(type,'real',name,target);
         type='real';
       }
-      if (boolean) requireType(type,'boolean',name,target);
-      else if (realMath.includes(name) || toInteger.includes(name)) requireType(type,'real',name);
       else if (!equality && !isNumeric(type) && !(type==='string' && name==='add')) {
         throw Error(name+' requires numeric operands'+(name==='add'?' or two strings':''));
       }

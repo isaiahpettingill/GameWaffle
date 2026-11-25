@@ -428,9 +428,9 @@ const commands = (style,scope,pixelUnits) => (groups[style].commands??[])
   kind:'block',type:commandType(id),
   fields:Object.fromEntries(Blocks[id][1].filter(([,type])=>Array.isArray(type)).map(([key,,fallback])=>[key,fallback])),
   inputs:Object.fromEntries(Blocks[id][1].filter(([name,type])=>valueInput(type)||name===messageInputs[id])
-    .map(([key,,value,optional])=>[key,key==='entity'?id==='clone_entity'&&!scope?.roomScript?slot(value):namedEntitySlot()
+    .map(([key,type,value,optional])=>[key,key==='entity'?id==='clone_entity'&&!scope?.roomScript?slot(value):namedEntitySlot()
       :id==='follow_player'?{shadow:playerShadow(value)}
-      :colorInput(id,key)?colorSlot(value):slot(optional?null:physicsArgumentDefault(id,key,value,pixelUnits))])),
+      :colorInput(id,key)?colorSlot(value):(type==='number'?numericSlot:slot)(optional?null:physicsArgumentDefault(id,key,value,pixelUnits))])),
 }));
 const category = (style,contents) => ({kind:'category',name:groups[style].name,colour:groups[style].color,contents});
 const toolbox = (isRoom,isGame=false,isTile=false,isModule=false,pixelUnits=false) => {
@@ -852,7 +852,10 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
       const inputs = {}, fields = {};
       let extraState;
       let type=commandType(op);
-      const value = (key,fallback)=>{inputs[key]=encodeValue(data[key]===undefined?fallback:data[key],fallback);};
+      const value = (key,fallback,type)=>{
+        const input=data[key]===undefined?fallback:data[key];
+        inputs[key]=type==='number'?numericSlot(input,fallback,importsDuringLoad):encodeValue(input,fallback);
+      };
       const stack = key=>{const block=encodeStack(data[key]??[]);if(block)inputs[key]={block};};
       if(op==='init_properties')stack('body');
       else if(op==='init_property'){
@@ -885,7 +888,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
           if(op==='follow_player' && typeof (data[key]??fallback)==='number')inputs[key]={shadow:playerShadow(data[key]??fallback)};
           else if(colorInput(op,key)&&typeof (data[key]??fallback)==='string'&&/^#[0-9a-f]{6}$/i.test(data[key]??fallback))
             inputs[key]=colorSlot(data[key]??fallback);
-          else if (valueInput(type) || key===messageInputs[op]) value(key,optional?null:initial);
+          else if (valueInput(type) || key===messageInputs[op]) value(key,optional?null:initial,type);
           else fields[key]=data[key]??fallback;
         }
       } else continue;

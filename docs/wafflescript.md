@@ -244,9 +244,11 @@ with `==`, `!=`, `<`, `<=`, `>`, or `>=`. Use `+` to join two strings.
 Integer division truncates toward zero. Real division keeps the fraction.
 Arithmetic, comparisons, and functions such as `math.clamp` accept mixed
 numeric operands. An operation with a real operand uses real precision, so
-`5 / 2.0` gives `2.5`. Use `math.to_real` to convert an integer explicitly, or
-`math.floor`, `math.ceil`, `math.round`, and `math.trunc` to produce integers.
-`math.to_integer` also accepts booleans. Use an integer count for `repeat` and `wait`.
+`5 / 2.0` gives `2.5`. Real variables and inputs accept integers automatically.
+For integer variables and inputs, convert reals explicitly with `math.to_integer`,
+`math.floor`, `math.ceil`, `math.round`, or `math.trunc`. `math.to_real` explicitly
+promotes a value for arithmetic. `math.to_integer` also accepts booleans.
+Use an integer count for `repeat` and `wait`.
 
 The **Math & logic** palette includes absolute value, min/max, square root, power,
 natural log, exponential, sine, cosine, tangent, and inverse trig.

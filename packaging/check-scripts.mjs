@@ -47,8 +47,18 @@ const typedSource=`
 def label(visible: boolean, name: string)
   return name + "!"
 end
+def half(amount: real)
+  return amount / 2
+end
+proc set_speed(amount: real)
+  set_entity_real(entity.id, "speed", amount)
+end
 on tick
-  local_real.angle = 45.0
+  local_real.angle = 45
+  local_real.speed = half(3)
+  set_speed(1)
+  velocity(math.clamp(local_real.speed, -2, 2), 0.75)
+  entity_velocity(entity.id, 1.25, 0)
   local_bool.active = math.cos(local_real.angle) > 0.5
   local_string.title = label(local_bool.active, text.greeting)
   if local_bool.active
@@ -62,10 +72,11 @@ const typed=parseScript(typedSource);
 assert.deepEqual(compileScript(parseScript(formatScript(typed))),compileScript(typed));
 for(const [body, expected] of [
   ['local.angle = 1.0',/requires an integer/],
-  ['local_real.angle = 1',/requires a real/],
+  ['local_real.angle = true',/requires a real/],
   ['local_bool.enabled = "yes"',/requires a boolean/],
   ['local_string.message = true',/requires a string/],
-  ['local.foo = 1 + 1.0',/Variable foo requires an integer/],
+  ['local.foo = math.clamp(1, 0, 2.0)',/Variable foo requires an integer.*math.to_integer/],
+  ['entity_velocity(1.5, 1.25, 0)',/entity requires an integer/],
   ['local_real.foo = math.clamp(1, "low", 2.5)',/requires numeric values/],
   ['local_real.foo = 1.5 + "2"',/requires a real/],
   ['local.foo = math.random_integer(1.5, 2)',/requires an integer/],
