@@ -549,7 +549,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
               requireType(expression(value,index,depth+1),'string',message);
               return index;
             }
-            if (['field','component'].includes(key) && !variableName(value))throw Error('Use a valid '+key+' name');
+            if (['field','component'].includes(key) && !variableName(value))throw Error('Use a valid '+(key==='component'?'tag':key)+' name');
             if (type === 'text' && typeof value === 'string' && value.length <= 96) return intern(names,value);
             if (Array.isArray(type) && type.includes(value)) return intern(names,value);
             throw Error(`Invalid block value for ${key}`);

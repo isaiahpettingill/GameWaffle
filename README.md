@@ -47,7 +47,7 @@ On macOS, use Command in place of Ctrl.
 
 Add an entity once. Add as many instances of that definition as necessary. Instances use the same art and script. Each instance has its own name, position, and game state.
 
-Select an instance on the map or in the **Instances** panel. Set its player slot if it needs player controls. Open **Instance overrides** to change its starting health, animation, draw layer, or facing. Leave a field empty to use the definition value where applicable. Select **Open entity** or **Open script** to make a change for all instances.
+Select a placed entity on the map or in **Placed entities**. Set its position and controller assignment there. Expand **Starting values** to change its starting health, animation, draw layer, or facing. Leave a field empty to use the type’s default. Use **Edit type** or **Open script** to change what all placements share.
 
 To create an instance during play, use **Create instance of** in a Blockly script. Select the entity. Set the X and Y offsets in pixels from the instance that runs the block. The new instance runs the **Start** event before its first physics step.
 
@@ -282,6 +282,8 @@ The runtime uses [Rapier2D](https://rapier.rs/) with four-lane SIMD, enhanced de
 
 Open **Assets** to browse thumbnails, sort by name or type, and filter by tags. Click a sprite to open its entity. Use the row’s details button to rename the file in the library or edit its tags. Press Enter after typing a tag to add it. To import a file, drop it on the library or select **Load asset…** and choose its type. Studio reuses an identical source file and gives different files separate paths. Existing entities and tiles keep their IDs. A PNG supplies one frame.
 
+Use **Open in default editor** on an `.aseprite` or `.ase` asset to open it in the system’s associated app, such as Aseprite or LibreSprite. Save the same file in that app and Studio reloads it automatically. Keep Studio open while editing. For a `.waffleproj` archive, Studio opens a temporary copy and writes saved changes back into the archive.
+
 Open **Tools → Updates** to check Studio and the desktop runtime. Studio detects the installed versions and the host platform.
 
 Select **File → Export… → Editable project** to copy the project to a single `.waffleproj` file. Studio keeps its files in a virtual filesystem. A save replaces the archive. Use this command to open an archive or a folder after you build Studio.
@@ -450,7 +452,7 @@ In the **Game script**, use an **Input action** block with **Bind to** blocks fr
 
 ## Entity clones
 
-Use **Clone entity** in **Entities** to copy a live instance. The new entity receives an independent copy of its local variables, along with its current position, motion, appearance, health, and components. It starts without a player assignment or a room instance name.
+Use **Clone entity** in **Entities** to copy a live instance. The new entity receives an independent copy of its local variables, along with its current position, motion, appearance, health, and tags. It starts without a player assignment or a room instance name.
 
 Use **When cloned** in **Events** to set up a clone before its first tick. Use **Delete this clone** to end its current script and remove it. Clones are saved with the active room and cleared when you leave it. Use `entity.last_clone` for the result of your last attempt, or `0` if creation failed.
 

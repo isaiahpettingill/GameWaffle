@@ -71,8 +71,8 @@ const statementLabels={
   set_health_bar:'Show health bar %1\nfill %2 · background %3',
   push_entity:'Push %1\nwith impulse X %2 Y %3',
   fire_projectile:'Fire %1 toward %2\nat speed %3 with %4 damage',
-  add_component:'On %1\nadd component %2',
-  remove_component:'On %1\nremove component %2',
+  add_component:'On %1\nadd tag %2',
+  remove_component:'On %1\nremove tag %2',
   damage_entity:'Damage %1\nby %2',
   set_respawn:'Respawn %1\n%2 · delay %3 ticks',
   respawn_when:'Respawn %1\nwhen %2 is %3',
@@ -328,7 +328,7 @@ function readGameConfiguration(blocks,strict=false){
   }
   return {controls,menus};
 }
-const dynamicFields = {image:['backgrounds','Choose background'],font:['fonts','HUD font'],event:['events','Choose event'],projectile:['sprites','Choose projectile'],sprite:['sprites','Choose an entity type'],item:['items','Register an item'],tag:['animations','Add an animation'],menu:['menus','Create a menu'],room:['rooms','Choose room'],sound:['sounds','Choose sound'],component:['components','Choose component'],field:['fields','Choose field'],flag:['flags','Any flag state']};
+const dynamicFields = {image:['backgrounds','Choose background'],font:['fonts','HUD font'],event:['events','Choose event'],projectile:['sprites','Choose projectile'],sprite:['sprites','Choose an entity type'],item:['items','Register an item'],tag:['animations','Add an animation'],menu:['menus','Create a menu'],room:['rooms','Choose room'],sound:['sounds','Choose sound'],component:['components','Choose tag'],field:['fields','Choose field'],flag:['flags','Any flag state']};
 for(const [id,[,fields]] of Object.entries(Blocks)){
   if(!fields.some(([key])=>Object.hasOwn(dynamicFields,key)||collectionFields.has(key)))continue;
   Blockly.Blocks['waffle_'+id]={init(){
@@ -351,7 +351,7 @@ for(const [id,field,list,empty] of [
   ['action','action','actions','Select action'],['item','item','items','Register an item'],
   ['item_key','item','items','Register an item'],
   ['instance_ref','value','names','Choose entity'],
-  ['component_ref','value','components','Choose component'],
+  ['component_ref','value','components','Choose tag'],
   ['entity_field_ref','value','fields','Choose field'],
 ]){
   Blockly.Blocks['waffle_'+id]={init(){

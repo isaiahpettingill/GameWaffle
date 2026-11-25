@@ -11,7 +11,7 @@
 </script>
 <div class="respawn-settings">
   <label>Respawn
-    <select value={mode} onchange={event=>select(event.currentTarget.value)}>
+    <select aria-label="Respawn" value={mode} onchange={event=>select(event.currentTarget.value)}>
       {#if inherit}<option value="inherit">Entity default ({names[inheritedRule?.mode??'default']})</option>{/if}
       <option value="default">Standard behavior</option>
       <option value="never">Never</option>

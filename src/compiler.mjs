@@ -260,7 +260,7 @@ export async function previewTiles(tiles,size,read) {
 function components(value) {
   if(value==null)return [];
   if(!Array.isArray(value) || value.length>32 || value.some(name=>!variableName(name)))
-    throw Error('Use up to 32 component names with letters, numbers, and underscores');
+    throw Error('Use up to 32 entity tag names with letters, numbers, and underscores');
   return [...new Set(value)];
 }
 

@@ -78,8 +78,8 @@ export const Blocks = {
   emit_for:['Emit %1 at %2 per second for %3 ticks',[['effect',effects,'smoke'],['rate','number',18],['ticks','integer',60]]],
   burst_at:['Burst %1 at X %2 Y %3 offset',[['effect',effects,'sparks'],['x','number',0],['y','number',0]]],
   set_respawn:['Set entity %1 respawn to %2, delay %3 ticks',[['entity','number',0],['mode',['default','never','on_entry','delay'],'on_entry'],['ticks','integer',60]]],
-  add_component:['Add component %2 to entity %1',[['entity','number',0],['component','text','enemy']]],
-  remove_component:['Remove component %2 from entity %1',[['entity','number',0],['component','text','enemy']]],
+  add_component:['Add tag %2 to entity %1',[['entity','number',0],['component','text','enemy']]],
+  remove_component:['Remove tag %2 from entity %1',[['entity','number',0],['component','text','enemy']]],
   set_entity_integer:['Set entity %1 integer %2 to %3',[['entity','number',0],['field','text','score'],['value','integer',0]]],
   set_entity_real:['Set entity %1 real %2 to %3',[['entity','number',0],['field','text','speed'],['value','real',{real:0}]]],
   set_entity_boolean:['Set entity %1 boolean %2 to %3',[['entity','number',0],['field','text','ready'],['value','boolean',false]]],
@@ -224,9 +224,9 @@ export const stringReadings=readingNames.filter(name=>actorReadings[name]==='str
 
 export const entityQueries = {
   find: ['Entity named %1','integer',[['string','enemy']]],
-  nearest: ['Nearest entity with %1 within %2 px','integer',[['string','enemy'],['number',96]]],
+  nearest: ['Nearest entity tagged %1 within %2 px','integer',[['string','enemy'],['number',96]]],
   exists: ['Entity %1 exists?','boolean',[['integer',0]]],
-  has: ['Entity %1 has component %2?','boolean',[['integer',0],['string','enemy']]],
+  has: ['Entity %1 has tag %2?','boolean',[['integer',0],['string','enemy']]],
   x: ['X position of entity %1','real',[['integer',0]]],
   y: ['Y position of entity %1','real',[['integer',0]]],
   vx: ['X velocity of entity %1','real',[['integer',0]]],

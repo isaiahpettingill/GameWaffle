@@ -2,7 +2,7 @@
 
 | Command | Block | Opcode |
 | --- | --- | --- |
-| `add_component(entity, component)` | Add component component to entity entity | 58 |
+| `add_component(entity, component)` | Add tag component to entity entity | 58 |
 | `animate(tag)` | Play animation tag | 7 |
 | `animate_once(tag)` | Play animation tag once | 55 |
 | `apply_gravity(modifier)` | Apply gravity with modifier modifier | 43 |
@@ -45,7 +45,7 @@
 | `move_entity(entity, x, y)` | Move entity entity by X x Y y | 51 |
 | `push_entity(entity, x, y)` | Push entity entity with impulse X x Y y | 90 |
 | `release_camera()` | Follow player 1 | 25 |
-| `remove_component(entity, component)` | Remove component component from entity entity | 59 |
+| `remove_component(entity, component)` | Remove tag component from entity entity | 59 |
 | `remove_entity(entity)` | Remove entity entity | 54 |
 | `remove_self()` | Remove this instance | 26 |
 | `reset_room_camera()` | Reset room camera | 81 |

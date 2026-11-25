@@ -6,9 +6,10 @@
   const tools={Rectangle:'rectangle',Circle:'circle',Pill:'pill'};
   let frame=$state(0),tool=$state('Rectangle'),shapes=$state(untrack(()=>({...entity.frameColliders})));
   let surface=$state(), drag=$state.raw(null),pending=$state.raw(null);
-  const {width,height,frames=1}=untrack(()=>art);
+  const width=$derived(art.width),height=$derived(art.height),frames=$derived(art.frames??1);
+  $effect(()=>{if(frame>=frames)frame=frames-1;});
   const placed=$derived(shapes[frame]??[]);
-  const url=$derived('./api/room-art?path='+encodeURIComponent(entity.source)+'&frame='+frame);
+  const url=$derived('./api/room-art?path='+encodeURIComponent(entity.source)+'&frame='+frame+'&revision='+art.revision);
 
   function point(event){
     const box=surface.getBoundingClientRect();

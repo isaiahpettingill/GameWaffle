@@ -1,14 +1,14 @@
 <script>
-  import {Upload, Search, Image, AudioLines, File, Code, Type, Plus, Ellipsis, ChevronUp, ChevronDown, ChevronLeft, ChevronRight} from '@lucide/svelte';
+  import {Upload, Search, Image, AudioLines, File, Code, Type, Plus, Ellipsis, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ExternalLink} from '@lucide/svelte';
   import Modal from './Modal.svelte';
   import GlyphGrid from './GlyphGrid.svelte';
   import SearchSelect from './SearchSelect.svelte';
   import CoverCrop from './CoverCrop.svelte';
   import TagInput from './TagInput.svelte';
   import {DEFAULT_COVER_CROP} from '../src/cover.mjs';
-  import {assetCatalog,assetKinds,assetLabels,tagList} from '../src/asset-types.mjs';
+  import {assetCatalog,assetKinds,assetLabels,editableArtFile,tagList} from '../src/asset-types.mjs';
 
-  let {project,files,shaderDefinitions,onUpload,onEdit,onOpen,onShader,previewFor=()=>'',fontTools,selectedPath='',initialKind='',shadersOnly=false}=$props();
+  let {project,files,shaderDefinitions,onUpload,onEdit,onOpen,onEditSource,onShader,previewFor=()=>'',fontTools,selectedPath='',initialKind='',shadersOnly=false}=$props();
   let query=$state(''), type=$state(''), tag=$state(''), selected=$state('');
   let sortBy=$state('name'), descending=$state(false), page=$state(0), details=$state.raw(null), destinations=$state.raw(null);
   let picker=$state(), dragging=$state(false), queue=$state.raw([]), file=$state.raw(null);
@@ -146,6 +146,10 @@
   </span>
 {/snippet}
 {#snippet actions(asset)}
+  {#if onEditSource&&editableArtFile.test(asset.path)}
+    <button type="button" class="icon-button asset-actions" aria-label={'Open '+asset.name+' in default editor'} title="Open in default editor"
+      onclick={()=>onEditSource(asset.path)}><ExternalLink size={16}/></button>
+  {/if}
   <button type="button" class="icon-button asset-actions" aria-label={'Edit details for '+asset.name} title="Edit name and tags" onclick={()=>edit(asset)}>
     <Ellipsis size={17}/>
   </button>
@@ -230,7 +234,7 @@
                   {/each}
                 </div>
               </td>
-              <td>{@render actions(asset)}</td>
+              <td><div class="asset-tools">{@render actions(asset)}</div></td>
             </tr>
           {/each}
         </tbody>
@@ -328,7 +332,8 @@
   .filter-search{display:flex;align-items:center;gap:.4rem;min-width:0}
   .filter-search input{width:100%;min-width:0}
   table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:.8rem}
-  .kind-column{width:20%}.tags-column{width:31%}.action-column{width:2.7rem}
+  .kind-column{width:20%}.tags-column{width:31%}.action-column{width:4.4rem}
+  .asset-tools{display:flex;justify-content:flex-end;gap:.1rem}
   td,th{overflow-wrap:anywhere;text-align:left;vertical-align:middle;border-bottom:1px solid var(--line)}
   td{padding:.25rem .4rem}
   td:first-child{padding:.15rem}

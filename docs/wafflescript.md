@@ -232,23 +232,23 @@ on tick
 end
 ```
 
-## Entities and components
+## Entity tags
 
 Use the searchable pickers in the **Entities** palette. Entity lookups take
-the selected instance name. Component lookups take the selected component
-name. Target sockets start with a searchable entity lookup and can also
+the selected instance name. Tag lookups take the selected tag name.
+Target sockets start with a searchable entity lookup and can also
 accept a computed result. Use **Game → Variables → Add entity field** to name
 a new field and make it available in the pickers. Older scripts can still use
 the actor prefix for entity readings.
 
-Add component names such as `enemy`, `patrol`, or `pickup` in
-**Entities → Appearance**. In **Room → Instances**, add components for an
-individual placement. Actors already have `transform`, `sprite`, and
-`health` components. Actors with physics, player input, or scripts also
-expose `body`, `player`, or `script`.
+Add tags such as `enemy`, `patrol`, or `pickup` in **Entities** to use them
+for every placement of that type. Add a tag in **Room → Placed entities**
+to use it on one placement. Scripts can also query built-in tags such as
+`transform`, `sprite`, and `health`. Actors with physics, player input, or
+scripts expose `body`, `player`, or `script` respectively.
 
 Open **Entities** in the block palette to find an entity by its instance name
-or find the nearest other entity with a component. Entity IDs are valid within
+or find the nearest other entity with a tag. Entity IDs are valid within
 the current room. A query returns 0 if it finds no match. Check an ID with
 `entity.exists` before using it later. Entity writes affect the selected
 entity’s typed local variables, so another entity can set a value your own script
@@ -276,8 +276,7 @@ configured repeats.
 
 ## Respawn rules
 
-In **Entities → Appearance**, set the default **Respawn** rule. Override it
-for a placed instance in **Room → Instances → Placement**. Use **Never** to
+Set **Respawn** for a single placement under **Room → Placed entities → Spawning and room visits**. Use **Never** to
 keep a defeated instance absent, **On room re-entry** to reset it when the
 player returns, or **After a delay** to respawn after a number of game ticks.
 A delayed respawn can also wait for a flag to reach a chosen value.

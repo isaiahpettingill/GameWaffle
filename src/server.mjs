@@ -1,5 +1,7 @@
 import {decodeWireFrame} from './frame.mjs';
 import {prepareAssetUpload} from './asset-upload.mjs';
+import {editableArtFile} from './asset-types.mjs';
+import {openAsset} from './open-asset.mjs';
 import {compileShaderGraph} from './compile-shader-graph.mjs';
 import {propertyAliases,validateCollections} from './collections.mjs';
 import {checkUpdate,update,exportDesktop,nativeTarget} from './desktop.mjs';
@@ -17,8 +19,9 @@ import {changeRoomView,initialRoomScript,roomScriptPath,roomSettingKeys} from '.
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { watch } from 'node:fs';
-import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
-import { dirname, extname, resolve } from 'node:path';
+import { readFile, writeFile, rename, mkdir, unlink, mkdtemp, realpath } from 'node:fs/promises';
+import { basename, dirname, extname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import { compileProject, previewTiles, previewRoomArt, inspectBitfont, discoverAssets, describeArt, projectPath } from './compiler.mjs';
@@ -134,6 +137,46 @@ async function recompile(project, scripts, save, sourceStore=store) {
     sourceError = '';
   } finally { simulation.free(); }
 }
+
+let archiveArtDirectory;
+const archiveArt = new Map();
+async function editableAsset(path) {
+  if(typeof path!=='string'||!editableArtFile.test(path)||!(await discoverAssets(root,store)).includes(path))
+    throw Error('Choose an Aseprite or LibreSprite source file from the project');
+  if(!store.archive){
+    const folder=await realpath(root);
+    const file=await realpath(projectPath(folder,path));
+    projectPath(folder,file);
+    if(!editableArtFile.test(file))throw Error('Choose an Aseprite or LibreSprite source file');
+    return file;
+  }
+  if(archiveArt.has(path))return archiveArt.get(path);
+  archiveArtDirectory??=await mkdtemp(join(tmpdir(),'gamewaffle-art-'));
+  const directory=await mkdtemp(join(archiveArtDirectory,'edit-'));
+  const file=join(directory,basename(path));
+  let saved=await store.read(path),timer;
+  await writeFile(file,saved,{flag:'wx'});
+  const report=error=>{sourceError=path+': '+error.message;};
+  const watcher=watch(directory,{persistent:false},(_,name)=>{
+    if(name!==basename(file))return;
+    clearTimeout(timer);
+    timer=setTimeout(()=>{
+      change(async()=>{
+        const data=await readFile(file);
+        if(saved.equals(data))return;
+        if(!(await store.read(path)).equals(saved))throw Error('The project also changed this asset. Your edit is still at '+file);
+        await recompile(undefined,undefined,()=>store.save([[path,data]]),{
+          ...store,read:(name,encoding)=>name===path?(encoding?data.toString(encoding):data):store.read(name,encoding),
+        });
+        saved=data;
+      }).catch(report);
+    },275);
+  });
+  watcher.on('error',report);
+  archiveArt.set(path,file);
+  return file;
+}
+
 async function exportBytes(url) {
   await mutation;
   const locale = url.searchParams.get('locale');
@@ -164,6 +207,14 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/lan.waffle') return send(res, 200, connections.size ? clientsCart : bytes, 'application/octet-stream');
     if (url.pathname.startsWith('/api/')) {
       if (cartFile || !local(req) || !sameSite(req)) return send(res, 403, {error:'The editor is available on the host computer'});
+      if(url.pathname==='/api/open-asset'&&req.method==='POST'){
+        const contentType=req.headers['content-type']?.split(';',1)[0].trim().toLowerCase();
+        if(!/^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(req.headers.host??'')||
+          contentType!=='application/json')return send(res,403,{error:'Open project art from local Studio'});
+        const {path}=await jsonBody(req,8192);
+        await openAsset(await change(()=>editableAsset(path)));
+        return send(res,200,{ok:true});
+      }
       if(url.pathname==='/api/file-history' && req.method==='POST'){
         const {id,back}=await jsonBody(req);
         const manifestChanged=await change(()=>history.restore(id,back===true,recompile));

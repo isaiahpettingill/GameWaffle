@@ -1,6 +1,6 @@
 <script>
   import productIcon from '../packaging/gamewaffle.svg?inline';
-  import {Network,Blocks,Images,Settings2,Play,DoorOpen as RoomIcon,Layers3,Search,SquareUserRound,Plus,Sparkles,Database} from '@lucide/svelte';
+  import {Network,Blocks,Images,Settings2,Play,DoorOpen as RoomIcon,Layers3,Search,SquareUserRound,Plus,Sparkles,Database,ExternalLink} from '@lucide/svelte';
   const viewIcons={world:Network,room:RoomIcon,actors:SquareUserRound,blocks:Blocks,assets:Images,shaders:Sparkles,resources:Database,game:Settings2};
   import { buttons, platformGravity } from '../src/schema.mjs';
   import {roomSettingKeys} from '../src/room-script.mjs';
@@ -9,7 +9,7 @@
   import PagedList from './PagedList.svelte';
   import AssetLibrary from './AssetLibrary.svelte';
   import ShaderWorkspace from './ShaderWorkspace.svelte';
-  import {tileAssetTitle} from '../src/asset-types.mjs';
+  import {editableArtFile,tileAssetTitle} from '../src/asset-types.mjs';
   let projectPath=$state(''),filter=$state(''),instanceFilter=$state('');
   import Sections from './Sections.svelte';
   import World from './World.svelte';
@@ -26,7 +26,7 @@
   import ResourceDialog from './ResourceDialog.svelte';
   import RoomDefaults from './RoomDefaults.svelte';
   import {resourceTables} from '../src/resource-tables.mjs';
-  import ComponentPicker from './ComponentPicker.svelte';
+  import EntityTags from './EntityTags.svelte';
   let bitfontsPanel=$state();
   import Bitfonts from './Bitfonts.svelte';
   import Modal from './Modal.svelte';
@@ -76,7 +76,7 @@
   let artFiles=$derived(assets.filter(file=>/\.(ase|aseprite|png)$/i.test(file)));
   let stageFilter=$state(''),placeAs=$state('');
   let nameDialog=$state.raw(null),newName=$state(''),resourceDialog=$state.raw(null);
-  let gameSettings=$state(''),returnToCodeTarget=false,instanceSection=$state('Placement'),mobilePane=$state('Editor');
+  let gameSettings=$state(''),returnToCodeTarget=false,mobilePane=$state('Editor');
   const tabs=[['world','World'],['room','Room'],['actors','Entities'],['blocks','Code'],['assets','Assets'],['shaders','Shaders'],['resources','Resources'],['game','Game']];
 
   const historyStatus=$derived.by(()=>{
@@ -96,16 +96,16 @@
   const textKeys=$derived(Object.keys(textEntries).sort());
   const gameControls=$derived(gameScript?.declarations?.controls??project?.controls??{});
   const gameMenus=$derived(gameScript?.declarations?.menus??project?.menus??{});
-  const componentLabels=$derived({
+  const entityTagLabels=$derived({
     ...Object.fromEntries([...Object.values(project?.sprites??{}).flatMap(type=>type.components??[]),
       ...Object.values(project?.rooms??{}).flatMap(room=>(room.entities??[]).flatMap(entity=>entity.components??[]))].map(id=>[id,id])),
     ...project?.components,
   });
   const collisionLayers=$derived(Array.from({length:16},(_,index)=>project?.collisionLayers?.[index]??(index===0?'Default':'Layer '+(index+1))));
-  function createComponent(label){
-    const existing=Object.keys(componentLabels).find(id=>componentLabels[id].toLowerCase()===label.toLowerCase());
+  function resolveEntityTag(label){
+    const existing=Object.keys(entityTagLabels).find(id=>entityTagLabels[id].toLowerCase()===label.toLowerCase());
     if(existing)return existing;
-    const id=resourceName(label,'component',[componentLabels,{transform:1,sprite:1,body:1,player:1,health:1,script:1}]);
+    const id=resourceName(label,'tag',[entityTagLabels,{transform:1,sprite:1,body:1,player:1,health:1,script:1}]);
     (project.components??={})[id]=label;
     return id;
   }
@@ -120,10 +120,10 @@
     createResource:openResourceDialog,
     editResource:openResourceEdit,
     names:[...new Set(Object.values(project?.rooms??{}).flatMap(room=>instanceNames(room.entities??[])))].sort(),
-    componentsLabels:componentLabels,
+    componentsLabels:entityTagLabels,
     spritesLabels:Object.fromEntries(Object.entries(project?.sprites??{}).map(([id,sprite])=>[id,sprite.title??id])),
     itemsLabels:Object.fromEntries(Object.entries(project?.items??{}).map(([id,item])=>[id,item.label?.startsWith('text.')?textEntries[item.label.slice(5)]??id:item.label??id])),
-    components:[...new Set(['transform','sprite','body','player','health','script',...Object.keys(componentLabels)])].sort(),
+    components:[...new Set(['transform','sprite','body','player','health','script',...Object.keys(entityTagLabels)])].sort(),
     fields:[...new Set(['health','label','ready','score','speed',...Object.keys(gameGlobals),...Object.keys(project?.entityFields??{})])],
     fieldsLabels:project?.entityFields??{},variableLabels:project?.variableLabels??{},
     rooms:Object.keys(project?.rooms??{}),
@@ -1067,11 +1067,23 @@
       if(innerWidth<=1100)mobilePane='Settings';
     }else if(link.kind==='font')bitfontsPanel?.open(link.id);
   }
+  async function editSourceFile(path){
+    error='';
+    try{await request('./api/open-asset','POST',{path});}
+    catch(err){error=err.message;}
+  }
   function set(target,key,value){
     if(value===''||value===undefined)delete target[key];else target[key]=value;
     mark();
   }
 </script>
+
+{#snippet editSource(path)}
+  {#if editableArtFile.test(path??'')}
+    <button type="button" class="icon-button" aria-label="Open source in default editor" title="Open source in default editor"
+      onclick={()=>editSourceFile(path)}><ExternalLink size={16}/></button>
+  {/if}
+{/snippet}
 
 <svelte:window onkeydown={saveShortcut} onclick={dismissMenu} onmessage={handlePlaytestMessage} />
 
@@ -1311,7 +1323,7 @@
           onTemplate={useShaderTemplate} onSaveShader={saveLibraryShader}/>
       {:else if tab==='assets'}
         <AssetLibrary bind:this={assetLibrary} {project} files={assets} {shaderDefinitions} initialKind={assetKind==='tile'?'tile':''}
-          previewFor={libraryPreview} onUpload={uploadLibraryAsset} onEdit={editLibraryAsset} onOpen={openLibraryAsset} onShader={openShaderWorkspace}>
+          previewFor={libraryPreview} onUpload={uploadLibraryAsset} onEdit={editLibraryAsset} onOpen={openLibraryAsset} onEditSource={editSourceFile} onShader={openShaderWorkspace}>
           {#snippet fontTools(visible)}
             <Bitfonts bind:this={bitfontsPanel} controlsVisible={visible} fonts={project.bitfonts??{}} active={project.activeBitfont??(project.font?'legacy':'builtin')}
               legacy={project.font} sources={assets} onImport={data=>{recordFile(data.edit,'font source import');if(!assets.includes(data.path))assets=[...assets,data.path].sort();}}
@@ -1331,17 +1343,24 @@
           </select></label>
           {#if spriteId}<button onclick={()=>openDefinition(spriteId,'blocks')}><Blocks size={15}/>Open script</button>{/if}</div>
           {#if inspector}
-              <label class="stack">Source <select value={inspector.source} onchange={e=>{
-                const previous=inspector.source;
-                if(previous!==e.currentTarget.value){
-                  delete inspector.animation;
-                  set(inspector,'source',e.currentTarget.value);
-                }
-              }}>
-                {#each artFiles as file}<option value={file}>{file}</option>{/each}
-              </select></label>
+              <div class="asset-source entity-art-source">
+                <label class="stack">Source file <select value={inspector.source} onchange={e=>{
+                  if(inspector.source!==e.currentTarget.value){
+                    delete inspector.animation;
+                    set(inspector,'source',e.currentTarget.value);
+                  }
+                }}>
+                  {#each artFiles as file}<option value={file}>{file}</option>{/each}
+                </select></label>
+                {@render editSource(inspector.source)}
+              </div>
                 <div class="record-form"><label>Player<select bind:value={placeAs}><option value="">Choose a player</option>{#each [0,1,2,3] as slot}<option disabled={room?.entities.some(e=>e.player===slot)} value={String(slot)}>Player {slot+1}</option>{/each}</select></label>
                 <button disabled={placeAs===''||!room||room.entities.some(e=>e.player===Number(placeAs))} onclick={()=>{placementSprite=spriteId;mapTool='spawn';openTab('room');}}>Place player in room</button></div>
+              {#key spriteId}
+                <EntityTags tags={entityTagLabels} selected={sprite.components??[]} resolveTag={resolveEntityTag} onChange={value=>set(sprite,'components',value)}/>
+              {/key}
+              <details class="entity-settings">
+                <summary>Spawning and room visits</summary>
                 <SearchSelect label="Spawn when flag" value={sprite.flag??''}
                   options={[{value:'',label:'Always'},...blockReferences.flags.map(value=>({value,label:value}))]}
                   onChange={value=>set(sprite,'flag',value)}/>
@@ -1351,7 +1370,7 @@
                   onchange={e=>set(sprite,'rememberState',e.currentTarget.checked)}> Remember state between room visits</label>
                 <label class="check"><input type="checkbox" checked={sprite.alwaysActive??false}
                   onchange={e=>set(sprite,'alwaysActive',e.currentTarget.checked)}> Run scripts off camera</label>
-                <ComponentPicker components={componentLabels} selected={sprite.components??[]} onCreate={createComponent} onChange={value=>set(sprite,'components',value)}/>
+              </details>
           {/if}
         </section>
       {/if}
@@ -1360,7 +1379,7 @@
     {#if hasInspector}<aside class="inspector card">
       {#if tab==='room' && room}
         <div class="panel-tabs row">
-          {#each [['layers','Layers'],['room','Room'],['instances','Instances']] as [id,label]}
+          {#each [['layers','Layers'],['room','Room'],['instances','Placed entities']] as [id,label]}
             <button class:selected={roomPanel===id} aria-pressed={roomPanel===id} onclick={()=>roomPanel=id}>{label}</button>
           {/each}
         </div>
@@ -1409,13 +1428,10 @@
             {#if room.layers.length>1}<button class="small-button remove" onclick={()=>{if(layer.cells.length)roomOperation='removeLayer';else removeLayer();}}>Remove layer</button>{/if}
           {/if}
         {:else}
-          <div class="heading row mini">
-            <h3>Room instances</h3>
-          </div>
-          {#if !room.entities.length}<p class="muted">Choose an entity type to place an instance.</p>{/if}
+          {#if !room.entities.length}<p class="muted">Use Place entity on the room toolbar to add one.</p>{/if}
           <div class="instance-list">
-            {#if room.entities.length>8}<input type="search" aria-label="Find instances" placeholder="Find instances" bind:value={instanceFilter}>{/if}
-            <PagedList items={Object.entries(room.entities)} text={entry=>(entry[1].name??'')+' '+entry[1].sprite} query={room.entities.length>8?instanceFilter:''} label="instances">{#snippet children([key,entity])}
+            {#if room.entities.length>8}<input type="search" aria-label="Find placed entities" placeholder="Find placed entities" bind:value={instanceFilter}>{/if}
+            <PagedList items={Object.entries(room.entities)} text={entry=>(entry[1].name??'')+' '+entry[1].sprite} query={room.entities.length>8?instanceFilter:''} label="placed entities">{#snippet children([key,entity])}
               {@const index=Number(key)}
               <button class="item" class:selected={selectedEntity===index} onclick={()=>{selectedEntity=index;mapTool='select';}}>
                 <span>{entity.name ?? entity.sprite}</span>{#if entity.player!=null}<small>Player {entity.player+1}</small>{/if}
@@ -1426,21 +1442,23 @@
             {@const definition=project.sprites[actor.sprite]}
             <div class="row instance-source">
               <small>Entity type: {actor.sprite}</small>
-              <button class="small-button" onclick={()=>openDefinition(actor.sprite)}>Open entity</button>
+              <button class="small-button" onclick={()=>openDefinition(actor.sprite)}>Edit type</button>
               <button class="small-button" onclick={()=>openDefinition(actor.sprite,'blocks')}>Open script</button>
             </div>
-            <label class="stack">Controlled by <select aria-label="Controlled by" value={actor.player==null ? '' : String(actor.player)} onchange={e=>changeActor('player',e.currentTarget.value)}>
-              <option value="">No player</option>{#each [0,1,2,3] as player}<option disabled={room.entities.some((entry,index)=>index!==selectedEntity&&entry.player===player)} value={String(player)}>Player {player+1}</option>{/each}
-            </select></label>
-            {#if actor.standardMovement}<button onclick={()=>changeActor('standardMovement',false)}>Disable legacy movement</button>{/if}
-            <Sections labels={['Placement','Lifecycle','Overrides']} bind:value={instanceSection}/>
-            {#if instanceSection==='Placement'}<label class="stack">Instance name <input maxlength="64" value={actor.name} onchange={e=>changeActor('name',e.currentTarget.value)}></label>
+            <label class="stack">Name in this room <input maxlength="64" value={actor.name} onchange={e=>changeActor('name',e.currentTarget.value)}></label>
             <div class="pair">
               <label class="stack">X position <input type="number" min="0" value={actor.x} onchange={e=>changeActor('x',e.currentTarget.valueAsNumber)}></label>
               <label class="stack">Y position <input type="number" min="0" value={actor.y} onchange={e=>changeActor('y',e.currentTarget.valueAsNumber)}></label>
             </div>
-
-            {:else if instanceSection==='Lifecycle'}
+            <label class="stack">Controlled by <select aria-label="Controlled by" value={actor.player==null ? '' : String(actor.player)} onchange={e=>changeActor('player',e.currentTarget.value)}>
+              <option value="">No player</option>{#each [0,1,2,3] as player}<option disabled={room.entities.some((entry,index)=>index!==selectedEntity&&entry.player===player)} value={String(player)}>Player {player+1}</option>{/each}
+            </select></label>
+            {#key actor.name}
+              <EntityTags tags={entityTagLabels} selected={actor.components??[]} inherited={definition?.components??[]}
+                resolveTag={resolveEntityTag} onChange={value=>changeActor('components',value)}/>
+            {/key}
+            <details class="entity-settings">
+              <summary>Spawning and room visits</summary>
               <RespawnSettings rule={actor.respawn} flags={blockReferences.flags} inherit inheritedRule={definition?.respawn}
                 onChange={value=>changeActor('respawn',value??'')}/>
               <label class="stack">State between room visits<select value={actor.rememberState==null?(actor.persistRemoval?'legacy':''):String(actor.rememberState)}
@@ -1454,14 +1472,14 @@
                 <option value="">Entity default ({definition?.rememberState?'remember':'reset'})</option>
                 <option value="true">Remember state</option><option value="false">Reset state</option>
               </select></label>
-              <SearchSelect label="Additional spawn flag" value={actor.flag??''}
-                options={[{value:'',label:'Use entity defaults'},...blockReferences.flags.map(value=>({value,label:value}))]}
+              <SearchSelect label="Also require flag to spawn" value={actor.flag??''}
+                options={[{value:'',label:'No extra flag'},...blockReferences.flags.map(value=>({value,label:value}))]}
                 onChange={value=>changeActor('flag',value)}/>
               {#if actor.flag}<label class="check"><input type="checkbox" checked={actor.when??true}
                 onchange={e=>changeActor('when',e.currentTarget.checked)}> Flag must be on</label>{/if}
-              <ComponentPicker components={componentLabels} selected={actor.components??[]} inherited={definition?.components??[]}
-                onCreate={createComponent} onChange={value=>changeActor('components',value)}/>
-            {:else}
+            </details>
+            <details class="entity-settings">
+              <summary>Starting values</summary>
               <div class="pair">
                 <label class="stack">Draw layer <input type="number" min="-10000" max="10000" placeholder={String(definition?.layer??0)} value={actor.layer??''}
                   onchange={e=>changeActor('layer',e.currentTarget.value===''?'':e.currentTarget.valueAsNumber)}></label>
@@ -1473,8 +1491,9 @@
                 {#each new Set(['default',...(art[definition?.source]?.tags??[])]) as tag}<option value={tag}>{tag}</option>{/each}
               </select></label>
               <label class="check"><input type="checkbox" checked={actor.flipX??false} onchange={e=>changeActor('flipX',e.currentTarget.checked || '')}> Face left at start</label>
-            {/if}
-            <button class="small-button remove" onclick={()=>{editRoom(next=>next.entities.splice(selectedEntity,1));selectedEntity=-1;}}>Remove instance</button>
+              {#if actor.standardMovement}<button onclick={()=>changeActor('standardMovement',false)}>Disable legacy movement</button>{/if}
+            </details>
+            <button class="small-button remove" onclick={()=>{editRoom(next=>next.entities.splice(selectedEntity,1));selectedEntity=-1;}}>Remove from room</button>
           {/if}
         {/if}
       {:else}
@@ -1618,6 +1637,10 @@
   .instance-list{display:grid;gap:1px;}
   .instance-source{margin-top:.55rem;}
   .instance-source small{flex-basis:100%;font-size:.72rem;}
+  .entity-art-source,.asseteditor :global(.tags),.asseteditor .entity-settings{max-width:34rem;}
+  .entity-settings{border-top:1px solid var(--line);margin-top:.6rem;padding-top:.4rem;font-size:.8rem;}
+  .entity-settings summary{cursor:pointer;color:var(--text);}
+  .entity-settings :global(.search-select){margin-top:.45rem;}
   .mobile-tabs{display:none;}
   main.wide{grid-template-columns:minmax(155px,185px) minmax(0,1fr);}
   main.shader-mode{grid-template-columns:minmax(0,1fr)}

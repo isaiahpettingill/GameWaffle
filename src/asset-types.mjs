@@ -3,6 +3,8 @@ export const assetLabels={
   sound:'Sounds',music:'Music',soundfont:'SoundFonts',shader:'Shaders',source:'Source images',
 };
 
+export const editableArtFile = /\.(ase|aseprite)$/i;
+
 export function assetKinds(filename){
   if(/\.(ase|aseprite|png)$/i.test(filename))return ['sprite','tile','font','background','cover','source'];
   if(/\.yaff$/i.test(filename))return ['font'];

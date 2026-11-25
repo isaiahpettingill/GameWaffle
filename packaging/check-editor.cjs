@@ -66,13 +66,24 @@ async function checkFormRows(page,view){
 }
 (async()=>{
 const fixture=await fs.mkdtemp(path.join(os.tmpdir(),'gw-editor-'));
-const project=path.join(fixture,'demo');await fs.cp('demo',project,{recursive:true});
-const server=require('node:child_process').spawn(process.execPath,['src/server.mjs','--project',project,'--port','0'],{stdio:['ignore','pipe','inherit'],env:{...process.env,HOME:fixture}});
-process.on('exit',()=>server.kill());
-const url=await new Promise((resolve,reject)=>{
-  server.stdout.on('data',chunk=>{const port=String(chunk).match(/localhost:(\d+)/);if(port)resolve('http://127.0.0.1:'+port[1]);});
-  server.once('exit',code=>reject(Error('Studio exited: '+code)));
-});
+const project=path.join(fixture,'demo art');await fs.cp('demo',project,{recursive:true});
+const openLog=process.platform==='linux'&&!process.env.TERMUX_VERSION?path.join(fixture,'opened-asset'):null;
+const studioEnv={...process.env,HOME:fixture};
+if(openLog){
+  await fs.writeFile(path.join(fixture,'xdg-open'),'#!/bin/sh\nprintf "%s\\n" "$1" > "$GW_EDITOR_OPEN_LOG"\n',{mode:0o755});
+  Object.assign(studioEnv,{PATH:fixture+path.delimiter+process.env.PATH,TMPDIR:fixture,GW_EDITOR_OPEN_LOG:openLog});
+}
+async function startStudio(projectPath){
+  const server=require('node:child_process').spawn(process.execPath,['src/server.mjs','--project',projectPath,'--port','0'],{stdio:['ignore','pipe','inherit'],env:studioEnv});
+  const close=()=>server.kill();
+  process.once('exit',close);
+  const url=await new Promise((resolve,reject)=>{
+    server.stdout.on('data',chunk=>{const port=String(chunk).match(/localhost:(\d+)/);if(port)resolve('http://127.0.0.1:'+port[1]);});
+    server.once('exit',code=>{process.off('exit',close);reject(Error('Studio exited: '+code));});
+  });
+  return {url,server};
+}
+const {url,server}=await startStudio(project);
 const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||'/usr/bin/google-chrome',args:['--no-sandbox','--disable-dev-shm-usage']});
 for(const width of [1280,800,390,320]){
   const page=await browser.newPage({viewport:{width,height:760}});
@@ -292,6 +303,21 @@ for(const width of [1280,800,390,320]){
     await page.mouse.up();
     await page.waitForFunction(async previous=> (await(await fetch('./api/project')).json()).project.rooms.yard.entities.some(actor=>actor.player===0 && actor.x!==previous),maker.x);
     assert.equal((await getProject()).rooms.yard.entities.length,initial.entities.length,'Dragging an existing actor must not copy it');
+    const inspector=page.locator('.inspector');
+    await inspector.getByRole('button',{name:'Placed entities',exact:true}).click();
+    await inspector.getByLabel('Name in this room').waitFor();
+    assert.equal(await inspector.getByLabel('Controlled by').inputValue(),'0');
+    assert.equal(await inspector.getByLabel('Respawn',{exact:true}).isVisible(),false);
+    await inspector.getByText('Spawning and room visits',{exact:true}).click();
+    await inspector.getByLabel('Respawn',{exact:true}).waitFor();
+    const entityTags=inspector.getByLabel('Tags',{exact:true});
+    await entityTags.fill('Room guard');
+    await entityTags.press('Enter');
+    await until('Placed entity tag',async()=> (await getProject()).rooms.yard.entities.some(
+      actor=>actor.player===0&&actor.components?.includes('room_guard')),page);
+    await inspector.getByRole('button',{name:'Remove tag Room guard',exact:true}).click();
+    await until('Placed entity tag removal',async()=> !(await getProject()).rooms.yard.entities.some(
+      actor=>actor.player===0&&actor.components?.includes('room_guard')),page);
 
     await page.locator('.inspector').getByRole('button',{name:'Room',exact:true}).click();
     const name=page.getByLabel('Room name'), before=await name.inputValue();
@@ -703,6 +729,41 @@ assert.equal(await assetLibrary.getByRole('button',{name:'New shader…',exact:t
 await assetLibrary.getByLabel('Search assets').fill('maker');
 const makerAsset=assetLibrary.locator('.asset').filter({hasText:'maker.aseprite'});
 await makerAsset.locator('img').waitFor();
+if(openLog){
+  const source='assets/sprites/maker.aseprite', file=path.join(project,source);
+  const original=await fs.readFile(file), edited=await fs.readFile(path.join(project,'assets/sprites/pilot.aseprite'));
+  const image=makerAsset.locator('img'), before=await image.getAttribute('src');
+  async function saveArt(destination,bytes){
+    await fs.writeFile(destination+'.save',bytes);
+    await fs.rename(destination+'.save',destination);
+  }
+  await assetLibrary.getByRole('button',{name:'Open maker in default editor',exact:true}).click();
+  await until('Default editor received original file',async()=> (await fs.readFile(openLog,'utf8').catch(()=>'')).trim()===file);
+  await saveArt(file,edited);
+  await until('Externally saved art reloaded in Assets',async()=>await image.getAttribute('src')!==before);
+  const updated=await image.getAttribute('src');
+  await saveArt(file,original);
+  await until('Externally restored art reloaded',async()=>await image.getAttribute('src')!==updated);
+
+  const archivePath=path.join(fixture,'art-edit.waffleproj');
+  await fs.writeFile(archivePath,await (await authoring.request.get(url+'/api/archive')).body());
+  const archived=await startStudio(archivePath);
+  try{
+    const denied=await authoring.request.post(archived.url+'/api/open-asset',{data:{path:'../maker.aseprite'}});
+    assert.equal(denied.status(),400);
+    const response=await authoring.request.post(archived.url+'/api/open-asset',{data:{path:source}});
+    assert.ok(response.ok(),await response.text());
+    const copy=(await fs.readFile(openLog,'utf8')).trim();
+    assert.equal(path.basename(copy),'maker.aseprite');
+    assert.notEqual(copy,file);
+    assert.deepEqual(await fs.readFile(copy),original);
+    await saveArt(copy,edited);
+    const {unzipSync}=require('fflate');
+    await until('External edit persisted in project archive',async()=>
+      Buffer.from(unzipSync(await fs.readFile(archivePath))[source]).equals(edited));
+  }finally{archived.server.kill();}
+  console.log('Passed default editor launch and asset reload for folder and archive projects');
+}
 await assetLibrary.getByRole('button',{name:'Edit details for maker',exact:true}).click();
 const details=authoring.getByRole('dialog',{name:'Asset details'});
 await details.getByLabel('Tags',{exact:true}).fill('Player art');
@@ -1021,7 +1082,7 @@ await until('Sensing and operators saved from text',async()=>{
   return unit.events?.tick?.[0]?.condition?.right?.call==='tile.touching';
 });
 await authoring.getByRole('button',{name:'Blocks',exact:true}).click();
-const canvas=entityWorkspace.locator('.blocklyBlockCanvas:not(.blocklyFlyout *)');
+const canvas=authoring.locator('.block-workspace:visible .blocklyBlockCanvas:not(.blocklyFlyout *)');
 for(const type of ['camera_touching_edge','tile_touching','string_letter','string_join','math_mod'])
   await canvas.locator('.waffle_reporter_'+type).waitFor();
 const tileContact=canvas.locator('.waffle_reporter_tile_touching');

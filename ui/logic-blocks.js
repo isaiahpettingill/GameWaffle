@@ -50,7 +50,7 @@ export function referenceSlot(type,value) {
 }
 const entityLabels={
   find:'Entity %1',
-  has:'Entity %1\nhas component %2?',
+  has:'Entity %1\nhas tag %2?',
   x:'X of %1', y:'Y of %1',
   vx:'X velocity of %1', vy:'Y velocity of %1',
   health:'Health of %1',

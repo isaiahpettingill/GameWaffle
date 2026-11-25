@@ -113,7 +113,7 @@ The final 96 bytes contain a 32-byte Ed25519 public key and a 64-byte signature.
 See the [engine command reference](blocks.md) for commands, events, and actor readings.
 Run `node packaging/sdk-reference.mjs` after you change the schema.
 
-In an entity’s **Lifecycle** settings, select **Remember state between room visits** to retain a named instance’s position, velocity, health, animation, facing direction, and local variables. Choose **Never** under **Respawn** to keep a removed instance absent. The room instance can override the entity type’s defaults. Keep instance names stable across game updates. Set **Remember destroyed tiles** to keep removed tiles absent at their layer and cell.
+Under **Placed entities → Spawning and room visits**, select **Remember state** to retain a named instance’s position, velocity, health, animation, facing direction, and local variables. Choose **Never** under **Respawn** to keep a removed instance absent. The room placement can override the entity type’s defaults. Keep names stable across game updates. Set **Remember destroyed tiles** to keep removed tiles absent at their layer and cell.
 
 In **Game → Display**, set **Resolution** to **Fixed** and enter a width and height in pixels. **Adapt to window** uses the window size, pixel zoom, and resolution limits. Camera zoom changes how much of the room is visible. Follow stops at room edges and can show adjoining terrain at seamless connections. Use **Camera bottom inset** in a room’s Camera settings to leave unused rows below the screen.
 
