@@ -25,7 +25,6 @@
   import ScriptPanel from './ScriptPanel.svelte';
   import Localization from './Localization.svelte';
   import ResourceDialog from './ResourceDialog.svelte';
-  import RoomDefaults from './RoomDefaults.svelte';
   import {resourceTables} from '../src/resource-tables.mjs';
   import EntityTags from './EntityTags.svelte';
   let bitfontsPanel=$state();
@@ -34,11 +33,10 @@
   import CoverCrop from './CoverCrop.svelte';
   import {normalizeCoverCrop} from '../src/cover.mjs';
   import SearchSelect from './SearchSelect.svelte';
-  import RespawnSettings from './RespawnSettings.svelte';
+  import ColliderEditor from './ColliderEditor.svelte';
   import {resourceName} from '../src/resource-name.mjs';
   import {formatScript, locations, parseScript} from '../src/wafflescript.mjs';
   import ExportDialog from './ExportDialog.svelte';
-  import Physics from './Physics.svelte';
   import { tileSizes } from '../src/script.mjs';
   import { decodeCbor, encodeCbor } from '../src/cartridge.mjs';
   import {growSeamNeighbors} from '../src/room-geometry.mjs';
@@ -51,7 +49,7 @@
     newSource=$state('');
   let importFile=$state.raw(null), filePicker=$state(), assetError=$state('');
   let roomOperation=$state(''), newRoomName=$state(''), newRoomView=$state('platformer');
-  let pendingTileSize=$state(null), collisionLayer=$state(0);
+  let pendingTileSize=$state(null), editingColliders=$state('');
   const tileSets=$derived(groupTiles(project?.tiles??{}));
   let tileArt=$state.raw({}), spriteArt=$state.raw({}), previewModes=$state.raw({}), authoredVariants=$state.raw({});
   let historyVersion=$state(0), selectedEntity=$state(-1), roomPanel=$state('layers');
@@ -74,7 +72,6 @@
   let coverUpload=$state.raw(null), coverReady=$state(false), coverSaving=$state(false), coverError=$state(''), coverPreview=$state('');
   let room=$derived(project?.rooms[roomId]), roomBackground=$derived(roomBackgrounds[roomId]??room?.backgroundImage), layer=$derived(room?.layers?.[layerIndex]);
   let sprite=$derived(project?.sprites?.[spriteId]), tile=$derived(project?.tiles?.[tileId]);
-  let inspector=$derived(assetKind==='tile' ? tile : sprite);
   let artFiles=$derived(assets.filter(file=>/\.(ase|aseprite|png)$/i.test(file)));
   let stageFilter=$state(''),placeAs=$state('');
   let nameDialog=$state.raw(null),newName=$state(''),resourceDialog=$state.raw(null);
@@ -103,7 +100,6 @@
       ...Object.values(project?.rooms??{}).flatMap(room=>(room.entities??[]).flatMap(entity=>entity.components??[]))].map(id=>[id,id])),
     ...project?.components,
   });
-  const collisionLayers=$derived(Array.from({length:16},(_,index)=>project?.collisionLayers?.[index]??(index===0?'Default':'Layer '+(index+1))));
   function resolveEntityTag(label){
     const existing=Object.keys(entityTagLabels).find(id=>entityTagLabels[id].toLowerCase()===label.toLowerCase());
     if(existing)return existing;
@@ -151,7 +147,7 @@
     (tileArt[id]??[]).map((_,variant)=>({id,variant,title:(tile.title??tile.tag??id)+' · Variant '+(variant+1)}))));
   const entityScripts=$derived(Object.entries(project?.sprites??{}).map(([id,sprite])=>({id,title:sprite.title??id})));
   const authoringView=$derived(tab==='room'||tab==='blocks'||tab==='game');
-  const hasInspector=$derived(tab==='room'||tab==='actors'||(tab==='assets'&&assetKind==='tile'));
+  const hasInspector=$derived(tab==='room'||(tab==='assets'&&assetKind==='tile'));
 
   function askName(kind,query,register,select){
     newName=query.slice(0,100);
@@ -1140,26 +1136,13 @@
     </div></details>
 </nav>
 <ExportDialog bind:this={exportDialog} basename={exportName} {localization} onSave={prepareExport} onClose={()=>fileMenu.querySelector('summary').focus()}/>
-{#if gameSettings==='room'}
-  <RoomDefaults defaults={project.roomDefaults??{}} pixelUnits={blockReferences.pixelUnits} images={artFiles.filter(file=>!art[file]?.error).map(value=>({value,label:value.split('/').at(-1)}))}
-    audio={project.audio??{}} onApply={value=>{set(project,'roomDefaults',value);gameSettings='';}} onClose={()=>gameSettings=''}/>
-{:else if gameSettings==='project'}
+{#if gameSettings==='project'}
   <Modal title="Project settings" onClose={()=>gameSettings=''}>
     <div class="project-options">
       <section aria-label="Tile grid">
         <h3>Tile grid</h3>
         <div class="row"><span>Tile size</span><strong>{project.tileSize??24} × {project.tileSize??24} px</strong>
           <button type="button" onclick={()=>pendingTileSize=project.tileSize??24}>Change tile size…</button>
-        </div>
-      </section>
-      <section aria-label="Collision layers">
-        <h3>Collision layers</h3>
-        <div class="settings-pair">
-          <label>Layer<select bind:value={collisionLayer}>
-            {#each collisionLayers as label,index}<option value={index}>{label}</option>{/each}
-          </select></label>
-          <label>Layer name<input value={collisionLayers[collisionLayer]} maxlength="45"
-            onchange={event=>set(project.collisionLayers??={},collisionLayer,event.currentTarget.value.trim())}></label>
         </div>
       </section>
       <section aria-label="Cartridge cover">
@@ -1226,7 +1209,7 @@
   </section>
 {:else if project}
   <div class="mobile-tabs"><Sections labels={hasInspector?['Editor','Project','Settings']:['Editor','Project']} bind:value={mobilePane}/></div>
-  <main class:coding={tab==='blocks'} class:shader-mode={tab==='shaders'} class:wide={['game','world','shaders','resources'].includes(tab)||(tab==='assets'&&['audio','source'].includes(assetKind))} data-pane={mobilePane}>
+  <main class:coding={tab==='blocks'} class:shader-mode={tab==='shaders'} class:wide={['actors','game','world','shaders','resources'].includes(tab)||(tab==='assets'&&['audio','source'].includes(assetKind))} data-pane={mobilePane}>
     <aside class="project card">
       <div class="heading row"><h2>Project</h2></div>
       <small class="project-path">{projectPath}</small>
@@ -1313,7 +1296,6 @@
         <section tabindex="-1" class="code-pane" hidden={tab!=='blocks'&&tab!=='game'} aria-label={gameCode?'Game code':activeTileCode?'Tile code':activeRoomCode?'Room code':'Entity code'}>
         {#if tab==='game'}
           <div class="game-tools row">
-            <button type="button" onclick={()=>gameSettings='room'}>Room defaults…</button>
             <button type="button" onclick={()=>gameSettings='project'}><Settings2 size={15}/>Project settings…</button>
           </div>
         {/if}
@@ -1323,13 +1305,13 @@
             {roomScripts} {entityScripts} {tileScripts} onSelectFile={selectScriptFile} bind:mode={scriptMode}
             actorDefinition={gameCode||activeTileCode||activeRoomCode?null:sprite} newActor={!gameCode&&!activeTileCode&&!Object.hasOwn(JSON.parse(savedProject)[activeRoomCode?'rooms':'sprites']??{},activeRoomCode?codeRoomId:spriteId)} onBeforeSave={async()=>!dirty||await saveProject()} onFileEdit={recordFile} onNewEvent={newEvent} onNewField={newScriptField}
             hasLegacyMovement={Object.values(project.rooms).some(room=>room.entities.some(entity=>entity.sprite===spriteId&&entity.standardMovement))}
-            initialMovement={roomView} onMovementPreset={({dynamic,replaceLegacy})=>{
-              if(dynamic)(sprite.physics??={}).mode='dynamic';
-              if(replaceLegacy)for(const map of Object.values(project.rooms)){
+            initialMovement={roomView} onMovementPreset={({replaceLegacy})=>{
+              if(!replaceLegacy)return;
+              for(const map of Object.values(project.rooms)){
                 for(const entity of map.entities)if(entity.sprite===spriteId)delete entity.standardMovement;
               }
               updateDirty('movement settings for '+(sprite.title??spriteId));
-            }} sprite={gameCode?'game':activeTileCode?codeTile:activeRoomCode?codeRoomId:spriteId} sprites={Object.keys(project.sprites??{})} animations={[...new Set(['default',...(art[sprite?.source]?.tags??[])])]} items={Object.keys(project.items??{})} {textKeys} localization={project.localization} menus={Object.keys(gameMenus)} references={activeRoomCode?{...blockReferences,names:instanceNames(codeRoom.entities??[])}:blockReferences} actions={[...buttons,...Object.keys(gameControls)]} bind:dirty={scriptDirty} bind:status={scriptStatus} onSave={saveScript} />{/key}
+            }} sprite={gameCode?'game':activeTileCode?codeTile:activeRoomCode?codeRoomId:spriteId} sprites={Object.keys(project.sprites??{})} animations={[...new Set(['default',...(art[sprite?.source]?.tags??[])])]} items={Object.keys(project.items??{})} {textKeys} localization={project.localization} menus={Object.keys(gameMenus)} references={activeRoomCode?{...blockReferences,names:instanceNames(codeRoom.entities??[]),layerNames:(codeRoom.layers??[]).map(layer=>layer.name).filter(Boolean)}:blockReferences} actions={[...buttons,...Object.keys(gameControls)]} bind:dirty={scriptDirty} bind:status={scriptStatus} onSave={saveScript} />{/key}
         {:else}<p class="empty card">Create an entity to edit its script.</p>{/if}
         </section>
       </div>
@@ -1363,36 +1345,28 @@
           <div class="field-row"><label>Entity type<select value={spriteId} onchange={e=>selectSprite(e.currentTarget.value)}>
             {#each Object.keys(project.sprites??{}) as id}<option value={id}>{project.sprites[id].title??id}</option>{/each}
           </select></label>
-          {#if spriteId}<button onclick={()=>openDefinition(spriteId,'blocks')}><Blocks size={15}/>Open script</button>{/if}</div>
-          {#if inspector}
+          {#if spriteId}<button class="primary" onclick={()=>openDefinition(spriteId,'blocks')}><Blocks size={15}/>Open script</button>{/if}</div>
+          {#if sprite}
               <div class="asset-source entity-art-source">
-                <label class="stack">Source file <select value={inspector.source} onchange={e=>{
-                  if(inspector.source!==e.currentTarget.value){
-                    delete inspector.animation;
-                    set(inspector,'source',e.currentTarget.value);
+                <label class="stack">Source file <select value={sprite.source} onchange={e=>{
+                  if(sprite.source!==e.currentTarget.value){
+                    delete sprite.animation;
+                    set(sprite,'source',e.currentTarget.value);
                   }
                 }}>
                   {#each artFiles as file}<option value={file}>{file}</option>{/each}
                 </select></label>
-                {@render editSource(inspector.source)}
+                {@render editSource(sprite.source)}
               </div>
-                <div class="record-form"><label>Player<select bind:value={placeAs}><option value="">Choose a player</option>{#each [0,1,2,3] as slot}<option disabled={room?.entities.some(e=>e.player===slot)} value={String(slot)}>Player {slot+1}</option>{/each}</select></label>
-                <button disabled={placeAs===''||!room||room.entities.some(e=>e.player===Number(placeAs))} onclick={()=>{placementSprite=spriteId;mapTool='spawn';openTab('room');}}>Place player in room</button></div>
+              <div class="row entity-art-source">
+                <label class="stack">Collider shape <select value={sprite.collider??'box'} onchange={event=>set(sprite,'collider',event.currentTarget.value)}>
+                  <option value="box">Box</option><option value="silhouette">Sprite silhouette</option>
+                </select></label>
+                <button disabled={!art[sprite.source]?.width} onclick={()=>editingColliders=spriteId}>Edit frame colliders…</button>
+              </div>
               {#key spriteId}
                 <EntityTags tags={entityTagLabels} selected={sprite.components??[]} resolveTag={resolveEntityTag} onChange={value=>set(sprite,'components',value)}/>
               {/key}
-              <details class="entity-settings">
-                <summary>Spawning and room visits</summary>
-                <SearchSelect label="Spawn when flag" value={sprite.flag??''}
-                  options={[{value:'',label:'Always'},...blockReferences.flags.map(value=>({value,label:value}))]}
-                  onChange={value=>set(sprite,'flag',value)}/>
-                {#if sprite.flag}<label class="check"><input type="checkbox" checked={sprite.when??true}
-                  onchange={e=>set(sprite,'when',e.currentTarget.checked)}> Flag must be on</label>{/if}
-                <label class="check"><input type="checkbox" checked={sprite.rememberState??false}
-                  onchange={e=>set(sprite,'rememberState',e.currentTarget.checked)}> Remember state between room visits</label>
-                <label class="check"><input type="checkbox" checked={sprite.alwaysActive??false}
-                  onchange={e=>set(sprite,'alwaysActive',e.currentTarget.checked)}> Run scripts off camera</label>
-              </details>
           {/if}
         </section>
       {/if}
@@ -1435,10 +1409,6 @@
           {#if layer}
             <label class="stack">Layer name <input value={layer.name} onchange={e=>changeLayer('name',e.currentTarget.value)}></label>
             <label class="check"><input type="checkbox" checked={layer.collidable} onchange={e=>changeLayer('collidable',e.currentTarget.checked)}> Enable collision</label>
-            <label class="stack">Layer flag<select value={layer.flag??''} onchange={e=>changeLayer('flag',e.currentTarget.value)}>
-              <option value="">Always active</option>{#each Object.keys(gameFlags) as flag}<option>{flag}</option>{/each}
-            </select></label>
-            {#if layer.flag}<label class="check"><input type="checkbox" checked={layer.when??true} onchange={e=>changeLayer('when',e.currentTarget.checked)}> Flag must be on</label>{/if}
             <label class="stack">Layer order <input type="number" min="-10000" max="10000" value={layer.order??layerIndex} onchange={e=>{
               const value=e.currentTarget.valueAsNumber;
               if(Number.isInteger(value)&&Math.abs(value)<=10000)changeLayer('order',value);
@@ -1479,76 +1449,29 @@
               <EntityTags tags={entityTagLabels} selected={actor.components??[]} inherited={definition?.components??[]}
                 resolveTag={resolveEntityTag} onChange={value=>changeActor('components',value)}/>
             {/key}
-            <details class="entity-settings">
-              <summary>Spawning and room visits</summary>
-              <RespawnSettings rule={actor.respawn} flags={blockReferences.flags} inherit inheritedRule={definition?.respawn}
-                onChange={value=>changeActor('respawn',value??'')}/>
-              <label class="stack">State between room visits<select value={actor.rememberState==null?(actor.persistRemoval?'legacy':''):String(actor.rememberState)}
-                onchange={event=>{const value=event.currentTarget.value;editRoom(next=>{
-                  const instance=next.entities[selectedEntity];
-                  delete instance.persistRemoval;
-                  if(value==='')delete instance.rememberState;
-                  else instance.rememberState=value==='true';
-                },'state policy for '+actor.name);}}>
-                {#if actor.persistRemoval}<option value="legacy" disabled>Legacy: remember state and removal</option>{/if}
-                <option value="">Entity default ({definition?.rememberState?'remember':'reset'})</option>
-                <option value="true">Remember state</option><option value="false">Reset state</option>
-              </select></label>
-              <SearchSelect label="Also require flag to spawn" value={actor.flag??''}
-                options={[{value:'',label:'No extra flag'},...blockReferences.flags.map(value=>({value,label:value}))]}
-                onChange={value=>changeActor('flag',value)}/>
-              {#if actor.flag}<label class="check"><input type="checkbox" checked={actor.when??true}
-                onchange={e=>changeActor('when',e.currentTarget.checked)}> Flag must be on</label>{/if}
-            </details>
-            <details class="entity-settings">
-              <summary>Starting values</summary>
-              <div class="pair">
-                <label class="stack">Draw layer <input type="number" min="-10000" max="10000" placeholder={String(definition?.layer??0)} value={actor.layer??''}
-                  onchange={e=>changeActor('layer',e.currentTarget.value===''?'':e.currentTarget.valueAsNumber)}></label>
-                <label class="stack">Health <input type="number" min=".001" max="1000000" step="any" placeholder={String(definition?.physics?.health??1)} value={actor.physics?.health??''}
-                  onchange={e=>changeActor('health',e.currentTarget.value===''?'':e.currentTarget.valueAsNumber)}></label>
-              </div>
-              <label class="stack">Starting animation <select value={actor.animation??''} onchange={e=>changeActor('animation',e.currentTarget.value)}>
-                <option value="">Definition default</option>
-                {#each new Set(['default',...(art[definition?.source]?.tags??[])]) as tag}<option value={tag}>{tag}</option>{/each}
-              </select></label>
-              <label class="check"><input type="checkbox" checked={actor.flipX??false} onchange={e=>changeActor('flipX',e.currentTarget.checked || '')}> Face left at start</label>
-              {#if actor.standardMovement}<button onclick={()=>changeActor('standardMovement',false)}>Disable legacy movement</button>{/if}
-            </details>
+            <button class="small-button" onclick={openRoomScript}>Configure in room script</button>
             <button class="small-button remove" onclick={()=>{editRoom(next=>next.entities.splice(selectedEntity,1));selectedEntity=-1;}}>Remove from room</button>
           {/if}
         {/if}
       {:else}
-        {@const target=tab==='blocks' ? sprite : inspector}
-        <div class="heading row"><h2>Physics defaults</h2></div>
-        {#if target}
-          <p class="asset-name">{tab==='blocks'||assetKind==='sprite' ? spriteId : tileId}</p>
-          {#if tab==='assets' && assetKind==='tile' && tile}
-            {#if tileArt[tileId]?.length}
-              {@const variant=Math.min(Number(editTileVariant),tileArt[tileId].length-1)}
-              <div class="row">
-                <SearchSelect label="Tile script variant" value={String(variant)}
-                  options={tileArt[tileId].map((_,index)=>({value:String(index),label:'Variant '+(index+1)}))}
-                  onChange={value=>editTileVariant=value}/>
-                <button onclick={()=>openTileScript(tileId,variant)}>Edit tile script</button>
-              </div>
-            {/if}
-            <SearchSelect label="Active flag" value={tile.flag??''}
-              options={[{value:'',label:'Always active'},...Object.keys(gameFlags).map(value=>({value,label:value}))]}
-              onChange={value=>set(tile,'flag',value)}/>
-            {#if tile.flag}<label class="check"><input type="checkbox" checked={tile.when??true} onchange={e=>set(tile,'when',e.currentTarget.checked)}> Flag must be on</label>{/if}
-            <label class="check"><input type="checkbox" checked={tile.persistRemoval??false}
-              onchange={e=>set(tile,'persistRemoval',e.currentTarget.checked)}> Remember destroyed tiles</label>
-          {/if}
-          <Physics physics={target.physics} {collisionLayers} pixelUnits={blockReferences.pixelUnits} entity={assetKind==='sprite'?target:null} art={art[target.source]}
-            onEntityChange={(key,value)=>set(target,key,value)} fallback={tab==='assets' && assetKind==='tile'
-            ? (tile.tag??art[tile.source]?.tags?.[0]??'').includes(':fluid:') ? 'fluid' : 'static'
-            : 'none'} onChange={value=>set(target,'physics',value)} />
+        <div class="heading row"><h2>Tile script</h2></div>
+        {#if tileArt[tileId]?.length}
+          {@const variant=Math.min(Number(editTileVariant),tileArt[tileId].length-1)}
+          <div class="row">
+            <SearchSelect label="Tile script variant" value={String(variant)}
+              options={tileArt[tileId].map((_,index)=>({value:String(index),label:'Variant '+(index+1)}))}
+              onChange={value=>editTileVariant=value}/>
+            <button class="primary" onclick={()=>openTileScript(tileId,variant)}>Edit tile script</button>
+          </div>
         {/if}
-
       {/if}
     </aside>{/if}
   </main>
+  {#if editingColliders && project.sprites[editingColliders]}
+    {@const entity=project.sprites[editingColliders]}
+    <ColliderEditor {entity} art={art[entity.source]} onClose={()=>editingColliders=''}
+      onApply={value=>{set(entity,'frameColliders',value);editingColliders='';}}/>
+  {/if}
   {#if addForm}
     <Modal title="New entity" {busy} onClose={()=>addForm=false}>
       <form onsubmit={event=>{event.preventDefault();createEntity();}}>
@@ -1647,22 +1570,16 @@
   .asseteditor,.empty{padding:.8rem;}
   .asseteditor .stack{max-width:34rem;}
   .start-room{margin-bottom:.15rem;}
-  .asset-name{font-size:.85rem;color:var(--accent);margin-bottom:.6rem;}
   .asset-source{align-items:end;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.45rem;}
   .project-options{display:grid;gap:.75rem}
   .project-options section{display:grid;gap:.38rem;border-top:1px solid var(--line);padding-top:.5rem}
   .project-options h3{color:var(--text);font-size:.83rem;margin:0}
-  .settings-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}
-  .settings-pair label{display:grid;gap:.24rem;min-width:0;color:var(--muted);font-size:.8rem}
   .game-tools{justify-content:flex-end;margin-bottom:.35rem}
   .cover-preview{width:4rem;height:4rem;object-fit:contain;background:var(--well);border:1px solid var(--line)}
   .instance-list{display:grid;gap:1px;}
   .instance-source{margin-top:.55rem;}
   .instance-source small{flex-basis:100%;font-size:.72rem;}
-  .entity-art-source,.asseteditor :global(.tags),.asseteditor .entity-settings{max-width:34rem;}
-  .entity-settings{border-top:1px solid var(--line);margin-top:.6rem;padding-top:.4rem;font-size:.8rem;}
-  .entity-settings summary{cursor:pointer;color:var(--text);}
-  .entity-settings :global(.search-select){margin-top:.45rem;}
+  .entity-art-source,.asseteditor :global(.tags){max-width:34rem;}
   .mobile-tabs{display:none;}
   main.wide{grid-template-columns:minmax(155px,185px) minmax(0,1fr);}
   main.shader-mode{grid-template-columns:minmax(0,1fr)}

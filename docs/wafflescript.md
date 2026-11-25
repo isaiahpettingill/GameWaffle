@@ -51,6 +51,23 @@ end
 
 Choose a placed entity from the searchable **Find entity** block or connect an entity query. Set the starting zoom in the room inspector under **Camera**. Zoom is a multiplier from 0.25× to 4×, and 1× uses the game’s default zoom. **Reset room camera** restores the room’s default target and zoom. Use **Set room music** and **Set room ambience** to select a sound or choose **None**. In the room inspector under **Rendering**, use **Browse…** to import a PNG or Aseprite background into the project. You can also choose an existing project image.
 
+Set behavior in the Room script's **On init → Init room properties** block. Use **Initial property of entity** for a named placement and **Initial property of layer** for a layer's activation flag. New rooms call `room_defaults.configure()` after their generated initial properties when you define that zero-argument procedure in a module named `room_defaults`.
+
+```ruby
+on init
+  init_properties
+    instance_property("Goose", "health", 5)
+    instance_property("Goose", "remember_state", true)
+    instance_property("Berry", "respawn_mode", "never")
+    layer_property("Hidden path", "spawn_flag", "path_open")
+  end
+end
+```
+
+### Across room changes
+
+A player controls the entity assigned to their slot in the destination room. Place and assign an entry for each slot you want in that room. Adjacent exits transfer position and velocity to the matching slot. Local variables and health start from that placement's defaults. Enable `remember_state` to restore a named entity's state when returning to its room. Use Game globals or player inventory for data shared across rooms. HUD sprites also cross rooms.
+
 ## Entity sounds and contact
 
 In **Sound**, use **Stop playing sounds for** to cut the sound effects started by the selected entity. Use **This entity** to stop its own sounds, or **Find entity** to choose another instance. Room music and ambience keep playing.
@@ -145,9 +162,32 @@ on start
 end
 ```
 
+### HUD sprites and backgrounds
+
+Use **Text & HUD → Draw HUD sprite** to put an animated sprite on the HUD by name. Draw it once in the Game script to keep it across rooms and save loads. Reuse its name to update its position or image, or call `hide("portrait")` to remove it. The anchor sets the origin for the offsets, and scale is a whole-number pixel multiplier from 1 to 8.
+
+```ruby
+on game startup
+  draw_hud_sprite("portrait", "goose", "top_right", 8, 8, 2)
+end
+```
+
+In a Room script, **Draw background sprite** puts art behind the tilemap and actors. Its X and Y start from the background's top left. Scroll `0` keeps the art fixed in the viewport and `1` moves it with the room. Use a value between them for parallax. Background names last until `hide` or the next room load.
+
+```ruby
+on init
+  draw_background_sprite("moon", "moon_art", 48, 24, 0.15, 2)
+  apply_background_shaders
+    shader("sky_shader")
+  end
+end
+```
+
+The background shader pipeline receives the color, gradient, background image, and background sprites. The renderer draws tiles and actors afterward. An empty background pipeline clears the effect. Custom pipelines use WebGPU in the browser and a supported GPU renderer in the standalone player.
+
 ## Events and data
 
-A dynamic body uses the room gravity and its own gravity scale by default. For conditional gravity, choose **Entities → Physics settings → Gravity control → Script applies gravity each tick**, then run `apply_gravity(none)` from **On tick** whenever gravity should apply. A modifier of `none` uses a multiplier of 1. Skipping the call leaves gravity off for that tick.
+A dynamic body uses the room gravity and its own gravity scale by default. Put physics in the entity or tile script under **On init → Init properties**. For an entity, `property gravity_mode = "script"` makes the script responsible for gravity. Call `apply_gravity(none)` from **On tick** whenever gravity should apply. A modifier of `none` uses a multiplier of 1. Skipping the call leaves gravity off for that tick.
 
 ### Physics units
 
@@ -263,6 +303,7 @@ For integer variables and inputs, convert reals explicitly with `math.to_integer
 `math.floor`, `math.ceil`, `math.round`, or `math.trunc`. `math.to_real` explicitly
 promotes a value for arithmetic. `math.to_integer` also accepts booleans.
 Use an integer count for `repeat` and `wait`.
+Use `math.random_chance(25)` for a 25% chance, or `math.random_sign()` to choose `-1` or `1`. Both use the game's seeded random generator.
 
 The **Math & logic** palette includes absolute value, min/max, square root, power,
 natural log, exponential, sine, cosine, tangent, and inverse trig.
@@ -323,10 +364,7 @@ configured repeats.
 
 ## Respawn rules
 
-Set **Respawn** for a single placement under **Room → Placed entities → Spawning and room visits**. Use **Never** to
-keep a defeated instance absent, **On room re-entry** to reset it when the
-player returns, or **After a delay** to respawn after a number of game ticks.
-A delayed respawn can also wait for a flag to reach a chosen value.
+Set `respawn_mode` under **Init properties** for an entity type or with `instance_property` for a single placement. Use `"never"` to keep a defeated instance absent, `"on_entry"` to reset it when the player returns, or `"delay"` with `respawn_ticks` for a timed respawn. A delayed respawn can also wait for `respawn_flag` to match `respawn_when`.
 
 The Entities palette has **Set entity respawn** and **Entity respawns when**
 blocks for changing these rules from a script. Set the rule while the entity
@@ -339,7 +377,7 @@ entities when the room hits its particle budget.
 
 ## Game menus
 
-Create named menus in **Game → Menus**. Open a menu with `show_menu("pause")`
+Declare named menus in the Game script. Open a menu with `show_menu("pause")`
 or open the starting menu from a starting room entity’s `on start` event.
 Use Up and Down to highlight an option, A to select it, or B to cancel.
 The room is paused while a menu is open.

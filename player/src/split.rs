@@ -129,6 +129,7 @@ pub(crate) struct Targets<'a> {
     hd: Option<Texture<'a>>,
     gradient: gradient::Layer<'a>,
     shaders: Option<shaders::Targets<'a>>,
+    background_shaders: Option<shaders::Targets<'a>>,
 }
 
 pub(crate) fn draw<'a, T: RenderTarget>(
@@ -141,6 +142,7 @@ pub(crate) fn draw<'a, T: RenderTarget>(
     targets: &mut [Targets<'a>; 4],
     rectangles: &mut Vec<FRect>,
     pipeline: Option<&shaders::Pipeline>,
+    background_pipeline: Option<&shaders::Pipeline>,
     output_scale: u32,
 ) -> Result<(), Error> {
     let room = &game.media.rooms[snapshot.room];
@@ -190,6 +192,9 @@ pub(crate) fn draw<'a, T: RenderTarget>(
         {
             targets.shaders = Some(shaders::Targets::new(creator, [w, h])?);
         }
+        if background_pipeline.is_some() && targets.background_shaders.as_ref().is_none_or(|shader| shader.dimensions != [w, h]) {
+            targets.background_shaders = Some(shaders::Targets::new(creator, [w, h])?);
+        }
         let gradient = targets.gradient.get(
             creator,
             settings.background_gradient.as_ref(),
@@ -211,6 +216,7 @@ pub(crate) fn draw<'a, T: RenderTarget>(
                 targets.hd.as_mut(),
                 gradient,
                 pipeline.zip(targets.shaders.as_mut()),
+                background_pipeline.zip(targets.background_shaders.as_mut()),
             );
         })?;
         result?;

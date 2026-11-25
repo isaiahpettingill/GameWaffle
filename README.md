@@ -47,7 +47,7 @@ On macOS, use Command in place of Ctrl.
 
 Add an entity once. Add as many instances of that definition as necessary. Instances use the same art and script. Each instance has its own name, position, and game state.
 
-Select a placed entity on the map or in **Placed entities**. Set its position and controller assignment there. Expand **Starting values** to change its starting health, animation, draw layer, or facing. Leave a field empty to use the type’s default. Use **Edit type** or **Open script** to change what all placements share.
+Select a placed entity on the map or in **Placed entities**. Set its position and controller assignment there. Set starting health, animation, draw layer, or facing with `instance_property` in the Room script. Use the entity script for defaults shared by all its placements.
 
 To create an instance during play, use **Create instance of** in a Blockly script. Select the entity. Set the X and Y offsets in pixels from the instance that runs the block. The new instance runs the **Start** event before its first physics step.
 
@@ -332,7 +332,7 @@ Select **World**. Select a room and an exit. Select a destination. Use **Once pe
 
 For a continuous crossing, connect opposite edges in both directions. Select **Fixed** and **Connect opposite edges** on both exits. Use equal edge lengths. The camera shows terrain from the next room before the player crosses. Sprites and physics start when the player enters the next room.
 
-Use a camera block to follow an instance, show a position, or follow a selected player. Normal enemy scripts and bodies pause outside the camera and player activity areas. Enable **Entities → Run scripts off camera** for a boss.
+Use a camera block to follow an instance, show a position, or follow a selected player. Normal enemy scripts and bodies pause outside the camera and player activity areas. Set `property always_active = true` in a boss's entity script to keep it running off camera.
 
 ## Items, dialogue, and saves
 
@@ -446,7 +446,7 @@ This preset uses the contrast-sensitive edge reconstruction used by Lemuroid's H
 | Action | A named input bound to one or more controls. |
 | Inventory | An ordered collection that owns typed objects. |
 
-To make an entity playable, select it in **Entities**. Select a player and **Place player in room**. Click the map to place the instance. To assign an existing instance, select it and set **Controlled by**. An actor without a script starts with built-in movement. Clear **Built-in movement** to control movement from its script.
+To make an entity playable, place it in the Room editor, select the placement, and set **Controlled by**. Use the entity's script for movement. For an older placement that uses built-in movement, set `instance_property("Player", "standard_movement", false)` in the Room script.
 
 In the **Game script**, use an **Input action** block with **Bind to** blocks from **Input**, or write `input jump = a, x`. Under **On tick**, read the action’s held, pressed, or released state from **Input**. Define menus in the same script with **Menu** and **Menu option** from **Text & HUD**, or write `menu pause = "Pause", "Resume", "Quit"`.
 
@@ -476,7 +476,7 @@ Open **Game script** from the **Game** tab or the script picker. The starter scr
 
 Add **On init** from Events to get the matching **Init properties** block for the current script. The **On game startup** block comes with **Init game properties**. Keep this block first under its trigger, then add any other startup logic below it. Initialization runs once for each new room, entity, or scripted tile. Use **On tick** for behavior that should repeat each frame.
 
-**Game → Room defaults…** supplies values for new rooms. Studio copies them into each new room's **Init room properties** block. Edit that block to change the room's camera, background, borders, gravity, music, ambience, or shader. The background picker edits the same script.
+Edit the Room script's **Init room properties** block to set its camera, background, borders, gravity, music, ambience, or shader. The background asset picker writes to the same script. Define `proc configure()` in a module named `room_defaults` to give new rooms a shared setup procedure.
 
 Inside **Init entity properties** or **Init tile properties**, use **Initial body** and **Initial property** to override the type's physics defaults. These values must be literals. The compiler bakes them into the entity type or tile variant, so a static tile with only these values needs no runtime script. For example, to configure a fluid tile variant:
 

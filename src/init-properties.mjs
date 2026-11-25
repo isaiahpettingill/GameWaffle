@@ -6,9 +6,37 @@ export const initialPhysicsFields={
   health:'Starting health',fixed:'Fixed rotation',buoyancy:'Fluid buoyancy',drag:'Fluid drag',damage:'Fluid damage per second',
   category:'Collision category',mask:'Collision mask',group:'Collision group',
 };
+export const spawnFields={spawn_flag:['Spawn flag','string'],spawn_when:['Spawn flag state','boolean']};
+const respawnFields={respawn_mode:['Respawn mode',['default','never','on_entry','delay']],
+  respawn_ticks:['Respawn delay (ticks)','integer'],respawn_flag:['Respawn flag','string'],respawn_when:['Respawn flag state','boolean']};
+const entityFields={...spawnFields,...respawnFields,
+  width:['Body width','number'],height:['Body height','number'],gravity_mode:['Gravity control',['room','script']],
+  always_active:['Run off camera','boolean'],remember_state:['Remember state','boolean']};
+const tileFields={...spawnFields,remember_removal:['Remember destroyed tiles','boolean']};
+export const instanceFields={...spawnFields,...respawnFields,remember_state:entityFields.remember_state,
+  layer:['Draw layer','integer'],health:['Starting health','number'],animation:['Starting animation','string'],
+  flip_x:['Face left at start','boolean'],standard_movement:['Built-in movement','boolean']};
+export const initialDefinitionFields=Object.fromEntries(Object.entries({...entityFields,...tileFields}).map(([name,[label]])=>[name,label]));
+const placementKeys={spawn_flag:'flag',spawn_when:'when',remember_state:'rememberState',
+  remember_removal:'persistRemoval',flip_x:'flipX',standard_movement:'standardMovement',layer:'layer',animation:'animation',
+  width:'width',height:'height',gravity_mode:'gravityMode',always_active:'alwaysActive'};
+const respawnKeys={respawn_mode:'mode',respawn_ticks:'ticks',respawn_flag:'flag',respawn_when:'when'};
+
+export function initialPropertyRows(asset={},tile=false){
+  const fields=tile?tileFields:entityFields;
+  const rows=[];
+  for(const name of ['mode',...Object.keys(initialPhysicsFields)]){
+    if(Object.hasOwn(asset.physics??{},name))rows.push({op:'init_property',name,value:asset.physics[name]});
+  }
+  for(const name of Object.keys(fields)){
+    const value=Object.hasOwn(respawnKeys,name)?asset.respawn?.[respawnKeys[name]]:asset[placementKeys[name]];
+    if(value!=null)rows.push({op:'init_property',name,value});
+  }
+  return rows;
+}
 export const propertySets={
-  game:new Set([...gameCommands,'apply_shaders']),
-  room:new Set([...roomCommands,'apply_shaders','camera','follow_player','group_camera','release_camera']),
+  game:new Set([...gameCommands,'apply_shaders','draw_hud_sprite']),
+  room:new Set([...roomCommands,'apply_shaders','apply_background_shaders','camera','follow_player','group_camera','release_camera','draw_hud_sprite']),
   entity:new Set(['animate','set_emitter','set_sprite_shadow','set_health_bar','flip_sprite_x','flip_sprite_y','set_sprite_rotation',
     'set_entity_visible','set_entity_team','set_entity_layer','set_entity_persistence','set_entity_always_active','set_entity_max_health',
     'set_entity_integer','set_entity_real','set_entity_boolean','set_entity_string','add_component','remove_component','set_respawn','respawn_when']),
@@ -19,6 +47,30 @@ export const initScope=({gameScript,roomScript,tileScript}={})=>gameScript?'game
 export const initStatements=unit=>(unit?.events?.init??[]).flatMap(row=>row.op==='init_properties'?(row.body??[]):[row]);
 
 function fail(node,message){throw Object.assign(Error(message),{node});}
+
+function literal(row, fields){
+  const {name,value}=row;
+  if(!Object.hasOwn(fields,name))fail(row,'Unknown initial property '+name);
+  const [label,type]=fields[name];
+  const number=value&&typeof value==='object'&&Object.keys(value).length===1?value.real:value;
+  const valid=Array.isArray(type)?type.includes(value):type==='number'?Number.isFinite(number):
+    type==='integer'?Number.isSafeInteger(value):typeof value===type&&(type!=='string'||value.length<=96);
+  if(!valid)fail(row,label+' requires '+(Array.isArray(type)?type.join(', '):'a literal '+type));
+  return type==='number'?number:value;
+}
+
+export function placementProperties(base,settings){
+  if(!settings)return base;
+  const result={...base};
+  for(const [name,key] of Object.entries(placementKeys)){
+    if(Object.hasOwn(settings,name))result[key]=settings[name];
+  }
+  if(settings.health!=null)result.physics={...base.physics,health:settings.health};
+  for(const [name,key] of Object.entries(respawnKeys)){
+    if(Object.hasOwn(settings,name))result.respawn={...result.respawn,[key]:settings[name]};
+  }
+  return result;
+}
 
 function physicsValue(row){
   const {name,value}=row;
@@ -41,7 +93,7 @@ function physicsValue(row){
 export function compileInitProperties(events,registry){
   if(events?.init?.[0]?.op!=='init_properties'&&events?.game_startup?.[0]?.op!=='init_properties')
     return {events};
-  const scope=initScope(registry), physics=Object.create(null), source={...events};
+  const scope=initScope(registry), physics=Object.create(null), definition=Object.create(null), instances=new Map(), layers=new Map(), source={...events};
   for(const event of ['init','game_startup']){
     if(!Array.isArray(events[event]))continue;
     const group=events[event][0];
@@ -52,8 +104,24 @@ export function compileInitProperties(events,registry){
     for(const row of group.body){
       if(row.op==='init_property'){
         if(registry&&scope!=='entity'&&scope!=='tile')fail(row,'Physics properties belong to an entity type or tile variant');
+        if(Object.hasOwn(initialDefinitionFields,row.name)){
+          if(Object.hasOwn(definition,row.name))fail(row,'Set '+row.name+' only once');
+          definition[row.name]=literal(row,!registry?{...entityFields,...tileFields}:scope==='tile'?tileFields:entityFields);
+          continue;
+        }
         if(Object.hasOwn(physics,row.name))fail(row,'Set '+row.name+' only once');
         physics[row.name]=physicsValue(row);
+        continue;
+      }
+      if(row.op==='instance_property'||row.op==='layer_property'){
+        const instance=row.op==='instance_property', values=instance?instances:layers;
+        const name=instance?row.instance:row.layer;
+        if(registry&&scope!=='room')fail(row,'Set placed entity and layer properties in the Room script');
+        if(typeof name!=='string'||!name.trim()||name.length>96)fail(row,'Choose a name from the room');
+        const record=values.get(name)??Object.create(null);
+        if(Object.hasOwn(record,row.name))fail(row,'Set '+row.name+' only once for '+name);
+        record[row.name]=literal(row,instance?instanceFields:spawnFields);
+        values.set(name,record);
         continue;
       }
       if(registry?!propertySets[scope].has(row.op):!Object.values(propertySets).some(set=>set.has(row.op)))
@@ -64,5 +132,6 @@ export function compileInitProperties(events,registry){
     }
     source[event]=[...rows,...events[event].slice(1)];
   }
-  return {events:source,...(Object.keys(physics).length?{physics}:{})};
+  return {events:source,...(Object.keys(physics).length?{physics}:{}),
+    ...(Object.keys(definition).length?{definition}:{}),...(instances.size?{instances}:{}),...(layers.size?{layers}:{})};
 }

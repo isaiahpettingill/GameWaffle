@@ -16,6 +16,7 @@ import {projectBasename} from './resource-name.mjs';
 import {gameScriptPath,initialGameScript,readGameScript} from './game-script.mjs';
 import {initialTileScript,tileScriptPath,tileStartsAnimated} from './tile-script.mjs';
 import {changeRoomView,initialRoomScript,roomScriptPath,roomSettingKeys} from './room-script.mjs';
+import {initialPropertyRows} from './init-properties.mjs';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { watch } from 'node:fs';
@@ -412,6 +413,15 @@ const server = createServer(async (req, res) => {
           for(const [id,room] of Object.entries(project.rooms??{}))if(!Object.hasOwn(old.rooms,id)&&!room.script){
             if(!/^[A-Za-z0-9_-]{1,64}$/.test(id))throw Error('Invalid room name');
             const unit=initialRoomScript(room,project.roomDefaults,project.physicsUnits==='pixels');
+            const template=await store.read('scripts/modules/room_defaults.ws','utf8').catch(error=>{
+              if(error.code!=='ENOENT')throw error;
+              return null;
+            });
+            const configure=template!=null&&parseScript(template).routines?.configure;
+            if(Array.isArray(configure?.body)&&!configure.params.length){
+              unit.imports=['room_defaults'];
+              unit.events.init.push({op:'call',name:'room_defaults.configure',args:[]});
+            }
             scripts.set('room:'+id,unit);files.push([roomScriptPath(id),encodeCbor(unit)]);
           }
           const newAnimatedTiles=Object.fromEntries(Object.entries(project.tiles??{}).filter(([id,tile])=>
@@ -479,6 +489,7 @@ const server = createServer(async (req, res) => {
           const data = await store.read(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
           const script=data ? (isGame?await readGameScript(project,store.read):file.endsWith('.ws') ? {...parseScript(data.toString()),source:data.toString()} : decodeCbor(data)) :
             isGame?initialGameScript(project):isTile?initialTileScript(project.tiles[id]):isRoom?initialRoomScript(project.rooms[id],undefined,project.physicsUnits==='pixels'):initialScript(project.sprites[id]);
+          if(!data&&!isGame&&!isTile&&!isRoom)script.events.init[0].body.unshift(...initialPropertyRows(project.sprites[id]));
           if(url.searchParams.has('debug')){
             const labels=new WeakMap();
             function index(source,name){

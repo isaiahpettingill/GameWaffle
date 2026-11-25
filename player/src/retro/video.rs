@@ -182,6 +182,7 @@ impl Video {
                         &mut textures.split,
                         &mut self.rectangles,
                         None,
+                        None,
                         scale,
                     );
                 }
@@ -203,6 +204,7 @@ impl Video {
                     textures.ripple.as_mut(),
                     textures.hd.as_mut(),
                     gradient,
+                    None,
                     None,
                 )
             })?;

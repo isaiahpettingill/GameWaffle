@@ -526,6 +526,8 @@ pub struct RoomSettings {
     pub shader: Option<crate::RoomShader>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shader_pipeline: Option<Vec<crate::ShaderPass>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub background_shaders: Vec<crate::ShaderPass>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zoom: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -589,6 +591,7 @@ impl RoomSettings {
 
     pub(crate) fn valid(&self) -> bool {
         self.shader_pipeline.as_deref().is_none_or(crate::shader::valid_pipeline)
+            && crate::shader::valid_pipeline(&self.background_shaders)
             && self.shader.is_none_or(|shader| shader.strength <= 100)
             && self.zoom.is_none_or(|zoom| (0.25..=4.0).contains(&zoom))
             && self
@@ -672,6 +675,25 @@ pub struct HudText {
     pub offset: [i32; 2],
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+pub(crate) struct LayerSprite {
+    pub sprite: String,
+    pub anchor: HudAnchor,
+    pub offset: [i32; 2],
+    pub scale: u8,
+    pub parallax: f32,
+    pub started: u64,
+}
+
+#[derive(Serialize)]
+pub struct LayerSpriteView<'a> {
+    pub image: &'a str,
+    pub anchor: HudAnchor,
+    pub offset: [i32; 2],
+    pub scale: u8,
+    pub parallax: f32,
+}
+
 #[derive(Serialize)]
 pub struct Snapshot<'a> {
     #[serde(skip_serializing_if = "<[crate::drawing::Shape]>::is_empty")]
@@ -698,6 +720,10 @@ pub struct Snapshot<'a> {
     pub hud_font: &'a str,
     #[serde(rename = "hudText", skip_serializing_if = "BTreeMap::is_empty")]
     pub hud_text: &'a BTreeMap<String, HudText>,
+    #[serde(rename = "hudSprites", skip_serializing_if = "BTreeMap::is_empty")]
+    pub hud_sprites: BTreeMap<&'a str, LayerSpriteView<'a>>,
+    #[serde(rename = "backgroundSprites", skip_serializing_if = "BTreeMap::is_empty")]
+    pub background_sprites: BTreeMap<&'a str, LayerSpriteView<'a>>,
     pub icons: &'a BTreeMap<String, [i32; 2]>,
     pub bars: &'a BTreeMap<String, [i32; 2]>,
     pub counters: &'a BTreeMap<String, i32>,

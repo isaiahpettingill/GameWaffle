@@ -120,6 +120,8 @@ struct Scene {
     hud_font: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     hud_text: BTreeMap<String, HudText>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    background_sprites: BTreeMap<String, LayerSprite>,
     icons: BTreeMap<String, [i32; 2]>,
     bars: BTreeMap<String, [i32; 2]>,
     solids: usize,
@@ -377,6 +379,7 @@ impl Scene {
             shapes: runtime.shapes.clone(),
             hud_font: runtime.hud_font.clone(),
             hud_text: runtime.hud_text.clone(),
+            background_sprites: runtime.background_sprites.clone(),
             icons: runtime.icons.clone(),
             bars: runtime.bars.clone(),
             solids: runtime.static_ids.len(),
@@ -428,6 +431,7 @@ impl Scene {
             || self.dialog.len() > 32
             || self.hud_font.len() > 64
             || self.hud_text.len() > 64
+            || !valid_layer_sprites(&self.background_sprites)
             || self.hud_text.iter().any(|(label, text)| {
                 label.len() > 96
                     || text.value.len() > 4096
@@ -549,6 +553,7 @@ impl Scene {
         runtime.dialog = self.dialog;
         runtime.hud_font = self.hud_font;
         runtime.hud_text = self.hud_text;
+        runtime.background_sprites = self.background_sprites;
         runtime.icons = self.icons;
         runtime.bars = self.bars;
         runtime.contacts.events.clear();
@@ -583,6 +588,16 @@ struct Save {
     removed: BTreeMap<String, std::collections::BTreeSet<String>>,
     #[serde(default)]
     counters: BTreeMap<String, i32>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    hud_sprites: BTreeMap<String, LayerSprite>,
+}
+
+fn valid_layer_sprites(entries: &BTreeMap<String, LayerSprite>) -> bool {
+    entries.len() <= 64 && entries.iter().all(|(label, sprite)| {
+        label.len() <= 384 && sprite.sprite.len() <= 64 && (1..=8).contains(&sprite.scale)
+            && (0.0..=1.0).contains(&sprite.parallax)
+            && sprite.offset.iter().all(|value| (-4096..=4096).contains(value))
+    })
 }
 
 impl Save {
@@ -634,6 +649,7 @@ impl Runtime {
             inventory: self.inventory.clone(),
             removed: self.removed.clone(),
             counters: self.counters.clone(),
+            hud_sprites: self.hud_sprites.clone(),
         };
         let mut save = SAVE_HEADER.to_vec();
         ciborium::into_writer(&state, &mut save).map_err(|error| error.to_string())?;
@@ -655,6 +671,7 @@ impl Runtime {
             || state.globals.len() > 4096
             || state.flags.len() > 4096
             || state.inventory.len() > 1024
+            || !valid_layer_sprites(&state.hud_sprites)
             || state
                 .players
                 .iter()
@@ -747,6 +764,10 @@ impl Runtime {
                     actor.teleport(&mut self.world, Vec2::new(pos[0], pos[1]));
                 }
             }
+        }
+        self.hud_sprites = state.hud_sprites;
+        for sprite in self.hud_sprites.values_mut() {
+            sprite.started = sprite.started.min(self.tick);
         }
         Ok(())
     }

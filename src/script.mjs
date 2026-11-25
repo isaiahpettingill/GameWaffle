@@ -74,7 +74,7 @@ export function compileScript(script,modules={},trace,registry){
     collections:registry?.collections??validateCollections(script.collections),
     aliases:registry?.propertyAliases??propertyAliases(script.declarations?.globals,script.declarations?.flags,registry?.items),
   };
-  const {events,physics}=compileInitProperties(script.events,registry);
+  const {events,physics,definition,instances,layers}=compileInitProperties(script.events,registry);
   const result=compileEvents(script,events,modules,trace,registry,context);
   for(const [name,r] of routines){
     const args=r.params.map((_,index)=>defaults[paramType(r,index)]);
@@ -82,7 +82,7 @@ export function compileScript(script,modules={},trace,registry){
     try{compileEvents(script,{start:[block]},modules,undefined,registry,context);}
     catch(error){if(error.node===block || !error.node)error.node=r;throw error;}
   }
-  return physics?{...result,initPhysics:physics}:result;
+  return {...result,...(physics?{initPhysics:physics}:{}),...(definition?{definition}:{}),...(instances?{instances}:{}),...(layers?{layers}:{})};
 }
 function validateScriptDefinition(script,modules,routines,registry) {
   const constants=script.constants??{};
@@ -125,8 +125,8 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
     return result;
   }
   try {
-  let scriptBorder=false,requiresAbi13=false,requiresAbi14=false,requiresAbi15=false,requiresAbi16=false,requiresAbi17=false,requiresAbi18=false,requiresAbi19=false,requiresAbi20=false,tileSensing=false;
-  const dependencies = new Set(), shaderUses=new Set(), backgroundUses = new Set(), shaderPresets = new Set(), fontUses = new Set();
+  let scriptBorder=false,requiresAbi13=false,requiresAbi14=false,requiresAbi15=false,requiresAbi16=false,requiresAbi17=false,requiresAbi18=false,requiresAbi19=false,requiresAbi20=false,requiresAbi21=false,tileSensing=false;
+  const dependencies = new Set(), shaderUses=new Set(), backgroundUses = new Set(), shaderPresets = new Set(), fontUses = new Set(), hudSprites = new Set(), backgroundSprites = new Set();
   let scriptGravity=false,scriptJump=false,requiresAbi10=false,requiresAbi12=false;
   const events = {};
   let nodes = 0;
@@ -261,6 +261,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
           requiresAbi15=true;
           if(value.call==='text.lookup')requiresAbi17=true;
           if(value.call==='physics.gravity')requiresAbi19=true;
+          if(value.call==='math.random_chance'||value.call==='math.random_sign')requiresAbi21=true;
           if(namespace==='tile')tileSensing=true;
           return result==='numeric'?numeric:result;
         }
@@ -416,7 +417,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
         enter(depth);
         current=block;
         if(block.op==='init_properties')throw Error('Connect one Init properties block directly below On init or On game startup');
-        if(block.op==='init_property')throw Error('Put static physics properties inside Init properties');
+        if(['init_property','instance_property','layer_property'].includes(block.op))throw Error('Put static properties inside Init properties');
         if (block.op===validation)expression(block.value,0,depth+1);
         else if (block.op==='call')call(block.name,block.args,false,r=>{
           const returns=[];
@@ -462,10 +463,13 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
           const {type,name,scope:variableScope}=aliases.game[block.property];
           requireType(expression(block.value,0,depth+1),type,block.property,0);
           emit(commands.store,scope(variableScope),...word(named(name,variableScope)),0);
-        } else if(block.op==='apply_shaders'){
+        } else if(block.op==='apply_shaders'||block.op==='apply_background_shaders'){
+          const background=block.op==='apply_background_shaders';
           if(registry && !registry.gameScript && !registry.roomScript)throw Error('Apply shaders in a Room or Game script');
+          if(background&&registry?.gameScript)throw Error('Apply background shaders in a Room script');
           if(!Array.isArray(block.passes)||block.passes.length>8)throw Error('Use up to eight passes in a shader pipeline');
           requiresAbi13=true;
+          if(background)requiresAbi21=true;
           emit(Opcodes.shader_begin);
           for(const pass of block.passes){
             current=pass;
@@ -490,7 +494,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
               }
             }
           }
-          emit(Opcodes.shader_commit,registry?.gameScript?1:0);
+          emit(Opcodes.shader_commit,background?2:registry?.gameScript?1:0);
         } else if (block.op === 'while') {
           const start = bytes.length;
           requireType(expression(block.condition===undefined?false:block.condition,0,depth+1),'boolean',block.op,0);
@@ -537,6 +541,11 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
           if(Opcodes[block.op]>=144)requiresAbi16=true;
           if(block.op==='set_split_screen')requiresAbi18=true;
           if(block.op==='stop_sound')requiresAbi20=true;
+          if(block.op==='draw_hud_sprite'||block.op==='draw_background_sprite'){
+            if(!variableName(block.sprite)||registry?.sprites&&!Object.hasOwn(registry.sprites,block.sprite))throw Error('Choose a sprite asset to draw');
+            (block.op==='draw_hud_sprite'?hudSprites:backgroundSprites).add(block.sprite);
+            requiresAbi21=true;
+          }
           const scopeError=registry&&commandScopeError(block.op,registry);
           if(scopeError)throw Error(scopeError);
           if(block.op==='set_health_bar')for(const key of ['fill','track']){
@@ -617,6 +626,6 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
     if (bytes.length >= 65535) throw Error('Script bytecode exceeds 64 KiB');
     if (bytes.length) events[event] = { b:typeof Buffer === "undefined" ? Uint8Array.from(bytes) : Buffer.from(bytes), n:names.values, k:constants.values, ...(reals.values.length ? {f:reals.values} : {}) };
   }
-  return { events, dependencies, backgroundUses, scriptBorder, shaderUses, shaderPresets, fontUses, scriptGravity, scriptJump, requiresAbi10, requiresAbi12, requiresAbi13, requiresAbi14, requiresAbi15, requiresAbi16, requiresAbi17, requiresAbi18, requiresAbi19, requiresAbi20, tileSensing };
+  return { events, dependencies, backgroundUses, scriptBorder, shaderUses, shaderPresets, fontUses, hudSprites, backgroundSprites, scriptGravity, scriptJump, requiresAbi10, requiresAbi12, requiresAbi13, requiresAbi14, requiresAbi15, requiresAbi16, requiresAbi17, requiresAbi18, requiresAbi19, requiresAbi20, requiresAbi21, tileSensing };
   } catch(error){error.node=current;throw error;}
 }

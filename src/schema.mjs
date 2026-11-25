@@ -20,6 +20,8 @@ export function initialScript(actor){
 }
 export const hudAnchors=['top_left','top_center','top_right','center_left','center','center_right','bottom_left','bottom_center','bottom_right'];
 export const Blocks = {
+  instance_property:['Initial property of entity %1 · %2 = %3',[['instance','text',''],['name','text','animation'],['value','value','idle']]],
+  layer_property:['Initial property of layer %1 · %2 = %3',[['layer','text',''],['name','text','spawn_flag'],['value','value','']]],
   set_display_resolution:['Set game resolution to %1 × %2',[['width','integer',320],['height','integer',224]]],
   set_adaptive_display:['Set adaptive display min %1 × %2 max %3 × %4 pixel zoom %5',[
     ['min_width','integer',128],['min_height','integer',128],['max_width','integer',512],['max_height','integer',512],['zoom','integer',2],
@@ -65,6 +67,13 @@ export const Blocks = {
     ['x','number',4],['y','number',4],
   ]],
   set_hud_font:['Set HUD font to %1',[['font','text','']]],
+  draw_hud_sprite:['Draw HUD sprite %2 named %1 at %3 · X %4 Y %5 · scale %6',[
+    ['label','text','portrait'],['sprite','text',''],['anchor',hudAnchors,'top_left'],
+    ['x','number',4],['y','number',4],['scale','integer',1,'optional'],
+  ]],
+  draw_background_sprite:['Draw background sprite %2 named %1 · X %3 Y %4 · scroll %5 · scale %6',[
+    ['label','text','moon'],['sprite','text',''],['x','number',32],['y','number',24],['parallax','number',0],['scale','integer',1,'optional'],
+  ]],
   emit_event:['Emit event %1',[['event','text','']]],
   emit_event_with_entity:['Emit event %1 with entity %2',[['event','text',''],['entity','integer',0]]],
   apply_gravity:['Apply gravity with modifier %1',[['modifier','number',1,'optional']]],
@@ -184,6 +193,8 @@ export const Opcodes = Object.freeze({
   set_background_gradient:144,set_gradient_axis:145,set_gradient_stop:146,set_gradient_focus:147,
   set_gradient_palette_color:148,clear_gradient_slot:149,set_split_screen:150,
   stop_sound:151,
+  draw_hud_sprite:152,
+  draw_background_sprite:153,
   set_entity_layer:130,set_entity_team:131,set_entity_max_health:132,set_entity_friction:133,set_emitter:134,
 });
 export const collectionCommands=['inventory_append','inventory_remove','inventory_set','inventory_create_child','inventory_remove_child','array_append','array_set','array_remove'];
@@ -193,7 +204,7 @@ export const tileCommands=['set_tile_playback','set_tile_frame','advance_tile_fr
 export const gameCommands=['set_display_resolution','set_adaptive_display','set_default_camera','set_minimap','set_first_controller','set_split_screen'];
 export const gradientCommands=['set_background_gradient','set_gradient_axis','set_gradient_stop','set_gradient_focus','set_gradient_palette_color','clear_gradient_slot'];
 export const roomCommands = ['camera_follow_entity','camera_zoom','reset_room_camera','set_room_gravity',
-  'set_room_background','set_room_background_image','set_camera_bottom_inset','set_room_border','set_room_depth_sort','set_room_music','set_room_ambience','set_room_shader','reset_room_shader',...gradientCommands];
+  'set_room_background','set_room_background_image','draw_background_sprite','set_camera_bottom_inset','set_room_border','set_room_depth_sort','set_room_music','set_room_ambience','set_room_shader','reset_room_shader',...gradientCommands];
 const instanceCommands=new Set([
   'walk','jump','jump_force','chase','move_by','set_position','velocity','force','impulse','apply_gravity',
   'animate','animate_once','flip_sprite_x','flip_sprite_y','set_sprite_rotation','rotate_sprite',
@@ -204,6 +215,7 @@ export function commandScopeError(op,{gameScript,roomScript,tileScript}){
   if(tileCommands.includes(op)&&!tileScript)return 'Use '+op+' in a tile script';
   if(roomCommands.includes(op)&&roomScript===false)return 'Use '+op+' in a room script';
   if(gameScript&&gradientCommands.includes(op))return 'Use '+op+' in a Room script';
+  if(gameScript&&op==='draw_background_sprite')return 'Use '+op+' in a Room script';
   if(['set_room_shader','reset_room_shader'].includes(op)&&gameScript)
     return 'Room shader commands belong in the Room script. Use Apply display shaders in order for Game postprocessing.';
   if(roomScript&&instanceCommands.has(op))return 'Use '+op+' in an entity or tile script';
@@ -289,4 +301,6 @@ export const reporters={
   'math.random_real':['operators','Random real from %1 to %2','real',[['real',{real:0}],['real',{real:1}]]],
   'text.lookup':['text','Look up text for %1','string',[['string','greeting']]],
   'physics.gravity':['motion','Room gravity','real',[]],
+  'math.random_chance':['operators','%1% chance?','boolean',[['real',{real:50}]]],
+  'math.random_sign':['operators','Random sign (−1 or 1)','integer',[]],
 };

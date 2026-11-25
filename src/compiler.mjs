@@ -17,7 +17,7 @@ import {propertyAliases,validateCollections} from './collections.mjs';
 import {pack} from './pack.mjs';
 import {defaultFont,readBitfont} from './font.mjs';
 import { initialScript, buttons, effects, platformGravity, roomBorder } from './schema.mjs';
-import {initStatements,physicsModes} from './init-properties.mjs';
+import {initStatements,physicsModes,placementProperties} from './init-properties.mjs';
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -347,35 +347,39 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     return { image: id, ms: frame.duration };
   }
 
-  const scriptAbi=script=>script?.requiresAbi20?20:script?.requiresAbi19?19:script?.requiresAbi18?18:script?.requiresAbi17?17:script?.requiresAbi16?16:script?.requiresAbi15?15:script?.requiresAbi14?14:script?.requiresAbi13?13:script?.requiresAbi12?12:script?.requiresAbi10?10:9;
+  const scriptAbi=script=>script?.requiresAbi21?21:script?.requiresAbi20?20:script?.requiresAbi19?19:script?.requiresAbi18?18:script?.requiresAbi17?17:script?.requiresAbi16?16:script?.requiresAbi15?15:script?.requiresAbi14?14:script?.requiresAbi13?13:script?.requiresAbi12?12:script?.requiresAbi10?10:9;
   let runtimeAbi=Math.max(scriptAbi(gameScript),gameUnit?12:9,pixelUnits?19:0);
   let tileSensing=Boolean(gameScript?.tileSensing);
   for(const id of gameScript?.shaderUses??[])usedShaders.add(id);
-  const sprites = Object.create(null), dependencies = new Map(), spriteFonts = new Map();
+  const sprites = Object.create(null), dependencies = new Map(), spriteFonts = new Map(), entityTypes=new Map();
+  const hudSprites=new Set(gameScript?.hudSprites);
   if(Object.keys(gameScript?.events??{}).length)sprites['@game']={clips:{},program:gameScript.events,
     physics:props(undefined,'none'),width:1,height:1,layer:0,animation:'default',team:0};
-  for (const [id, sprite] of Object.entries(project.sprites ?? {})) {
+  for (const [id, asset] of Object.entries(project.sprites ?? {})) {
     key(id, 'sprite');
-    const ase = await source(sprite.source);
+    const ase = await source(asset.source);
     const all = ase.frames.map((_, i) => register(`sprite/${id}/${i}`, ase, i));
     const clips = Object.create(null);
     const clip=(frames,repeat)=>({frames,repeat,durationMs:frames.reduce((ms,frame)=>ms+Math.max(1,frame.ms),0)});
     clips.default=clip(all,0);
     for (const tag of ase.tags) clips[tag.name]=clip(tagFrames(tag).map(i=>all[i]),tag.repeat);
-    let script = compileScript(initialScript(sprite));
-    if (sprite.script || scripts.has(id)) {
+    let script = compileScript(initialScript(asset));
+    if (asset.script || scripts.has(id)) {
       try {
-        const unit=scripts.get(id) ?? (sprite.script.endsWith('.ws') ? parseScript(await read(sprite.script,'utf8')) : decodeCbor(await read(sprite.script)));
+        const unit=scripts.get(id) ?? (asset.script.endsWith('.ws') ? parseScript(await read(asset.script,'utf8')) : decodeCbor(await read(asset.script)));
         script=compileScript(unit,await loadModules(unit,read),undefined,registry);
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
       }
     }
+    const sprite=placementProperties(asset,script.definition);
+    entityTypes.set(id,sprite);
     if(sprite.gravityMode!=null && !['room','script'].includes(sprite.gravityMode))throw Error('Invalid gravity control for '+id);
     if(sprite.emitter && (!effects.includes(sprite.emitter.effect) || !Number.isInteger(sprite.emitter.rate) || sprite.emitter.rate<1 || sprite.emitter.rate>240
       || (sprite.emitter.offset!=null && (!Array.isArray(sprite.emitter.offset)||sprite.emitter.offset.length!==2||sprite.emitter.offset.some(value=>!Number.isFinite(value)||Math.abs(value)>4096)))))
       throw Error('Invalid particle emitter for '+id);
     runtimeAbi=Math.max(runtimeAbi,scriptAbi(script));
+    for(const target of script.hudSprites)hudSprites.add(target);
     tileSensing||=script.tileSensing;
     dependencies.set(id,script.dependencies);
     spriteFonts.set(id,script.fontUses);
@@ -434,7 +438,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     tiles[id] = {
       variants: variantGroups.flat(), authoredVariants:clips.length,
       physics: props(tile.physics, mode,pixelUnits),
-      hosts:[],variantPhysics:[],
+      hosts:[],variantPhysics:[],settings:[],
     };
     const compiled=tiles[id];
     const sequences=variantGroups.map(group=>group.flat());
@@ -444,7 +448,9 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       const unit=scripts.get(key)??(bytes?decodeCbor(bytes):null);
       if(!unit)continue;
       const script=compileScript(unit,await loadModules(unit,read),undefined,{...registry,tileScript:true});
-      if(script.initPhysics)compiled.variantPhysics[variant]=props({...compiled.physics,...script.initPhysics},compiled.physics.mode);
+      for(const target of script.hudSprites)hudSprites.add(target);
+      if(script.definition)compiled.settings[variant]=placementProperties(tile,script.definition);
+      if(script.initPhysics)compiled.variantPhysics[variant]=props({...compiled.physics,...script.initPhysics},compiled.physics.mode,pixelUnits);
       // A variant with only baked properties has no runtime script host.
       if(!Object.keys(script.events).length)continue;
       const name='@tile/'+id+'/'+variant;
@@ -507,7 +513,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     font={width:96,height,rgba:image.frames[0].rgba,
       glyphs:Object.fromEntries(characters.map((character,index)=>[character,96+index]))};
   }
-  const rooms = Object.create(null), atlases = Object.create(null), roomPreviewBackgrounds=Object.create(null);
+  const roomScripts=new Map();
   for (const [id, room] of Object.entries(project.rooms ?? {})) {
     key(id, 'room');
     const scriptKey='room:'+id, file=room.script??roomScriptPath(id), isText=file.endsWith('.ws');
@@ -516,7 +522,25 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       return null;
     });
     const unit=scripts.get(scriptKey)??(data==null?null:isText?parseScript(data):decodeCbor(data));
-    const settings=unit?{}:room;
+    if(unit){
+      const script=compileScript(unit,await loadModules(unit,read),undefined,{...registry,roomScript:true});
+      roomScripts.set(id,{unit,script});
+      for(const target of script.hudSprites)hudSprites.add(target);
+    }
+  }
+  function includeLayerSprites(images,ids){
+    for(const id of ids){
+      const sprite=sprites[id];
+      for(const frame of (sprite.clips[sprite.animation]??sprite.clips.default).frames)
+        images.set(frame.image,frames.get(frame.image));
+    }
+  }
+  const hudFrames=new Map();
+  includeLayerSprites(hudFrames,hudSprites);
+  const rooms = Object.create(null), atlases = Object.create(null), roomPreviewBackgrounds=Object.create(null);
+  for (const [id, room] of Object.entries(project.rooms ?? {})) {
+    const authored=roomScripts.get(id);
+    const settings=authored?{}:room;
     const cols = integer(room.cols, 1, Math.floor(4096 / size), 'room columns');
     const rows = integer(room.rows, 1, Math.floor(4096 / size), 'room rows');
     const width = cols * size, height = rows * size;
@@ -528,7 +552,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     const bottomInset=Math.min(rows-1,integer(settings.cameraBottomInset??0,0,1023,'bottom camera inset'));
     if(bottomInset)runtimeAbi=Math.max(runtimeAbi,11);
     const ySort = settings.ySort ?? view === 'top_down';
-    const images = new Map(), baked = [], entities = [], solids = [], blockers = new Set();
+    const images = new Map(hudFrames), baked = [], entities = [], solids = [], blockers = new Set();
+    includeLayerSprites(images,authored?.script.backgroundSprites??[]);
     if (settings.backgroundImage) {
       const art=await source(settings.backgroundImage);
       images.set('room/background',{width:art.width,height:art.height,rgba:art.frames[0].rgba});
@@ -558,10 +583,10 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     for(const kind of gameScript?.shaderPresets??[])bakeShaderPreset(kind,images);
     let scriptHost, scriptBorder=gameScript?.scriptBorder,roomTileSensing=tileSensing;
     const tileCells=new Map();
-    if(unit){
+    if(authored){
+      const {unit,script}=authored;
       const background=initStatements(unit).findLast(block=>block.op==='set_room_background_image');
       roomPreviewBackgrounds[id]=background?.image??'';
-      const script=compileScript(unit,await loadModules(unit,read),undefined,{...registry,roomScript:true});
       runtimeAbi=Math.max(runtimeAbi,scriptAbi(script));
       roomTileSensing||=script.tileSensing;
       for(const id of script.shaderUses)usedShaders.add(id);
@@ -579,9 +604,10 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     const players = new Set();
     const names = instanceNames(room.entities ?? []);
     const usedNames = new Set();
-    for (const [index, entry] of (room.entities ?? []).entries()) {
-      includeSprite(entry.sprite);
+    for (const [index, placement] of (room.entities ?? []).entries()) {
       const name = names[index];
+      const entry=placementProperties(placement,authored?.script.instances?.get(name));
+      includeSprite(entry.sprite);
       if (typeof name !== 'string' || !name.trim() || name.length > 64 || /[\x00-\x1f\x7f]/.test(name)) {
         throw Error(`Invalid instance name in room "${id}"`);
       }
@@ -598,8 +624,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         if (players.has(entry.player)) throw Error(`Duplicate player slot in ${id}`);
         players.add(entry.player);
       }
-      const physics = entry.physics ? props({ ...definition.physics, ...entry.physics }, definition.physics.mode) : undefined;
-      const type=project.sprites[entry.sprite];
+      const physics = entry.physics ? props({ ...definition.physics, ...entry.physics }, definition.physics.mode,pixelUnits) : undefined;
+      const type=entityTypes.get(entry.sprite);
       const rememberState=entry.rememberState??(entry.persistRemoval===true?true:type.rememberState??false);
       const rememberRemoval=entry.persistRemoval===true && entry.rememberState==null;
       entities.push({ ...entry, components:components(entry.components), standardRespawn:entry.respawn?.mode==='default',
@@ -609,7 +635,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     for (const sound of [settings.music, settings.ambience].filter(Boolean)) {
       if (!Object.hasOwn(audio, sound)) throw Error(`Unknown room audio: ${sound}`);
     }
-    for (const [index, layer] of (room.layers ?? []).entries()) {
+    for (const [index, placement] of (room.layers ?? []).entries()) {
+      const layer=placementProperties(placement,authored?.script.layers?.get(placement.name));
       const order = integer(layer.order ?? index, -10000, 10000, 'visual layer');
       const cells = new Map(), zone = new Map();
       const chunks = new Map();
@@ -627,7 +654,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         if (!clip) throw Error(`Unknown variant for ${tileId}`);
         const definition=tile.variantPhysics[selected]??tile.physics;
         const physics = layer.collidable ? definition : { ...definition, mode: 'none' };
-        const gates=conditions(layer,project.tiles[tileId]);
+        const settings=tile.settings[selected]??project.tiles[tileId];
+        const gates=conditions(layer,settings);
         const host=tile.hosts[selected];
         const dynamic = host || gates.length>0 || !['static','none'].includes(physics.mode);
         const bakedCell=!dynamic&&clip.length===1;
@@ -640,7 +668,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         if(host){
           includeSprite(host);
           entities.push({x:(x+.5)*size,y:(y+.5)*size,sprite:host,...(tileMark?{tileMark}:{}),
-            persistence:project.tiles[tileId].persistRemoval?`tile/${index}/${x}/${y}`:null,
+            persistence:settings.persistRemoval?`tile/${index}/${x}/${y}`:null,
             conditions:gates,layer:order,physics:physics.mode==='none'?{...physics,mode:'sensor'}:physics});
         }else if (bakedCell) {
           const col = Math.floor(x/chunkSize)*chunkSize, row = Math.floor(y/chunkSize)*chunkSize;
@@ -653,7 +681,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
           blit(frames.get(clip[0].image),chunk,x*size-chunk.x,y*size-chunk.y);
         } else {
           for (const frame of clip) images.set(frame.image, frames.get(frame.image));
-          entities.push({ x: (x+.5)*size, y:(y+.5)*size, tile: tileId, clip,...(tileMark?{tileMark}:{}),persistence:project.tiles[tileId].persistRemoval?`tile/${index}/${x}/${y}`:null,
+          entities.push({ x: (x+.5)*size, y:(y+.5)*size, tile: tileId, clip,...(tileMark?{tileMark}:{}),persistence:settings.persistRemoval?`tile/${index}/${x}/${y}`:null,
             conditions:gates, blocker:gates.length && physics.mode==='static'?y*cols+x:null,
             physics: !gates.length && physics.mode === 'static' ? { ...physics, mode: 'none' } : physics, layer: order });
         }

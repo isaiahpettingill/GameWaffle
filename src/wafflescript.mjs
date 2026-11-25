@@ -106,8 +106,8 @@ export function parseScript(source){
         i++;eol();row={op:'init_properties',body:body()};need('end');
       }else if(peek()==='property'&&identifier.test(tokens[i+1]?.s??'')&&tokens[i+2]?.s==='='){
         i++;const name=id();need('=');row={op:'init_property',name,value:expr()};
-      }else if(eat('apply_shaders')){
-        eol();
+      }else if(['apply_shaders','apply_background_shaders'].includes(peek())){
+        const op=id();eol();
         const passes=[];
         while(!eat('end')){
           const at=tokens[i]?.at??source.length;
@@ -128,7 +128,7 @@ export function parseScript(source){
           passes.push(mark({shader,parameters},at));
           if(passes.length>8)fail('Use up to eight passes in a pipeline');
         }
-        row={op:'apply_shaders',passes};
+        row={op,passes};
       }else if(eat('if')){
         row=branch(start);
         let tail=row;
@@ -328,8 +328,8 @@ export function formatScript(script){
       if(b.op==='init_property'){
         lines.push(pad+'property '+b.name+' = '+value(b.value));continue;
       }
-      if(b.op==='apply_shaders'){
-        lines.push(pad+'apply_shaders');
+      if(b.op==='apply_shaders'||b.op==='apply_background_shaders'){
+        lines.push(pad+b.op);
         for(const pass of b.passes){
           const args=[JSON.stringify(pass.shader),...Object.entries(pass.parameters??{}).map(([key,values])=>
             (identifier.test(key)?key:JSON.stringify(key))+': '+(values.length===1?value(values[0]):'['+values.map(value).join(', ')+']'))];

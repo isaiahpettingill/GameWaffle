@@ -8,7 +8,7 @@ import {branchBody,branchCondition} from './conditional-block.js';
 import { Events, Blocks, buttons, controlTransfers, inputEvent, receivedEvent, timerEvent, controllerEvent, messageInputs, entityQueries, reporters, gradientCommands, tileCommands, drawingCommands, collectionCommands, commandScopeError, valueInput } from '../src/schema.mjs';
 import {roomShaders} from '../src/room-shaders.mjs';
 import {physicsArgumentDefault} from '../src/physics-units.mjs';
-import {initScope,initialPhysicsFields,physicsModes} from '../src/init-properties.mjs';
+import {initScope,initialPhysicsFields,initialDefinitionFields,instanceFields,spawnFields,physicsModes} from '../src/init-properties.mjs';
 import { conditionalBranches, constantType, parseParameters, variableName } from '../src/script.mjs';
 import {callArguments, callBlock, definitionBlock, enclosingRoutine, registerRoutineBlocks, routineParameters, routineSignature} from './routine-blocks.js';
 import { argumentInput, logicDefinitions, logicStatements, collectionReporterType, collectionReporters, entityQueryStyle, reporterBlock, reporterBlockType, readValue, slot, numericSlot, queryPicker, referenceSlot, roomReadings } from './logic-blocks.js';
@@ -33,19 +33,19 @@ const groups = {
   world: {name:'Room',color:'#345d79',commands:['room','set_room_border','set_room_gravity','checkpoint','retry_checkpoint']},
   camera: {name:'Camera',color:'#475d8a',commands:['camera_follow_entity','follow_player','group_camera','follow','camera',
     'camera_zoom','set_camera_bottom_inset','reset_room_camera','set_default_camera','set_split_screen']},
-  background: {name:'Background',color:'#665283',commands:['set_room_background','set_room_background_image',...gradientCommands]},
+  background: {name:'Background',color:'#665283',commands:['set_room_background','set_room_background_image','draw_background_sprite',...gradientCommands]},
   looks: {name:'Appearance',color:'#6a499c',commands:['animate','animate_once','flip_sprite_x','flip_sprite_y','set_sprite_rotation',
     'rotate_sprite','set_sprite_shadow','set_entity_layer','set_room_depth_sort','burst','burst_at','emit','set_emitter','emit_for','stop_fx']},
   shaders: {name:'Shaders',color:'#805584',commands:['set_room_shader','reset_room_shader']},
   sound: {name:'Sound',color:'#885268',commands:['sound','stop_sound','set_room_music','set_room_ambience']},
   display: {name:'Display',color:'#345d79',commands:['set_display_resolution','set_adaptive_display']},
   drawing: {name:'Drawing',color:'#594aad',commands:drawingCommands},
-  text: {name:'Text & HUD',color:'#5a536d',commands:['draw_text','set_hud_font','counter','bar','hide','say','ask','show_menu','set_minimap']},
+  text: {name:'Text & HUD',color:'#5a536d',commands:['draw_text','draw_hud_sprite','set_hud_font','counter','bar','hide','say','ask','show_menu','set_minimap']},
   collections: {name:'Collections',color:'#725b26',commands:collectionCommands},
 };
 // Older commands still need styling when existing code is opened or pasted.
 const legacyInventory=['show_inventory','use_selected_item','give','take','give_player','take_player','count_player','use_player_item','item_icon'];
-const commandStyles = {release_camera:'camera',fire:'combat',
+const commandStyles = {release_camera:'camera',fire:'combat',instance_property:'events',layer_property:'events',
   ...Object.fromEntries(legacyInventory.map(id=>[id,'collections'])),
   ...Object.fromEntries(Object.entries(groups).flatMap(([style,group])=>(group.commands??[]).map(id=>[id,style])))};
 const eventLabels = {
@@ -90,6 +90,8 @@ function blockDefinition(id, messageInput = false) {
   return {
     type:messageInput?commandType(id):'waffle_'+id, message0:statementLabels[id]??message, style:commandStyles[id],
     args0:fields.map(([name,type,fallback,optional])=>{
+      if(name==='name'&&(id==='instance_property'||id==='layer_property'))
+        return {type:'field_dropdown',name,options:Object.entries(id==='instance_property'?instanceFields:spawnFields).map(([key,[label]])=>[label,key])};
       if (valueInput(type) || (messageInput && name===messageInputs[id]))
         return {type:'input_value',name,check:optional?['WaffleValue','WaffleNone']:'WaffleValue'};
       if (Array.isArray(type))
@@ -127,8 +129,8 @@ Blockly.defineBlocksWithJsonArray([
     tooltip:'The compiler creates the body with this mode.',
     args0:[{type:'field_dropdown',name:'mode',options:physicsModes.map(mode=>[mode.replaceAll('_',' '),mode])}]},
   {type:'waffle_init_property',message0:'Initial %1 = %2',style:'events',previousStatement:'waffle',nextStatement:'waffle',
-    tooltip:'Use a literal. The compiler bakes this value into the body.',args0:[
-      {type:'field_dropdown',name:'name',options:Object.entries(initialPhysicsFields).map(([key,label])=>[label,key])},
+    tooltip:'Use a literal. The compiler sets this property before creating the entity or tile.',args0:[
+      {type:'field_dropdown',name:'name',options:Object.entries({...initialPhysicsFields,...initialDefinitionFields}).map(([key,label])=>[label,key])},
       {type:'input_value',name:'value',check:'WafflePhysicsLiteral'},
     ]},
   {type:'waffle_declare',message0:'Declare %1 %2 = %3',style:'variables',args0:[
@@ -330,6 +332,13 @@ function readGameConfiguration(blocks,strict=false){
   return {controls,menus};
 }
 const dynamicFields = {image:['backgrounds','Choose background'],font:['fonts','HUD font'],event:['events','Choose event'],projectile:['sprites','Choose projectile'],sprite:['sprites','Choose an entity type'],item:['items','Register an item'],tag:['animations','Add an animation'],menu:['menus','Create a menu'],room:['rooms','Choose room'],sound:['sounds','Choose sound'],component:['components','Choose tag'],field:['fields','Choose field'],flag:['flags','Any flag state']};
+for(const [id,key,list,empty] of [['instance_property','instance','names','Choose a placed entity'],['layer_property','layer','layerNames','Choose a layer']]){
+  Blockly.Blocks['waffle_'+id]={init(){
+    const data=registry(this),spec=blockDefinition(id);
+    spec.args0[0]=menu(key,()=>data[list]??[],empty);
+    this.jsonInit(spec);
+  }};
+}
 for(const [id,[,fields]] of Object.entries(Blocks)){
   if(!fields.some(([key])=>Object.hasOwn(dynamicFields,key)||collectionFields.has(key)))continue;
   Blockly.Blocks['waffle_'+id]={init(){
@@ -440,6 +449,7 @@ const toolbox = (isRoom,isGame=false,isTile=false,isModule=false,pixelUnits=fals
     events:[...(isModule?[]:[...(isGame?[init('game_startup'),block('declare',{kind:'events',name:'started'},{value:'Started'})]:[]),
       init('init'),block('init_properties'),
       ...(!isRoom&&!isGame?[block('init_body',{mode:'static'}),block('init_property',{name:'density'},{value:1})]:[]),
+      ...(isRoom&&!isGame?[block('instance_property',{name:'layer'},{value:0}),block('layer_property',{name:'spawn_flag'},{value:''})]:[]),
       block('tick'),block('timer'),block('received_event'),
       block(isTile?'tile_event':isRoom?'room_event':'world_event',{event:isTile?'begin_contact':'start'}),
       ...(!isRoom&&!isTile?[block('clone_start')]:[])]),block('event_sender'),block('event_entity')],
@@ -457,7 +467,7 @@ const toolbox = (isRoom,isGame=false,isTile=false,isModule=false,pixelUnits=fals
     motion:isRoom?[]:[block('grounded')],
     entities:[...(!isRoom?[block('self'),block('actor',{actor:'x'}),block('actor_real',{actor:'x_real'}),
       block('actor_condition',{actor:'moving'})]:[]),...(!isTile?[block('last_clone')]:[])],
-    shaders:isRoom||isModule?[block('apply_shaders'),block('shader_pass')]:[],
+    shaders:isRoom||isModule?[block('apply_shaders'),...(!isGame?[block('apply_background_shaders')]:[]),block('shader_pass')]:[],
     text:[...(isGame?[block('define_menu'),block('menu_option')]:[]),
       ...(isRoom?[block('room_reading',{actor:'answer'})]:[]),block('localized',{key:''}),block('string')],
     collections:[...(isGame?[block('object_decl'),block('object_property',null,{default:null}),block('inventory_decl'),
@@ -861,7 +871,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
       else if(op==='init_property'){
         if(data.name==='mode'){type='waffle_init_body';fields.mode=data.value;}
         else{fields.name=data.name;value('value',1);}
-      }else if(op==='apply_shaders'){
+      }else if(op==='apply_shaders'||op==='apply_background_shaders'){
         Object.assign(inputs,encodeShaderPipeline({passes:data.passes},registryData.shaders,encodeValue));
       }else if (logicStatements.has(op)) {
         if (op==='set' || op==='change') {
@@ -908,7 +918,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
       if(op==='init_properties')result.push({op,body:stack('body')});
       else if(op==='init_body')result.push({op:'init_property',name:'mode',value:field('mode')});
       else if(op==='init_property')result.push({op,name:field('name'),value:value('value',1)});
-      else if(op==='apply_shaders')result.push(decodeShaderPipeline(block,registryData.shaders));
+      else if(op==='apply_shaders'||op==='apply_background_shaders')result.push(decodeShaderPipeline(block,registryData.shaders));
       else if(op==='call')result.push({op,name:field('name'),args:callArguments(block)});
       else if (op==='set' || op==='change') result.push({op,scope:field('scope'),name:field('name'),value:value('value',variableDefault(field('scope'),op==='change'?1:0))});
       else if (op==='wait') result.push({op,ticks:value('ticks',1)});

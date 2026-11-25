@@ -250,6 +250,8 @@ pub struct Runtime {
     menu: Option<model::Menu>,
     hud_font: String,
     hud_text: BTreeMap<String, HudText>,
+    hud_sprites: BTreeMap<String, LayerSprite>,
+    background_sprites: BTreeMap<String, LayerSprite>,
     icons: BTreeMap<String, [i32; 2]>,
     bars: BTreeMap<String, [i32; 2]>,
     counters: BTreeMap<String, i32>,
@@ -354,6 +356,7 @@ impl Runtime {
         self.inputs = [Input::default(); 4];
         self.tick = 0;
         self.sounds.clear();
+        self.hud_sprites.clear();
         self.transition = None;
         self.game_properties.player_items = Default::default();
         self.checkpoint = None;
@@ -574,12 +577,29 @@ impl Runtime {
             menu: self.menu.as_ref(),
             hud_font: &self.hud_font,
             hud_text: &self.hud_text,
+            hud_sprites: self.layer_sprites(&self.hud_sprites),
+            background_sprites: self.layer_sprites(&self.background_sprites),
             icons: &self.icons,
             bars: &self.bars,
             counters: &self.counters,
             sounds: &self.sounds,
             events: &self.events,
         }
+    }
+
+    fn layer_sprites<'a>(&'a self, entries: &'a BTreeMap<String, LayerSprite>) -> BTreeMap<&'a str, LayerSpriteView<'a>> {
+        entries.iter().filter_map(|(label, entry)| {
+            let sprite = self.game.sprites.get(&entry.sprite)?;
+            let clip = sprite.clips.get(&sprite.animation).or_else(|| sprite.clips.get("default"))?;
+            let elapsed = self.tick.saturating_sub(entry.started).saturating_mul(1000) / 60;
+            Some((label.as_str(), LayerSpriteView {
+                image: clip.image_with_repeat(elapsed, clip.repeat),
+                anchor: entry.anchor,
+                offset: entry.offset,
+                scale: entry.scale,
+                parallax: entry.parallax,
+            }))
+        }).collect()
     }
 
     pub fn room_settings(&self) -> &RoomSettings {
@@ -797,6 +817,8 @@ impl Runtime {
             menu: None,
             hud_font: String::new(),
             hud_text: Default::default(),
+            hud_sprites: Default::default(),
+            background_sprites: Default::default(),
             icons: Default::default(),
             bars: Default::default(),
             counters: Default::default(),
@@ -887,6 +909,7 @@ impl Runtime {
         self.counters.clear();
         self.hud_font.clear();
         self.hud_text.clear();
+        self.background_sprites.clear();
         self.icons.clear();
         self.bars.clear();
         self.restored = false;
@@ -2236,6 +2259,8 @@ impl Runtime {
             }
             22 => {
                 self.hud_text.remove(name);
+                self.hud_sprites.remove(name);
+                self.background_sprites.remove(name);
                 self.icons.remove(name);
                 self.bars.remove(name);
                 self.counters.remove(name);

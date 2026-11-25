@@ -270,7 +270,44 @@ assert restore(both, len(both))
 step((0, 0))
 assert audio_hashes[-1] == one_playing, 'Stopping either owner should leave the other voice audible'
 unload()
+
+layers_cart = subprocess.check_output(
+    ['node', '--input-type=module', '-e', '''
+        import {compileProject} from './src/compiler.mjs';
+        import {pack} from './src/pack.mjs';
+        import {parseScript} from './src/wafflescript.mjs';
+        const project={name:'Layer sprites',tileSize:8,start:'sky',sprites:{key:{source:'assets/sprites/key.png'}},
+          rooms:{sky:{cols:16,rows:12,entities:[{sprite:'key',x:80,y:56}]},hall:{cols:16,rows:12}}};
+        const scripts=new Map(Object.entries({game:`on game startup
+          set_display_resolution(128, 96)
+          draw_hud_sprite("badge", "key", "top_left", 8, 8)
+        end`, 'room:sky':`on init
+          set_room_background("#310000")
+          draw_background_sprite("moon", "key", 30, 12, 0)
+        end
+        on after 0.1 seconds
+          room("hall")
+        end`, 'room:hall':`on init
+          set_room_background("#004000")
+        end`}).map(([id,source])=>[id,parseScript(source)]));
+        process.stdout.write(pack(await compileProject('demo',{project,scripts})));
+    '''],
+    cwd=Path(__file__).resolve().parents[1],
+)
+layers_buffer = c.create_string_buffer(layers_cart)
+assert load(c.byref(Game(None, c.cast(layers_buffer, ptr), len(layers_cart), None)))
+step()
+dimensions(128, 96)
+gold = 0xfbce6b
+assert pixel(2, 2) == 0x310000
+assert pixel(13, 14) == pixel(35, 18) == pixel(73, 50) == gold
+for _ in range(8):
+    step()
+assert pixel(13, 14) == gold
+assert pixel(35, 18) == pixel(73, 50) == 0x004000, [hex(pixel(x, y)) for x, y in [(2, 2), (35, 18), (73, 50)]]
+unload()
 function('deinit', None)()
 print('Passed libretro input, video, audio, frame-exact rollback, checkpoint, reset, and save RAM checks')
 print('Passed libretro aspect ratio, stable split-screen geometry, native HD output, and scripted resolution changes')
 print('Passed libretro entity-scoped audio stopping after rollback')
+print('Passed libretro backdrop, foreground and persistent HUD sprite composition')

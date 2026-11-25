@@ -198,6 +198,12 @@ pub(super) fn evaluate(
         }
         29 => Value::Text(Rc::from(cx.runtime.localized_text(text(a)?))),
         30 => Value::Real(f64::from(cx.runtime.room_gravity()) * cx.runtime.game.distance_scale()),
+        31 => {
+            let chance = a.float().clamp(0., 100.);
+            let roll = f64::from(crate::Runtime::next_random_u32(&mut cx.runtime.rng)) / 4294967296.0;
+            Value::from(i64::from(roll * 100. < chance))
+        }
+        32 => Value::from(2 * i64::from(crate::Runtime::next_random_u32(&mut cx.runtime.rng) & 1) - 1),
         _ => unreachable!(),
     };
     m.registers[usize::from(dest)] = value;

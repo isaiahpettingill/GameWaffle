@@ -11,7 +11,7 @@
   import {validateCollections} from '../src/collections.mjs';
   import {movementPreset} from '../src/movement-preset.mjs';
   import {resourceName} from '../src/resource-name.mjs';
-  import {formatScript,parseScript,replaceScriptConstants} from '../src/wafflescript.mjs';
+  import {formatScript,locations,parseScript,replaceScriptConstants} from '../src/wafflescript.mjs';
   let modules=$state([]),selected=$state(''),newModule=$state(''),dialog=$state('');
   let preset=$state('platformer'),dynamic=$state(false),replaceLegacy=$state(false),dialogError=$state('');
   const endpoint=()=>selected?'./api/module/'+encodeURIComponent(selected):isGame?'./api/game-script':isTile?'./api/tile-script/'+encodeURIComponent(sprite)+'/'+variant:(isRoom?'./api/room-script/':'./api/script/')+encodeURIComponent(sprite);
@@ -182,24 +182,50 @@
     replaceLegacy=hasLegacyMovement;
     dialogError='';dialog='movement';
   }
+  function dynamicBody(source){
+    const init=parseScript(source).events.init;
+    const group=init?.[0]?.op==='init_properties'?init[0]:null;
+    const mode=group?.body.find(block=>block.op==='init_property'&&block.name==='mode');
+    const property='property mode = "dynamic"';
+    if(mode){
+      const {from,to}=locations.get(mode);
+      return source.slice(0,from)+property+source.slice(to);
+    }
+    if(group){
+      const start=source.indexOf('\n',locations.get(group).from)+1;
+      return source.slice(0,start)+'    '+property+'\n'+source.slice(start);
+    }
+    const groupText='  init_properties\n    '+property+'\n  end\n';
+    const header=/^[ \t]*on[ \t]+init\b[^\n]*\n/m.exec(source);
+    if(!header)return source.trimEnd()+'\n\non init\n'+groupText+'end\n';
+    const start=header.index+header[0].length;
+    return source.slice(0,start)+groupText+source.slice(start);
+  }
   function addMovement(){
     try{
       const stack=movementPreset(preset,references.pixelUnits),unit=parseScript('on tick\n'+stack+'end');
       if(mode==='text'){
-        const source=textEditor.source();
+        const source=dynamic?dynamicBody(textEditor.source()):textEditor.source();
         parseScript(source);
         const tick=/^\s*on tick(?:[ \t]*#[^\n]*)?[ \t]*\r?$/m.exec(source);
         if(tick){
           const lineEnd=source.indexOf('\n',tick.index+tick[0].length);
-          textEditor.insert(lineEnd+1,stack);
-        }else textEditor.insert(source.length,(source.endsWith('\n')?'':'\n')+'on tick\n'+stack+'end\n');
+          textEditor.replace(source.slice(0,lineEnd+1)+stack+source.slice(lineEnd+1));
+        }else textEditor.replace(source+(source.endsWith('\n')?'':'\n')+'on tick\n'+stack+'end\n');
       }else{
         const data=blockEditor.save();
+        if(dynamic){
+          const init=data.events.init??=[];
+          if(init[0]?.op!=='init_properties')init.unshift({op:'init_properties',body:[]});
+          const mode=init[0].body.find(block=>block.op==='init_property'&&block.name==='mode');
+          if(mode)mode.value='dynamic';
+          else init[0].body.unshift({op:'init_property',name:'mode',value:'dynamic'});
+        }
         data.events.tick=[...unit.events.tick,...(data.events.tick??[])];
         blockEditor.load(data);
         changed();
       }
-      onMovementPreset({dynamic,replaceLegacy});
+      onMovementPreset({replaceLegacy});
       dialog='';
     }catch(err){dialogError=err.message;}
   }

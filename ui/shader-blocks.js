@@ -7,9 +7,9 @@ const parameterNames = parameter => Array.from({length:parameter.lanes},(_,index
 const parameters = definition => definition?.parameters.filter(parameter=>!parameter.automatic&&!parameter.hidden)??[];
 
 export function registerShaderBlocks(registry, menu) {
-  Blockly.Blocks.waffle_apply_shaders = {init(){
+  for(const op of ['apply_shaders','apply_background_shaders'])Blockly.Blocks['waffle_'+op] = {init(){
     const data=registry(this);
-    this.appendDummyInput().appendField(data.gameScript?'Apply display shaders in order':'Apply room shaders in order');
+    this.appendDummyInput().appendField(op==='apply_background_shaders'?'Apply background shaders in order':data.gameScript?'Apply display shaders in order':'Apply room shaders in order');
     this.appendStatementInput('passes').setCheck('waffle_shader_pass');
     this.setPreviousStatement(true,'waffle');
     this.setNextStatement(true,'waffle');
@@ -90,5 +90,5 @@ export function decodeShaderPipeline(block, registry) {
     }
     passes.push({shader,parameters:values});
   }
-  return {op:'apply_shaders',passes};
+  return {op:block.type.slice(7),passes};
 }

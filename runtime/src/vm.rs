@@ -241,6 +241,8 @@ impl Program {
                 149 => "NW",
                 150 => "WW",
                 151 => "W",
+                152 => "NNNWWW",
+                153 => "NNWWWW",
                 2 => "WWW",
                 3 | 9 => "NWW",
                 5 | 7 | 8 => "N",
@@ -306,8 +308,8 @@ impl Program {
                     }
                     b'u' => index <= crate::shader::MAX_SHADER_WORDS,
                     b'o' if opcode == 137 => index < 3,
-                    b'o' if opcode == 138 => index < 2,
-                    b'o' if opcode == 143 => index < 31,
+                    b'o' if opcode == 138 => index < 3,
+                    b'o' if opcode == 143 => index < 33,
                     b'o' if opcode == 50 => index < 22,
                     b'o' if opcode == 126 => index < 6,
                     b'o' if opcode == 49 => matches!(index, 20 | 21 | 22 | 33 | 37),
@@ -598,7 +600,7 @@ impl Machine {
 
 // The loader resolves each opcode once. Each handler reads the next handler
 // address directly from the decoded instruction stream.
-const HANDLERS: [Handler; 152] = [
+const HANDLERS: [Handler; 154] = [
     execute::<0>,
     execute::<1>,
     execute::<2>,
@@ -751,6 +753,8 @@ const HANDLERS: [Handler; 152] = [
     execute::<149>,
     execute::<150>,
     execute::<151>,
+    execute::<152>,
+    execute::<153>,
 ];
 fn execute<const OP: u8>(
     i: &Instruction,
@@ -762,6 +766,8 @@ fn execute<const OP: u8>(
     m.pc += 1;
     cx.fuel -= 1;
     match OP {
+        152 => draw_layer_sprite(i, m, cx, false),
+        153 => draw_layer_sprite(i, m, cx, true),
         151 => {
             cx.runtime.stop_sound(entity_id(&m.registers[i.args[0] as usize]));
             Ok(())
@@ -1511,6 +1517,45 @@ fn engine<const OP: u8>(
     Ok(())
 }
 
+fn hud_offset(m: &Machine, registers: [u16; 2]) -> [i32; 2] {
+    registers.map(|register| m.registers[register as usize].float().clamp(-4096., 4096.).round() as i32)
+}
+
+fn draw_layer_sprite(i: &Instruction, m: &Machine, cx: &mut Context<'_>, background: bool) -> Result<(), &'static str> {
+    let [label, sprite, a, b, c, scale] = i.args;
+    let label = &m.program.names[label as usize];
+    let sprite = &m.program.names[sprite as usize];
+    if !cx.runtime.game.sprites.get(sprite.as_ref()).is_some_and(|sprite| sprite.clips.contains_key("default")) {
+        return Err("Choose a sprite asset to draw");
+    }
+    let (entries, anchor, offset, parallax) = if background {
+        if cx.runtime.room_script_id != Some(cx.id) {
+            return Err("Draw background sprites in a Room script");
+        }
+        (&mut cx.runtime.background_sprites, crate::HudAnchor::TopLeft, hud_offset(m, [a, b]),
+            m.registers[c as usize].float().clamp(0., 1.) as f32)
+    } else {
+        let anchor = crate::HudAnchor::from_name(&m.program.names[a as usize]).ok_or("Choose a HUD anchor")?;
+        (&mut cx.runtime.hud_sprites, anchor, hud_offset(m, [b, c]), 0.)
+    };
+    let scale = entity_id(&m.registers[scale as usize]).clamp(1, 8) as u8;
+    if let Some(old) = entries.get_mut(label.as_ref()) {
+        if old.sprite != sprite.as_ref() {
+            old.sprite = sprite.to_string();
+            old.started = cx.runtime.tick;
+        }
+        old.anchor = anchor;
+        old.offset = offset;
+        old.scale = scale;
+        old.parallax = parallax;
+    } else if entries.len() < 64 {
+        entries.insert(label.to_string(), crate::LayerSprite {
+            sprite: sprite.to_string(), anchor, offset, scale, parallax, started: cx.runtime.tick,
+        });
+    }
+    Ok(())
+}
+
 fn draw_hud_text(i: &Instruction, m: &Machine, cx: &mut Context<'_>) -> Result<(), &'static str> {
     let [label, text, font, anchor, x, y] = i.args;
     let label = &m.program.names[label as usize];
@@ -1526,12 +1571,7 @@ fn draw_hud_text(i: &Instruction, m: &Machine, cx: &mut Context<'_>) -> Result<(
     if !cx.runtime.hud_text.contains_key(label.as_ref()) && cx.runtime.hud_text.len() >= 64 {
         return Ok(());
     }
-    let offset = [x, y].map(|register| {
-        m.registers[register as usize]
-            .float()
-            .clamp(-4096., 4096.)
-            .round() as i32
-    });
+    let offset = hud_offset(m, [x, y]);
     if !cx.runtime.hud_text.get(label.as_ref()).is_some_and(|old| {
         old.value == text.as_ref()
             && old.font == font.as_ref()
@@ -1589,6 +1629,7 @@ fn shader_command(op: u8, i: &Instruction, m: &mut Machine, cx: &mut Context<'_>
             match i.args[0] {
                 0 if runtime.room_script_id == Some(cx.id) => runtime.room_settings.shader_pipeline = Some(passes),
                 1 if cx.id == 0 => runtime.game_settings.postprocessing = passes,
+                2 if runtime.room_script_id == Some(cx.id) => runtime.room_settings.background_shaders = passes,
                 _ => return Err("Use shader pipelines in the matching Room or Game script"),
             }
         }

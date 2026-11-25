@@ -117,13 +117,12 @@ for(const width of [1280,800,390,320]){
         await checkPalette(game,workspace,'Display shaders',{includes:['apply_shaders','shader_pass'],excludes:['set_room_shader','reset_room_shader']});
         await game.getByRole('button',{name:'Fit blocks',exact:true}).click();
       }
-      for(const [button,title] of [['Room defaults…','New room defaults'],['Project settings…','Project settings']]){
-        await game.getByRole('button',{name:button,exact:true}).click();
-        const settings=page.getByRole('dialog',{name:title});
-        assert.ok(await settings.evaluate(dialog=>dialog.scrollWidth<=dialog.clientWidth+1),title+' fits the window');
-        await page.keyboard.press('Escape');
-        await settings.waitFor({state:'hidden'});
-      }
+      assert.equal(await game.getByRole('button',{name:'Room defaults…',exact:true}).count(),0);
+      await game.getByRole('button',{name:'Project settings…',exact:true}).click();
+      const settings=page.getByRole('dialog',{name:'Project settings'});
+      assert.ok(await settings.evaluate(dialog=>dialog.scrollWidth<=dialog.clientWidth+1),'Project settings fit the window');
+      await page.keyboard.press('Escape');
+      await settings.waitFor({state:'hidden'});
     }
     if(tab==='Resources')await page.getByRole('region',{name:'Resources'}).getByRole('button',{name:'Add text…',exact:true}).waitFor();
     if(tab==='Code'){
@@ -318,9 +317,8 @@ for(const width of [1280,800,390,320]){
     await inspector.getByRole('button',{name:'Placed entities',exact:true}).click();
     await inspector.getByLabel('Name in this room').waitFor();
     assert.equal(await inspector.getByLabel('Controlled by').inputValue(),'0');
-    assert.equal(await inspector.getByLabel('Respawn',{exact:true}).isVisible(),false);
-    await inspector.getByText('Spawning and room visits',{exact:true}).click();
-    await inspector.getByLabel('Respawn',{exact:true}).waitFor();
+    assert.equal(await inspector.getByLabel('Respawn',{exact:true}).count(),0);
+    await inspector.getByRole('button',{name:'Configure in room script',exact:true}).waitFor();
     const entityTags=inspector.getByLabel('Tags',{exact:true});
     await entityTags.fill('Room guard');
     await entityTags.press('Enter');
@@ -726,14 +724,10 @@ await views.getByRole('button',{name:'Room',exact:true}).click();
 await authoring.getByRole('button',{name:'Undo connection from Top-down Courtyard'}).click();
 await until('Undo of the connection',async()=> (await readProject()).rooms.courtyard.exits.right.targets.join(',')==='yard,vault');
 
-await views.getByRole('button',{name:'Game',exact:true}).click();
-await authoring.getByRole('button',{name:'Room defaults…',exact:true}).click();
 const getRoomInit=async id=>(await(await authoring.request.get(url+'/api/room-script/'+id)).json()).events.init;
 const oldYardInit=await getRoomInit('yard');
-const zoomDefault=authoring.getByRole('spinbutton',{name:'Camera zoom (×)',exact:true});
-await zoomDefault.fill('1.75');
-await authoring.getByRole('button',{name:'Apply defaults',exact:true}).click();
-await until('Room defaults saved',async()=>(await readProject()).roomDefaults?.cameraZoom===1.75);
+const defaults=await authoring.request.put(url+'/api/module/room_defaults',{data:{source:'proc configure()\n  camera_zoom(1.75)\nend\n'}});
+assert.ok(defaults.ok(),await defaults.text());
 await views.getByRole('button',{name:'Room',exact:true}).click();
 await authoring.getByRole('button',{name:'New room',exact:true}).click();
 const newRoom=authoring.getByRole('dialog',{name:'New Room'});
@@ -742,7 +736,7 @@ await newRoom.getByRole('button',{name:'Create room'}).click();
 await until('New room',async()=> (await readProject()).rooms.upper_deck?.title==='Upper Deck!');
 const upperDeckInit=await getRoomInit('upper_deck');
 assert.equal(upperDeckInit[0].op,'init_properties');
-assert.equal(initializers(upperDeckInit).find(row=>row.op==='camera_zoom').zoom,1.75);
+assert.deepEqual(upperDeckInit[1],{op:'call',name:'room_defaults.configure',args:[]});
 assert.deepEqual(await getRoomInit('yard'),oldYardInit);
 
 await views.getByRole('button',{name:'Assets',exact:true}).click();

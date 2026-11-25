@@ -180,5 +180,64 @@ end
     assert.deepEqual(decodeFrame(gradientRuntime.snapshot()).roomSettings.backgroundGradient,radial.backgroundGradient);
     assert.equal(step(128)?.backgroundGradient,undefined);
   }finally{gradientRuntime.free();}
+  const layerProject={...project,start:'sky',sprites:{moon:{source:'assets/sprites/key.png'},
+    portrait:{source:'assets/sprites/maker.aseprite'}},rooms:{sky:{cols:20,rows:12},cellar:{cols:20,rows:12}}};
+  const layerGame=parseScript(`on game startup
+  init_properties
+    draw_hud_sprite("badge", "portrait", "bottom_right", 4, 6, 2)
+  end
+  flag.always = math.random_chance(100)
+  flag.never = math.random_chance(0)
+  global.sign = math.random_sign()
+end`);
+  const sky=parseScript(`on init
+  init_properties
+    draw_background_sprite("moon", "moon", 30, 20, 0.25)
+    apply_background_shaders
+      shader("my_shader")
+    end
+  end
+end
+on a
+  room("cellar")
+end`);
+  const cellar=parseScript('on b\n hide("badge")\nend');
+  assert.deepEqual(parseScript(formatScript(sky)),sky);
+  const misplaced=parseScript('on game startup\n apply_background_shaders\n  shader("my_shader")\n end\nend');
+  assert.throws(()=>compileScript(misplaced,{},undefined,{gameScript:true,roomScript:true,shaders:cart.shaderDefinitions}),/Room script/);
+  const layers=await compileProject(temporary,{project:layerProject,scripts:new Map([['game',layerGame],['room:sky',sky],['room:cellar',cellar]]),store});
+  assert.equal(layers.runtimeAbi,21);
+  assert.ok(layers.atlases.sky.entries['sprite/moon/0']);
+  assert.equal(layers.atlases.cellar.entries['sprite/moon/0'],undefined);
+  for(const atlas of Object.values(layers.atlases))assert.ok(atlas.entries['sprite/portrait/0']);
+  const layerRuntime=Runtime.from_cartridge(pack(layers));
+  try{
+    const step=input=>{
+      const frame=decodeFrame(layerRuntime.step_buttons(input));
+      assert.deepEqual(frame.events.filter(event=>event.kind==='script_error'),[]);
+      return frame;
+    };
+    const frame=step(0);
+    assert.deepEqual(frame.backgroundSprites.moon,{image:'sprite/moon/0',anchor:'top_left',offset:[30,20],scale:1,parallax:.25});
+    assert.equal(frame.hudSprites.badge.anchor,'bottom_right');
+    assert.equal(frame.hudSprites.badge.scale,2);
+    assert.equal(frame.roomSettings.backgroundShaders[0].shader,'my_shader');
+    assert.equal(frame.roomSettings.shaderPipeline,undefined);
+    assert.equal(frame.actors.length,0);
+    const save=layerRuntime.save_game();
+    const {decodeSave}=await import('../src/save.mjs');
+    assert.deepEqual(decodeSave(save).flags,['always']);
+    assert.ok([-1,1].includes(Number(decodeSave(save).globals.sign)));
+    const next=step(16);
+    assert.equal(next.room,'cellar');
+    assert.ok(next.hudSprites.badge);
+    assert.equal(next.backgroundSprites,undefined);
+    assert.equal(next.roomSettings?.backgroundShaders,undefined);
+    assert.equal(step(32).hudSprites,undefined);
+    layerRuntime.load_game(save);
+    assert.deepEqual(decodeFrame(layerRuntime.snapshot()).backgroundSprites,frame.backgroundSprites);
+    assert.deepEqual(decodeFrame(layerRuntime.snapshot()).hudSprites,frame.hudSprites);
+  }finally{layerRuntime.free();}
+  console.log('Passed persistent HUD sprites, room-local background sprites and shaders, and random reporters');
   console.log('Passed shader upload and graph compilation, pipeline scope and uniform defaults, gradient rendering and save restoration');
 }finally{await rm(temporary,{recursive:true,force:true});}

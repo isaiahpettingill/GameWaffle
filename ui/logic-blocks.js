@@ -146,7 +146,7 @@ export function reporterBlock(name,args,inputSlot=(type,value,fallback)=>(type==
 }
 
 export function logicDefinitions(conditionShape) {
-  const physicsLiterals=new Set(['whole','integer','real','bool','none']);
+  const physicsLiterals=new Set(['whole','integer','real','bool','string','none']);
   return Object.entries(definitions).map(([id,[style,message0,args0,output,tooltip]])=>({
     type:prefix+id,style,message0,args0,tooltip,
     inputsInline:!args0.some(arg=>arg.type==='input_statement'),

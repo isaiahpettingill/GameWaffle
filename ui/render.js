@@ -151,13 +151,31 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false, pr
   let ctx=scene.getContext('2d');
   ctx.setTransform(1,0,0,1,0,0);
   ctx.imageSmoothingEnabled = false;
-  drawBackground(ctx,canvas,width,height,settings,room.background);
-  ctx.translate(-x,-y);
   const image = atlasImages[snapshot.room];
   if (!image) return;
-  const render = settings.backgroundImage==null?room.baked.slice():room.baked.filter(layer=>layer.image!=='room/background');
-  if(settings.backgroundImage)render.push({image:'room/background/'+settings.backgroundImage,layer:-10001,
-    width:room.width,height:room.height,parallax:settings.backgroundScroll});
+  drawBackground(ctx,canvas,width,height,settings,room.background);
+  const backdrop=settings.backgroundImage==null ? room.baked.find(layer=>layer.image==='room/background') :
+    settings.backgroundImage ? {image:'room/background/'+settings.backgroundImage,
+      width:room.width,height:room.height,parallax:settings.backgroundScroll} : null;
+  if(backdrop){
+    const rect=atlas.entries[backdrop.image], scroll=backdrop.parallax??1;
+    if(rect)ctx.drawImage(image,...rect,(backdrop.x??0)-x*scroll,(backdrop.y??0)-y*scroll,
+      backdrop.width*scroll+width*(1-scroll),backdrop.height*scroll+height*(1-scroll));
+  }
+  for(const sprite of Object.values(snapshot.backgroundSprites??{})){
+    const rect=atlas.entries[sprite.image];
+    if(!rect)continue;
+    const [left,top]=sprite.offset;
+    ctx.drawImage(image,...rect,Math.round(left-x*sprite.parallax),Math.round(top-y*sprite.parallax),
+      rect[2]*sprite.scale,rect[3]*sprite.scale);
+  }
+  const backgroundResult=runPasses(canvas,'background',scene,cart.shaders,settings.backgroundShaders,snapshot.tick);
+  if(backgroundResult.image){
+    ctx.drawImage(backgroundResult.image,0,0);
+    backgroundResult.image.close?.();
+  }
+  ctx.translate(-x,-y);
+  const render=room.baked.filter(layer=>layer.image!=='room/background');
   for(const actor of snapshot.actors){
     if(actor.shadow?.placement==='ground')render.push({layer:actor.layer,order:1,groundShadow:actor.shadow});
     render.push({...actor,order:2,depth:actor.image.startsWith('sprite/')?actor.y+actor.height/2:-Infinity});
@@ -287,7 +305,20 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false, pr
       ctx.putImageData(new ImageData(new Uint8ClampedArray(result.buffer,result.byteOffset,result.length),width*2,height*2),0,0);
     }
   }
-  if(!showGrid){ctx.setTransform(scale,0,0,scale,0,0);drawShapes(ctx,snapshot.shapes,true,[0,0]);drawMinimap(ctx,cart.minimap,snapshot,width,height);}
+  if(!showGrid){
+    ctx.setTransform(scale,0,0,scale,0,0);
+    drawShapes(ctx,snapshot.shapes,true,[0,0]);
+    drawMinimap(ctx,cart.minimap,snapshot,width,height);
+    for(const sprite of Object.values(snapshot.hudSprites??{})){
+      const rect=atlas.entries[sprite.image];
+      if(!rect)continue;
+      const w=rect[2]*sprite.scale,h=rect[3]*sprite.scale;
+      const [x,y]=sprite.offset,anchor=sprite.anchor;
+      const px=anchor.endsWith('right')?width-w-x:anchor.endsWith('center')?Math.floor((width-w)/2)+x:x;
+      const py=anchor.startsWith('bottom')?height-h-y:anchor.startsWith('center')?Math.floor((height-h)/2)+y:y;
+      ctx.drawImage(image,...rect,px,py,w,h);
+    }
+  }
   if (!showGrid && atlas.entries['ui/font']) {
     ctx.setTransform(scale,0,0,scale,0,0);
     const painters=new Map();
@@ -386,5 +417,5 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false, pr
     display.drawImage(rendered,0,0,displayWidth,displayHeight);
   }
   rendered?.close?.();
-  return roomResult.status??displayResult.status??'';
+  return backgroundResult.status??roomResult.status??displayResult.status??'';
 }
