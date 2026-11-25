@@ -134,7 +134,7 @@ export const reporterBlockType=name=>'waffle_reporter_'+name.replace('.','_');
 export const reporterIsField=type=>Array.isArray(type)||type==='tile';
 const reporterNames=Object.fromEntries(Object.keys(reporters).map(name=>[reporterBlockType(name),name]));
 
-export function reporterBlock(name,args,inputSlot=(_,value,fallback)=>slot(value,fallback)){
+export function reporterBlock(name,args,inputSlot=(type,value,fallback)=>(type==='numeric'?numericSlot:slot)(value,fallback)){
   const fields={},inputs={};
   reporters[name][3].forEach(([type,fallback],index)=>{
     const key=argumentInput(index),value=args[index];
@@ -192,8 +192,11 @@ export function readValue(block) {
     case 'action': return {action:field('action')};
     case 'item': return {item:field('item')};
     case 'item_key': return {call:'item_key',args:[field('item')]};
-    case 'whole':
-    case 'integer': return Number(field('value'));
+    case 'whole': return Number(field('value'));
+    case 'integer': {
+      const value=Number(field('value'));
+      return Number.isInteger(value)?value:{real:value};
+    }
     case 'real': return {real:Number(field('value'))};
     case 'instance_ref':
     case 'component_ref':
@@ -224,6 +227,7 @@ export function readValue(block) {
 
 export function writeValue(value,imports) {
   const input=(value,fallback)=>slot(value,fallback,imports);
+  const numericInput=(value,fallback)=>numericSlot(value,fallback,imports);
   if(value===null)return {type:prefix+'none'};
   if (typeof value === 'boolean') return {type:prefix+'bool',fields:{value:String(value)}};
   if (typeof value === 'string') return {type:prefix+'string',fields:{value}};
@@ -243,7 +247,7 @@ export function writeValue(value,imports) {
   if(value.call){
     const imported=imports?.has(value.call.split('.')[0]);
     if(!imported&&Object.hasOwn(reporters,value.call) && value.args.length===reporters[value.call][3].length)
-      return reporterBlock(value.call,value.args,(_,value,fallback)=>input(value,fallback));
+      return reporterBlock(value.call,value.args,(type,value,fallback)=>(type==='numeric'?numericInput:input)(value,fallback));
     if(Object.hasOwn(collectionReporters,value.call)){
       const fields={},inputs={};
       collectionReporters[value.call][1].forEach((key,i)=>{
@@ -260,9 +264,9 @@ export function writeValue(value,imports) {
       }))};
     const op=!imported&&value.call.startsWith('math.')?value.call.slice(5):'';
     if(unaryMath.includes(op) && value.args.length===1)
-      return {type:prefix+(conversions.includes(op)?'conversion':'math_unary'),fields:{operation:op},inputs:{left:input(value.args[0])}};
+      return {type:prefix+(conversions.includes(op)?'conversion':'math_unary'),fields:{operation:op},inputs:{left:numericInput(value.args[0])}};
     if(binaryMath.includes(op) && value.args.length===2)
-      return {type:prefix+'math_binary',fields:{operation:op},inputs:{left:input(value.args[0]),right:input(value.args[1])}};
+      return {type:prefix+'math_binary',fields:{operation:op},inputs:{left:numericInput(value.args[0]),right:numericInput(value.args[1])}};
     return {type:prefix+'function_call',fields:{name:value.call},extraState:{name:value.call,
       parameters:value.args.map((_,i)=>({name:'Argument '+(i+1),type:'integer'}))},
       inputs:Object.fromEntries(value.args.map((arg,i)=>[argumentInput(i),input(arg)]))};
@@ -277,7 +281,7 @@ export function writeValue(value,imports) {
   if(unaryMath.includes(value.calc))return writeValue({call:'math.'+value.calc,args:[value.left]},imports);
   if(binaryMath.includes(value.calc))return writeValue({call:'math.'+value.calc,args:[value.left,value.right]},imports);
   const logical = value.calc==='not' || booleanOperators.includes(value.calc);
-  const child = val=>input(val===undefined?(logical?false:0):val);
+  const child = val=>(logical?input:numericInput)(val===undefined?(logical?false:0):val);
   if(value.calc==='add' && [value.left,value.right].some(operand=>typeof operand==='string'||operand?.text!==undefined||operand?.scope?.endsWith('_string')))
     return {type:prefix+'join',inputs:{left:child(value.left),right:child(value.right)}};
   if (value.calc === 'not') return {type:prefix+'not',inputs:{left:child(value.left)}};
@@ -290,6 +294,13 @@ export function slot(value, fallback, imports) {
   const block = writeValue(value,imports);
   if (value===null || typeof value!=='object' || value.real!==undefined) return {shadow:block};
   return {...(fallback!==undefined?{shadow:writeValue(fallback,imports)}:{}),block};
+}
+
+export function numericSlot(value,fallback,imports){
+  const state=slot(value,fallback,imports);
+  // The flexible number field keeps whole values and accepts decimal edits.
+  if(state.shadow?.type===prefix+'whole')state.shadow.type=prefix+'integer';
+  return state;
 }
 
 export const logicStatements = new Set(['if','while','repeat','set','change','wait','call',...controlTransfers]);

@@ -347,6 +347,8 @@ pub struct Menu {
 }
 #[derive(Deserialize)]
 pub struct Game {
+    #[serde(default, rename = "pixelUnits")]
+    pub pixel_units: bool,
     #[serde(default)]
     pub camera: crate::Camera,
     #[serde(default)]
@@ -376,6 +378,20 @@ pub struct Game {
     pub start: String,
     pub rooms: BTreeMap<String, Room>,
     pub sprites: BTreeMap<String, Sprite>,
+}
+
+impl Game {
+    pub fn distance_scale(&self) -> f64 {
+        if self.pixel_units { f64::from(crate::physics::PPM) } else { 1.0 }
+    }
+
+    pub fn mass_scale(&self) -> f64 {
+        self.distance_scale().powi(2)
+    }
+
+    pub fn force_scale(&self) -> f64 {
+        self.distance_scale().powi(3)
+    }
 }
 
 #[derive(Default, Clone, Copy, Deserialize)]

@@ -293,7 +293,7 @@ impl Program {
                     b'k' => index < raw.k.len(),
                     b'f' => index < raw.f.len(),
                     b'N' => index < raw.n.len(),
-                    b'n' if opcode == 11 && args[1] == 5 => index < 31,
+                    b'n' if opcode == 11 && args[1] == 5 => index < 32,
                     b'n' if opcode == 11 && args[1] == 3 => index < 8,
                     b'n' => index < raw.n.len(),
                     b's' => {
@@ -306,8 +306,8 @@ impl Program {
                     b'u' => index <= crate::shader::MAX_SHADER_WORDS,
                     b'o' if opcode == 137 => index < 3,
                     b'o' if opcode == 138 => index < 2,
-                    b'o' if opcode == 143 => index < 30,
-                    b'o' if opcode == 50 => index < 20,
+                    b'o' if opcode == 143 => index < 31,
+                    b'o' if opcode == 50 => index < 21,
                     b'o' if opcode == 126 => index < 6,
                     b'o' if opcode == 49 => matches!(index, 20 | 21 | 22 | 33 | 37),
                     b'o' => index < 34,
@@ -784,7 +784,8 @@ fn execute<const OP: u8>(
         105 => {
             let [target,x,y,..]=i.args;
             if let Some(body)=cx.runtime.entity(entity_id(&m.registers[target as usize])).and_then(|actor|actor.body) {
-                let f=|reg:u16|m.registers[reg as usize].float().clamp(-20000.0,20000.0) as f32;
+                let scale=cx.runtime.game.force_scale();
+                let f=|reg:u16|(m.registers[reg as usize].float()/scale).clamp(-20000.0,20000.0) as f32;
                 cx.runtime.world.force(body, crate::Vec2::new(f(x),f(y)));
             }
             Ok(())
@@ -829,7 +830,7 @@ fn execute<const OP: u8>(
                 cx.id,
                 &program.names[projectile as usize],
                 &program.names[aim as usize],
-                m.registers[speed as usize].float() as f32,
+                (m.registers[speed as usize].float()/cx.runtime.game.distance_scale()) as f32,
                 m.registers[damage as usize].float() as f32,
                 cx.actions,
             );
@@ -998,11 +999,12 @@ fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'
         Value::from(i64::from(cx.buttons & (1 << key) != 0))
     } else if scope == 5 {
         let a = &cx.runtime.actors[&cx.id];
+        let speed = |value| f64::from(value) * cx.runtime.game.distance_scale();
         match key {
             17 => Value::Real(f64::from(a.p.x)),
             18 => Value::Real(f64::from(a.p.y)),
-            19 => Value::Real(f64::from(a.v.x)),
-            20 => Value::Real(f64::from(a.v.y)),
+            19 => Value::Real(speed(a.v.x)),
+            20 => Value::Real(speed(a.v.y)),
             21 => Value::Real(f64::from(a.health)),
             22 => Value::from(a.menu_choice as i64),
             23 => Value::Text(Rc::from(a.menu_item.as_str())),
@@ -1013,12 +1015,13 @@ fn load(i: &Instruction, m: &mut Machine, cx: &mut Context<'_>) -> Result<(), &'
             28 => Value::from(i64::from(a.last_clone)),
             29 => Value::from(i64::from(a.clone_source.unwrap_or(0))),
             30 => Value::from(i64::from(a.clone_source.is_some())),
+            31 => Value::Real(cx.runtime.script_mass(a)),
             _ => Value::from(match key {
                 0 => i64::from(cx.id),
                 1 => a.p.x.round() as i64,
                 2 => a.p.y.round() as i64,
-                3 => a.v.x.round() as i64,
-                4 => a.v.y.round() as i64,
+                3 => speed(a.v.x).round() as i64,
+                4 => speed(a.v.y).round() as i64,
                 5 => a.health.round() as i64,
                 6 => i64::from(cx.runtime.grounded(cx.id)),
                 7 => a.player.map_or(0, |p| p as i64 + 1),
@@ -1475,10 +1478,15 @@ fn engine<const OP: u8>(
         if index == 0 && named {
             return 0.0;
         }
-        m.registers
+        let scale=match (OP,index) {
+            (0 | 1 | 4, 0) | (3, 1) | (6, 0 | 1) => cx.runtime.game.distance_scale(),
+            (42, 0) | (44 | 45, 0 | 1) => cx.runtime.game.force_scale(),
+            _ => 1.0,
+        };
+        (m.registers
             .get(i.args[index] as usize)
             .map(Value::float)
-            .unwrap_or_default()
+            .unwrap_or_default() / scale)
             .clamp(-10000.0, 10000.0) as f32
     };
     let name = if named {
@@ -1613,7 +1621,7 @@ fn room_command<const OP: u8>(
             runtime.room_settings.zoom = (zoom != 1.0).then_some(zoom);
         }
         76 => {
-            let gravity = m.registers[operand].float().clamp(-100.0, 100.0) as f32;
+            let gravity = (m.registers[operand].float()/runtime.game.distance_scale()).clamp(-100.0, 100.0) as f32;
             if gravity != runtime.room_gravity() {
                 runtime.room_settings.gravity = Some(gravity);
                 runtime.apply_room_gravity();
@@ -1791,12 +1799,13 @@ fn entity_query(
         17 => Value::from(i64::from(runtime.touches_tile_top(cx.id,entity_id(a)))),
         18 => Value::from(i64::from(runtime.entity(entity_id(a)).is_some_and(|actor| actor.clone_source.is_some()))),
         19 => Value::from(runtime.entity(entity_id(a)).and_then(|actor| actor.clone_source).map_or(0, i64::from)),
+        20 => Value::Real(runtime.entity(entity_id(a)).map_or(0.0, |actor| runtime.script_mass(actor))),
         _ => Value::Real(runtime.entity(entity_id(a)).map_or(0.0, |actor| {
             f64::from(match op {
                 4 => actor.p.x,
                 5 => actor.p.y,
-                6 => actor.v.x,
-                7 => actor.v.y,
+                6 => return f64::from(actor.v.x) * runtime.game.distance_scale(),
+                7 => return f64::from(actor.v.y) * runtime.game.distance_scale(),
                 _ => actor.health,
             })
         })),
@@ -1814,11 +1823,8 @@ fn entity_command<const OP: u8>(
     if cx.runtime.entity(id).is_none() || cx.actions.len() >= crate::MAX_ACTIONS {
         return Ok(());
     }
-    let number = |index: usize| {
-        m.registers[i.args[index] as usize]
-            .float()
-            .clamp(-10000.0, 10000.0) as f32
-    };
+    let scale=match OP {52=>cx.runtime.game.distance_scale(),90=>cx.runtime.game.force_scale(),_=>1.0};
+    let number = |index: usize| (m.registers[i.args[index] as usize].float()/scale).clamp(-10000.0, 10000.0) as f32;
     match OP {
         51 => cx.runtime.engine(
             id,

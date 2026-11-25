@@ -6,7 +6,7 @@ import {compileProject} from '../src/compiler.mjs';
 import {pack} from '../src/pack.mjs';
 import {reporters} from '../src/schema.mjs';
 import {formatScript,parseScript} from '../src/wafflescript.mjs';
-import {reporterBlock,readValue,writeValue} from '../ui/logic-blocks.js';
+import {numericSlot,reporterBlock,readValue,writeValue} from '../ui/logic-blocks.js';
 import {Runtime,initSync} from '../web-built/runtime/runtime.js';
 
 const demo=JSON.parse(await readFile('demo/project.json','utf8'));
@@ -49,6 +49,23 @@ const actor=parseScript(`on tick
   global.modulus = math.mod(-5, 3)
   global.remainder = -5 % 3
   global.clamped = math.clamp(9, 0, 4)
+  global.real_floor = math.floor(2.5)
+  global.whole_division = 5 / 2
+  global.exact = (9007199254740991 + 100) - 9007199254740991
+  global_real.sum = 1 + 0.25
+  change global_real.sum by 2
+  global_real.difference = 1.25 - 1
+  global_real.product = 2 * 2.5
+  global_real.quotient = 5 / 2.0
+  global_real.remainder = -5.5 % 3
+  global_real.modulus = math.mod(-5, 3.5)
+  global_real.clamped = math.clamp(9, 0, 4.5)
+  global_real.low_bound = math.clamp(1, 1.5, 2)
+  global_real.minimum = math.min(2, 1.5)
+  global_real.maximum = math.max(2.5, 3)
+  global_real.converted = math.to_real(1.5)
+  flag.mixed_equal = 2 == 2.0
+  flag.mixed_order = 2 < 2.5 and 3.25 >= 3
   global_real.mixed = math.lerp(10, 50, 0.25)
   global_real.hypotenuse = math.hypot(3, 4)
   global_real.root = math.sqrt(9)
@@ -93,6 +110,9 @@ for (const [name,[,,,parameters]] of Object.entries(reporters)) {
   assert.deepEqual(readValue(blockModel(reporterBlock(name,args))),expression,name);
   assert.deepEqual(readValue(blockModel(writeValue(expression))),expression,name);
 }
+const inlineNumber=numericSlot(2).shadow;
+inlineNumber.fields.value=2.75;
+assert.deepEqual(readValue(blockModel(inlineNumber)),{real:2.75});
 const importedClamp={call:'math.clamp',args:[1,2,3]};
 const importedBlock=writeValue({call:'string.from_integer',args:[importedClamp]},new Set(['math']));
 assert.equal(importedBlock.inputs.arg0.block.type,'waffle_function_call');
@@ -119,6 +139,10 @@ assert.equal(flags.includes('decor'),true);
 assert.equal(flags.includes('ladder'),false);
 for(const [key,value] of Object.entries({modulus:1,remainder:-2,clamped:4,'real.mixed':20,'real.hypotenuse':5,'real.root':3,integer_part:7,length:3,found:3,missing:0}))
   assert.equal(Number(globals[key]??0),value,key);
+for(const [key,value] of Object.entries({real_floor:2,whole_division:2,exact:100,'real.sum':3.25,'real.difference':0.25,'real.product':5,
+  'real.quotient':2.5,'real.remainder':-2.5,'real.modulus':2,'real.clamped':4.5,'real.low_bound':1.5,'real.minimum':1.5,'real.maximum':3,'real.converted':1.5}))
+  assert.equal(Number(globals[key]),value,key);
+assert.ok(flags.includes('mixed_equal')&&flags.includes('mixed_order'));
 for(const [key,value] of Object.entries({text:'A🪿é',letter:'🪿',outside:'',range:'🪿é',renamed:'GO GO',lower:'é',numbers:'40.5'}))
   assert.equal(globals['text.'+key]??'',value,key);
 assert.equal(flags.includes('contains'),true);
@@ -149,3 +173,33 @@ adaptiveRuntime.set_camera_window(520,320,false);
 assert.deepEqual(decodeFrame(adaptiveRuntime.snapshot()).viewport.slice(2),[260,160]);
 adaptiveRuntime.free();
 console.log('Passed viewport geometry, tile contact, Unicode text, numeric reporters, saved random state, and shared Blockly reporter conversion');
+
+const pixelProject={name:'Pixel physics',start:'room',tileSize:24,physicsUnits:'pixels',
+  sprites:{body:{source:'assets/sprites/key.png',width:8,height:8,physics:{mode:'dynamic',mass:64}}},
+  rooms:{room:{cols:16,rows:12,gravity:384,entities:[{sprite:'body',name:'Mover',player:0,x:108,y:108}]}}};
+const pixelScript=parseScript(`on tick
+  global.vx = entity.vx
+  global_real.vx = entity.vx(entity.id)
+  global_real.mass = entity.mass
+  global_real.target_mass = entity.mass(entity.id)
+  global_real.gravity = physics.gravity()
+end
+on a
+  entity_velocity(entity.id, 48, 0)
+  impulse(640, 0)
+  push_entity(entity.id, 640, 0)
+  force(3840, 0)
+  force_entity(entity.id, 3840, 0)
+end`);
+const pixelRoom=parseScript('on init\n  set_room_gravity(120)\nend');
+const pixelCart=await compileProject('demo',{project:pixelProject,scripts:new Map([['body',pixelScript],['room:room',pixelRoom]])});
+assert.equal(pixelCart.runtimeAbi,19);
+const pixelRuntime=Runtime.from_cartridge(pack(pixelCart));
+pixelRuntime.advance_buttons(16,1);
+pixelRuntime.advance_buttons(0,1);
+const pixelGlobals=decodeSave(pixelRuntime.save_game()).globals;
+assert.equal(pixelGlobals.vx,'70');
+for(const [key,value] of Object.entries({'real.vx':70,'real.mass':64,'real.target_mass':64,'real.gravity':120}))
+  assert.ok(Math.abs(Number(pixelGlobals[key])-value)<.001,key);
+pixelRuntime.free();
+console.log('Passed pixel gravity, velocity, mass, force, and impulse checks');

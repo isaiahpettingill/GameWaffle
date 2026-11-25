@@ -35,7 +35,7 @@ Pick a room from **Room scripts** in the script file menu. This keeps the curren
 on start
   camera_follow_entity(entity.find("Elevator"))
   camera_zoom(1.5)
-  set_room_gravity(12.0)
+  set_room_gravity(288)
   set_room_background("#342850")
   set_room_depth_sort(true)
 end
@@ -78,7 +78,7 @@ A **Dynamic** body can be pushed by another moving body. A **Breakable** body st
 Open **Constants…** in the script actions menu to give a value a name and choose its type. Drag the constant from **Variables** into any compatible input. Constants are local to the script and evaluate to the same value each time.
 
 ```ruby
-const crate_push = 3.0
+const crate_push = 41472
 
 on a
   push_entity(entity.find("Crate"), const.crate_push, 0)
@@ -135,6 +135,18 @@ end
 
 A dynamic body uses the room gravity and its own gravity scale by default. For conditional gravity, choose **Entities → Physics settings → Gravity control → Script applies gravity each tick**, then run `apply_gravity(none)` from **On tick** whenever gravity should apply. A modifier of `none` uses a multiplier of 1. Skipping the call leaves gravity off for that tick.
 
+### Physics units
+
+New projects use pixels and seconds for physics. Position is in pixels,
+velocity in px/s, gravity in px/s², force in mass units × px/s², and impulse
+in mass units × px/s. `physics.gravity()` reads the room’s current gravity.
+Use `entity.mass` for the current body or `entity.mass(id)` for a target.
+
+Water has density `1`. Keep **Mass** blank to compute it from the collider area
+and entity density. An entity with density below `1` floats in water with the
+default buoyancy of `1`. Use **Drag** on the fluid to damp motion. Projects
+created with meter-based physics keep their original units unless migrated.
+
 ### Early exits and loops
 
 Use **Return** in **Control** to exit the current event or procedure. When a procedure returns, its caller continues at the next statement. In a `repeat` or `while` loop, **Break** exits the nearest loop and **Continue** skips to its next iteration. In a counted loop, a skipped iteration still counts toward the total.
@@ -160,7 +172,7 @@ on tick
   apply_gravity(none)
   if pressed.x and entity.grounded
     animate("jump")
-    jump_force(240)
+    jump(192)
   end
 end
 ```
@@ -177,13 +189,13 @@ once per press when grounded:
 on tick
   apply_gravity(none)
   if action.left
-    force(-40, 0)
+    force(-550000, 0)
   end
   if action.right
-    force(40, 0)
+    force(550000, 0)
   end
   if pressed.a and entity.grounded
-    jump_force(240)
+    jump(192)
   end
 end
 ```
@@ -193,7 +205,7 @@ input action. Named actions from the game's control map work with `action`,
 `pressed`, and `released`. To move an existing `on pressed.jump` stack into
 `on tick`, place its commands inside `if pressed.jump`.
 
-Select a tag from the entity's animation menu. This example uses a tag named `jump`. Force uses newtons. For direct control, use `force(x, y)` or `impulse(x, y)`. A negative Y value pushes the entity up. `pressed.x` is true on the first tick of a press. Use `action.x` for held input. Optional inputs accept `none` or an omitted trailing argument. Zero is a numeric value.
+Select a tag from the entity's animation menu. This example uses a tag named `jump`. `jump(192)` sets the launch speed to 192 px/s. For direct control, use `force(x, y)` or `impulse(x, y)`. A negative Y value pushes the entity up. `pressed.x` is true on the first tick of a press. Use `action.x` for held input. Optional inputs accept `none` or an omitted trailing argument. Zero is a numeric value.
 
 Start an event with `on`. End it with `end`. Use `if`, `elif`, `else`, and `while`
 for control flow. Use `wait(1)` to resume on the next tick. Use a number,
@@ -230,10 +242,11 @@ numbers. Zero is false and every other number is true. Read a button with
 with `==`, `!=`, `<`, `<=`, `>`, or `>=`. Use `+` to join two strings.
 
 Integer division truncates toward zero. Real division keeps the fraction.
-Use matching numeric types in arithmetic and comparisons. Convert integers with
-`math.to_real`, reals with `math.floor`, `math.ceil`, `math.round`, or
-`math.trunc`, and booleans with `math.to_integer`. Use an integer count for `repeat` and `wait`. Use `change global.score by 1`
-to add to a numeric variable.
+Arithmetic, comparisons, and functions such as `math.clamp` accept mixed
+numeric operands. An operation with a real operand uses real precision, so
+`5 / 2.0` gives `2.5`. Use `math.to_real` to convert an integer explicitly, or
+`math.floor`, `math.ceil`, `math.round`, and `math.trunc` to produce integers.
+`math.to_integer` also accepts booleans. Use an integer count for `repeat` and `wait`.
 
 The **Math & logic** palette includes absolute value, min/max, square root, power,
 natural log, exponential, sine, cosine, tangent, and inverse trig.
@@ -243,7 +256,7 @@ for a direction angle. `entity.x_real`, `entity.y_real`, `entity.vx_real`,
 
 ```ruby
 on tick
-  change local_real.angle by 3.0
+  change local_real.angle by 3
   if entity.is_player and button.right
     move_by(1.5, math.sin(local_real.angle))
   end

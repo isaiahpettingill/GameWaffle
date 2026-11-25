@@ -2,7 +2,7 @@ import {gameCommands,roomCommands} from './schema.mjs';
 
 export const physicsModes=['none','static','dynamic','kinematic','sensor','ladder','one_way','breakable','fluid'];
 export const initialPhysicsFields={
-  density:'Density',mass:'Mass (kg)',friction:'Friction',elasticity:'Elasticity',gravity:'Gravity scale',
+  density:'Density',mass:'Mass',friction:'Friction',elasticity:'Elasticity',gravity:'Gravity scale',
   health:'Starting health',fixed:'Fixed rotation',buoyancy:'Fluid buoyancy',drag:'Fluid drag',damage:'Fluid damage per second',
   category:'Collision category',mask:'Collision mask',group:'Collision group',
 };

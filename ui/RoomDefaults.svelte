@@ -4,9 +4,11 @@
   import SearchSelect from './SearchSelect.svelte';
   import {roomShaders} from '../src/room-shaders.mjs';
   import {platformGravity} from '../src/schema.mjs';
+  import {pixelsPerMeter} from '../src/physics-units.mjs';
 
-  let {defaults, images, audio, onApply, onClose}=$props();
-  let draft=$state(untrack(()=>({cameraZoom:1,cameraBottomInset:0,gravity:platformGravity,...$state.snapshot(defaults)})));
+  let {defaults, images, audio, pixelUnits=false, onApply, onClose}=$props();
+  const scale=$derived(pixelUnits?pixelsPerMeter:1);
+  let draft=$state(untrack(()=>({cameraZoom:1,cameraBottomInset:0,gravity:platformGravity*scale,...$state.snapshot(defaults)})));
   const none={value:'',label:'None'};
   const sounds=$derived(Object.entries(audio).map(([value,sound])=>({value,label:sound.title??value})));
   const shaders=[{value:'none',label:'None'},...Object.entries(roomShaders).map(([value,label])=>({value,label}))];
@@ -27,7 +29,7 @@
     </fieldset>
     <fieldset>
       <legend>Physics</legend>
-      <label>Platformer gravity<input type="number" min="-100" max="100" step="any" required bind:value={draft.gravity}></label>
+      <label>Platformer gravity ({pixelUnits?'px/s²':'m/s²'})<input type="number" min={-100*scale} max={100*scale} step="any" required bind:value={draft.gravity}></label>
       <label>Room borders<select value={draft.border??''}
         onchange={event=>{const value=event.currentTarget.value;if(value)draft.border=value;else delete draft.border;}}>
         <option value="">By room view</option><option value="sides">Side walls</option><option value="closed">All four walls</option><option value="open">Open</option>

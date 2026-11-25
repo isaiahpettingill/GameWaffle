@@ -197,6 +197,7 @@ pub(super) fn evaluate(
             }
         }
         29 => Value::Text(Rc::from(cx.runtime.localized_text(text(a)?))),
+        30 => Value::Real(f64::from(cx.runtime.room_gravity()) * cx.runtime.game.distance_scale()),
         _ => unreachable!(),
     };
     m.registers[usize::from(dest)] = value;

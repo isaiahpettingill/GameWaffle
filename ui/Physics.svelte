@@ -2,19 +2,19 @@
   import ColliderEditor from './ColliderEditor.svelte';
   import Sections from './Sections.svelte';
   let group=$state('Body'), editColliders=$state(false);
-  let { physics={}, fallback='none', collisionLayers, entity=null, art=null, onEntityChange, onChange }=$props();
+  let { physics={}, fallback='none', collisionLayers, entity=null, art=null, pixelUnits=false, onEntityChange, onChange }=$props();
   const modes=['none','static','dynamic','kinematic','sensor','ladder','one_way','breakable','fluid'];
-  const groups=[
+  const groups=$derived([
     ['Body',[
-      ['mass','Mass (kg)',null,.0001,100000],['density','Density',1,.0001,100000],
+      ['mass',pixelUnits?'Mass (units)':'Mass (kg)',null,.0001,100000],['density',pixelUnits?'Density (water = 1)':'Density',1,.0001,100000],
       ['elasticity','Elasticity',0,0,1],['friction','Friction',.35,0,1],['gravity','Gravity scale',1,-8,8],
     ]],
     ['Collision',[]],
     ['Health',[['health','Starting health',1,.001,1000000]]],
     ['Fluid',[
-      ['buoyancy','Buoyancy',.75,0,4],['drag','Drag',2,0,20],['damage','Damage per second',0,0,100000],
+      ['buoyancy','Buoyancy',pixelUnits?1:.75,0,4],['drag','Drag',2,0,20],['damage','Damage per second',0,0,100000],
     ]],
-  ];
+  ]);
   const mode=$derived(physics.mode??fallback);
   function toggleLayer(key,index){
     const current=physics[key]??(key==='category'?1:65535);

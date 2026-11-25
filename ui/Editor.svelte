@@ -67,7 +67,8 @@
   let dimensions=$state(null);
   let placementSprite=$state(''), mapTool=$state('select'), addForm=$state(false);
   let revision=-1, checking=false;
-  let sourceError=$state('');
+  let sourceError=$state(''), scriptBlocker=$state('');
+  $effect(()=>{if(!scriptDirty)scriptBlocker='';});
   let backgroundPicker=$state(), importingBackground=$state(false), roomBackgrounds=$state({});
   let coverPicker=$state(), coverEdit=$state.raw(null), coverCrop=$state(normalizeCoverCrop());
   let coverUpload=$state.raw(null), coverReady=$state(false), coverSaving=$state(false), coverError=$state(''), coverPreview=$state('');
@@ -118,6 +119,7 @@
   const gameGlobals=$derived({...project?.variables,...gameScript?.declarations?.globals});
   const gameEvents=$derived({...project?.events,...gameScript?.declarations?.events});
   const blockReferences=$derived({
+    pixelUnits:project?.physicsUnits==='pixels',
     createResource:openResourceDialog,
     editResource:openResourceEdit,
     names:[...new Set(Object.values(project?.rooms??{}).flatMap(room=>instanceNames(room.entities??[])))].sort(),
@@ -242,6 +244,10 @@
   async function saveEdits() {
     if (busy) return false;
     return await finishScript() && (!dirty || await saveProject());
+  }
+  async function prepareExport(){
+    if(!await saveEdits())throw Error(scriptBlocker||error||'Wait for Studio to finish the current edit.');
+    return true;
   }
 
   let updatesOpen=$state(false),releases=$state([]),checkingUpdates=$state(false);
@@ -759,7 +765,9 @@
   }
   async function finishScript(){
     if(!scriptDirty || await scriptPanel?.flush())return true;
-    error='Fix the script error before you run or export the game.';return false;
+    await tick();
+    scriptBlocker=scriptPanel?.reportSaveError() || error || 'The script editor is busy. Try again when it is ready.';
+    return false;
   }
   async function saveProject(){
     clearTimeout(projectTimer);
@@ -1131,9 +1139,9 @@
         <button onclick={()=>{updatesOpen=!updatesOpen;if(updatesOpen)checkReleases();}}>Updates</button>
     </div></details>
 </nav>
-<ExportDialog bind:this={exportDialog} basename={exportName} {localization} onSave={saveEdits} onClose={()=>fileMenu.querySelector('summary').focus()}/>
+<ExportDialog bind:this={exportDialog} basename={exportName} {localization} onSave={prepareExport} onClose={()=>fileMenu.querySelector('summary').focus()}/>
 {#if gameSettings==='room'}
-  <RoomDefaults defaults={project.roomDefaults??{}} images={artFiles.filter(file=>!art[file]?.error).map(value=>({value,label:value.split('/').at(-1)}))}
+  <RoomDefaults defaults={project.roomDefaults??{}} pixelUnits={blockReferences.pixelUnits} images={artFiles.filter(file=>!art[file]?.error).map(value=>({value,label:value.split('/').at(-1)}))}
     audio={project.audio??{}} onApply={value=>{set(project,'roomDefaults',value);gameSettings='';}} onClose={()=>gameSettings=''}/>
 {:else if gameSettings==='project'}
   <Modal title="Project settings" onClose={()=>gameSettings=''}>
@@ -1209,7 +1217,7 @@
     <div class="row"><button disabled={busy||checkingUpdates} onclick={checkReleases}>{checkingUpdates?'Checking…':'Check again'}</button><button onclick={()=>updatesOpen=false}>Close</button></div>
   </section>
 {/if}
-{#if error || sourceError}<p role="alert" class="error banner">{error || sourceError}</p>{/if}
+{#if scriptBlocker || error || sourceError}<p role="alert" class="error banner">{scriptBlocker || error || sourceError}</p>{/if}
 {#if debugging}<Debugger room={roomId} onClose={()=>debugging=false}/>
 {:else if recovery}
   <section class="row card" role="alert"><strong>Unsaved project edits</strong>
@@ -1532,7 +1540,7 @@
             <label class="check"><input type="checkbox" checked={tile.persistRemoval??false}
               onchange={e=>set(tile,'persistRemoval',e.currentTarget.checked)}> Remember destroyed tiles</label>
           {/if}
-          <Physics physics={target.physics} {collisionLayers} entity={assetKind==='sprite'?target:null} art={art[target.source]}
+          <Physics physics={target.physics} {collisionLayers} pixelUnits={blockReferences.pixelUnits} entity={assetKind==='sprite'?target:null} art={art[target.source]}
             onEntityChange={(key,value)=>set(target,key,value)} fallback={tab==='assets' && assetKind==='tile'
             ? (tile.tag??art[tile.source]?.tags?.[0]??'').includes(':fluid:') ? 'fluid' : 'static'
             : 'none'} onChange={value=>set(target,'physics',value)} />

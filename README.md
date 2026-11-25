@@ -153,7 +153,7 @@ A room change keeps the global variables and flags. It creates new local variabl
 
 Connect boolean variables, comparisons, or input conditions to **If** and **While**. Use **Repeat** for a fixed number of iterations. Use **Wait** to continue an event after a number of game ticks. The runtime also pauses long scripts after a fixed number of instructions. It continues those scripts on later ticks. A running event has one continuation for each instance. A second occurrence of the same event does not start another continuation.
 
-WaffleScript has integers, reals, booleans, and strings. Use an explicit conversion for mixed numeric arithmetic. See the scripting guide for type rules, math functions, and translation tables.
+WaffleScript has integers, reals, booleans, and strings. Math accepts mixed numeric operands and uses real precision when one operand is real. See the scripting guide for type rules, math functions, and translation tables.
 
 ## Viewport, tiles, math, and text
 
@@ -165,7 +165,7 @@ on tick
     velocity(0, entity.vy_real)
   end
   if tile.touching_kind(entity.id, "ladder", "any") and action.up
-    velocity(entity.vx_real, -2)
+    velocity(entity.vx_real, -48)
   end
 end
 ```

@@ -598,6 +598,12 @@ impl Runtime {
             .unwrap_or(self.game.rooms[&self.room].gravity)
     }
 
+    fn script_mass(&self, actor: &Actor) -> f64 {
+        actor.body.filter(|_| actor.physics.mode == Mode::Dynamic).map_or(0.0, |body| {
+            f64::from(self.world.body(body).mass()) * self.game.mass_scale()
+        })
+    }
+
     fn apply_room_gravity(&mut self) {
         self.world.set_gravity(self.room_gravity());
     }
@@ -722,13 +728,14 @@ impl Runtime {
             (!timers.is_empty()).then(|| (name.clone(),timers))
         }).collect();
         let start = room.unwrap_or_else(|| game.start.clone());
+        let world = World::new(0.0, game.pixel_units);
         let mut rt = Runtime {
             particles: Default::default(),
             game,
             room: String::new(),
             respawns: Default::default(),
             visited: Default::default(),
-            world: World::new(0.0),
+            world,
             contacts: Contacts::default(),
             actors: BTreeMap::new(),
             entity_ids: Default::default(),
@@ -848,7 +855,7 @@ impl Runtime {
         self.entry_removed.clear();
         self.particles.clear();
         self.shapes.clear();
-        self.world = World::new(room.gravity);
+        self.world = World::new(room.gravity, self.game.pixel_units);
         self.contacts = Contacts::default();
         self.room = id.into();
         self.visited.insert(self.room.clone());
@@ -2626,6 +2633,7 @@ impl Runtime {
     }
 
     fn zones(&mut self, inputs: &[Input; 4], actions: &mut Vec<Action>) {
+        let density_scale = if self.game.pixel_units { 1.0 } else { PPM * PPM };
         let zones: Vec<_> = self
             .actors
             .values()
@@ -2645,7 +2653,7 @@ impl Runtime {
             let mut fluid_drag = 0.0_f32;
             let mut submerged = 0.0;
             let body_density = actor.physics.mass.map_or(actor.physics.density, |mass| {
-                mass * PPM * PPM / (actor.width * actor.height)
+                mass * density_scale / (actor.width * actor.height)
             });
             let mut ladder = false;
             for (id, p, w, h, zone) in &zones {

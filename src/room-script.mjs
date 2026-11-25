@@ -1,14 +1,15 @@
 import {platformGravity, roomBorder} from './schema.mjs';
 import {initStatements} from './init-properties.mjs';
 import {shaderPresets} from './shader-presets.mjs';
+import {pixelsPerMeter} from './physics-units.mjs';
 
 export const roomScriptPath=id=>`scripts/rooms/${id}.cbor`;
 export const roomSettingKeys=['cameraZoom','cameraBottomInset','border','closedEdges','gravity','background',
   'backgroundImage','backgroundParallax','ySort','music','ambience','shader','groupCamera'];
 
-export function changeRoomView(unit,from,to){
-  const before=initStatements(initialRoomScript({view:from}));
-  const after=initStatements(initialRoomScript({view:to}));
+export function changeRoomView(unit,from,to,pixelUnits){
+  const before=initStatements(initialRoomScript({view:from},undefined,pixelUnits));
+  const after=initStatements(initialRoomScript({view:to},undefined,pixelUnits));
   const changes=new Map();
   const init=initStatements(unit);
   for(const op of ['set_room_gravity','set_room_border','set_room_depth_sort']){
@@ -21,14 +22,14 @@ export function changeRoomView(unit,from,to){
   return changes;
 }
 
-export function initialRoomScript(room,defaults={}){
+export function initialRoomScript(room,defaults={},pixelUnits=false){
   const settings={...defaults,...room};
   const topDown=room.view==='top_down';
   const start=[
     {op:'camera_zoom',zoom:settings.cameraZoom??1},
     {op:'set_camera_bottom_inset',tiles:settings.cameraBottomInset??0},
     {op:'set_room_border',border:roomBorder(settings,topDown)},
-    {op:'set_room_gravity',gravity:room.gravity??(topDown?0:settings.gravity??platformGravity)},
+    {op:'set_room_gravity',gravity:room.gravity??(topDown?0:settings.gravity??platformGravity*(pixelUnits?pixelsPerMeter:1))},
     {op:'set_room_background',color:settings.background??'#101a23'},
     {op:'set_room_background_image',image:settings.backgroundImage??'',scroll:settings.backgroundParallax??1},
     {op:'set_room_depth_sort',enabled:settings.ySort??topDown},

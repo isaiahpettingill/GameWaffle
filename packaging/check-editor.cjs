@@ -135,6 +135,17 @@ for(const width of [1280,800,390,320]){
       if(!original.includes('on '))throw Error('Text view has no events');
       await source.fill('on tick\n  jump(\nend');
       await page.locator('.cm-lintRange-error, .cm-lint-marker-error').first().waitFor();
+      if(width===1280){
+        await page.getByRole('link',{name:'Play game',exact:true}).click();
+        await page.locator('.banner[role="alert"]').filter({hasText:'Line 2: Expected a name'}).waitFor();
+        await page.locator('.studio-menus summary').filter({hasText:/^File$/}).click();
+        await page.getByRole('button',{name:'Export…',exact:true}).click();
+        const exportDialog=page.getByRole('dialog',{name:'Export'});
+        await exportDialog.getByRole('button',{name:'Export',exact:true}).click();
+        await exportDialog.getByRole('alert').filter({hasText:'Line 2: Expected a name'}).waitFor();
+        await page.keyboard.press('Escape');
+        await exportDialog.waitFor({state:'hidden'});
+      }
       await page.locator('button[aria-pressed]').filter({hasText:/^Blocks$/}).click();
       await page.locator('.cm-content:visible').waitFor();
       if(width===1280){
@@ -732,7 +743,16 @@ await makerAsset.locator('img').waitFor();
 if(openLog){
   const source='assets/sprites/maker.aseprite', file=path.join(project,source);
   const original=await fs.readFile(file), edited=await fs.readFile(path.join(project,'assets/sprites/pilot.aseprite'));
-  const image=makerAsset.locator('img'), before=await image.getAttribute('src');
+  const image=makerAsset.locator('img');
+  await image.evaluate(img=>img.decode());
+  const pixels=()=>image.evaluate(img=>{
+    if(!img.complete||!img.naturalWidth)return null;
+    const canvas=document.createElement('canvas');
+    canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;
+    canvas.getContext('2d').drawImage(img,0,0);
+    return canvas.toDataURL();
+  });
+  const before=await pixels();
   async function saveArt(destination,bytes){
     await fs.writeFile(destination+'.save',bytes);
     await fs.rename(destination+'.save',destination);
@@ -740,10 +760,9 @@ if(openLog){
   await assetLibrary.getByRole('button',{name:'Open maker in default editor',exact:true}).click();
   await until('Default editor received original file',async()=> (await fs.readFile(openLog,'utf8').catch(()=>'')).trim()===file);
   await saveArt(file,edited);
-  await until('Externally saved art reloaded in Assets',async()=>await image.getAttribute('src')!==before);
-  const updated=await image.getAttribute('src');
+  await until('Externally saved art reloaded in Assets',async()=>{const preview=await pixels();return preview&&preview!==before;});
   await saveArt(file,original);
-  await until('Externally restored art reloaded',async()=>await image.getAttribute('src')!==updated);
+  await until('Externally restored art reloaded',async()=>await pixels()===before);
 
   const archivePath=path.join(fixture,'art-edit.waffleproj');
   await fs.writeFile(archivePath,await (await authoring.request.get(url+'/api/archive')).body());
@@ -1092,6 +1111,7 @@ await authoring.locator('.cm-content').fill(`on tick
   if camera.touching_edge(entity.id, "left") and tile.touching(entity.id, "water", "any")
     local_string.note = string.letter(string.join("🪿", "ice"), 1)
     local.score = math.mod(-5, 3)
+    local_real.scale = 2 + 0.5
   end
 end
 `);
@@ -1107,6 +1127,14 @@ const tileContact=canvas.locator('.waffle_reporter_tile_touching');
 await tileContact.locator('.waffle_self').getByText('This entity',{exact:true}).waitFor();
 await tileContact.locator('.blocklyDropdownText').filter({hasText:/any\s+side/}).waitFor();
 await authoring.getByRole('button',{name:'Fit blocks',exact:true}).click();
+await canvas.locator('.waffle_arithmetic .waffle_integer .blocklyNumberField').click();
+const inlineNumber=authoring.locator('.blocklyHtmlInput');
+await inlineNumber.fill('2.75');
+await inlineNumber.press('Enter');
+await until('Inline real math operand saved',async()=>{
+  const unit=await(await authoring.request.get(url+'/api/script/maker')).json();
+  return unit.events?.tick?.[0]?.body?.find(row=>row.name==='scale')?.value.left.real===2.75;
+});
 await canvas.locator('.waffle_reporter_tile_touching .blocklyDropdownText').filter({hasText:/water/i}).click();
 await authoring.getByLabel('Search options',{exact:true}).fill('water');
 await authoring.locator('.block-field-options button').filter({hasText:/water/i}).click();
@@ -1122,6 +1150,7 @@ assert.match(roundTrip,/camera.touching_edge\(entity.id, "right"\)/);
 assert.match(roundTrip,/tile.touching\(entity.id, "water", "any"\)/);
 assert.match(roundTrip,/string.letter\(string.join\("🪿", "ice"\), 1\)/);
 assert.match(roundTrip,/math.mod\(-5, 3\)/);
+assert.match(roundTrip,/local_real.scale = \(2\.75 \+ 0\.5\)/);
 const shadersTab=authoring.getByRole('navigation',{name:'Editor views'}).getByRole('button',{name:'Shaders',exact:true});
 await shadersTab.click();
 assert.equal(await shadersTab.getAttribute('aria-current'),'page');

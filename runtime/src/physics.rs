@@ -120,10 +120,12 @@ pub struct World {
     physics: PhysicsWorld,
     pending: Vec<Body>,
     forced: Vec<Body>,
+    #[cfg_attr(feature = "rollback", serde(default))]
+    pixel_masses: bool,
 }
 
 impl World {
-    pub fn new(gravity: f32) -> Self {
+    pub fn new(gravity: f32, pixel_masses: bool) -> Self {
         let mut physics = PhysicsWorld {
             gravity: Vec2::new(0., gravity),
             ..Default::default()
@@ -134,6 +136,7 @@ impl World {
             physics,
             pending: Vec::new(),
             forced: Vec::new(),
+            pixel_masses,
         }
     }
 
@@ -233,7 +236,7 @@ impl World {
             .restitution(config.elasticity)
             .restitution_combine_rule(CoefficientCombineRule::Max);
         if let Some(mass) = config.mass.filter(|_| config.mode == Mode::Dynamic) {
-            collider = collider.mass(mass);
+            collider = collider.mass(if self.pixel_masses { mass / (PPM * PPM) } else { mass });
         }
         let (handle, _) = self.physics.insert(body, collider);
         self.pending.push(handle);
@@ -493,7 +496,7 @@ mod tests {
 
     #[test]
     fn one_way_platform_lands_and_drops() {
-        let mut world = World::new(16.);
+        let mut world = World::new(16., false);
         let mut contacts = Contacts::default();
         let config = |mode| Physics {
             mode,

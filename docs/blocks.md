@@ -31,16 +31,16 @@
 | `flip_sprite_y(enabled)` | Flip sprite vertically enabled | 70 |
 | `follow()` | Follow this instance | 23 |
 | `follow_player(player)` | Follow player player | 40 |
-| `force(x, y)` | Apply force X x Y y N | 44 |
+| `force(x, y)` | Apply force X x Y y | 44 |
 | `give(item, count)` | Give item × count | 18 |
 | `give_player(item, player, count)` | Give item to player player count count | 34 |
 | `group_camera()` | Follow all players | 30 |
 | `heal_entity(entity, amount)` | Heal entity entity by amount | 89 |
 | `hide(label)` | Hide HUD element label | 22 |
-| `impulse(x, y)` | Apply impulse X x Y y N·s | 45 |
+| `impulse(x, y)` | Apply impulse X x Y y | 45 |
 | `item_icon(item, x, y)` | Draw item item at X x Y y | 39 |
 | `jump(speed)` | Jump at speed speed | 1 |
-| `jump_force(force)` | Jump with force force N | 42 |
+| `jump_force(force)` | Jump with force force | 42 |
 | `move_by(x, y)` | Move by X x Y y | 46 |
 | `move_entity(entity, x, y)` | Move entity entity by X x Y y | 51 |
 | `push_entity(entity, x, y)` | Push entity entity with impulse X x Y y | 90 |

@@ -28,7 +28,7 @@ export function preparePack(cart, locale = cart.localization?.locale) {
   const objects=cart.collections&&{...cart.collections,types:Object.fromEntries(Object.entries(cart.collections.types).map(([id,fields])=>[id,
     Object.fromEntries(Object.entries(fields).map(([name,field])=>[name,{type:field.type,
       ...(Object.hasOwn(field,'default')?{default:String(field.type==='real'?field.default.real:field.default)}:{})}]))]))};
-  const metadata = encodeCbor({fonts:Object.keys(cart.fonts??{}),events:cart.events??[],controls:cart.controls??{},items,text,menus,minimap:cart.minimap?.mode??'off',id:cart.saveId??name,start,camera, sprites, rooms, globals:globals??{}, flags:flags??{},
+  const metadata = encodeCbor({...(cart.pixelUnits?{pixelUnits:true}:{}),fonts:Object.keys(cart.fonts??{}),events:cart.events??[],controls:cart.controls??{},items,text,menus,minimap:cart.minimap?.mode??'off',id:cart.saveId??name,start,camera, sprites, rooms, globals:globals??{}, flags:flags??{},
     ...(cart.gameProgram?{initialGlobals:cart.initialGlobals,collections:objects}:{})});
   const simulationSize=metadata.length;
   if (simulationSize > MAX_SIMULATION) throw Error('Cartridge simulation data exceeds 32 MiB');

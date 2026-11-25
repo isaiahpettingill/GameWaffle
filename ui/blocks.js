@@ -7,10 +7,11 @@ import {wheelPixels} from './pixel-display.js';
 import {branchBody,branchCondition} from './conditional-block.js';
 import { Events, Blocks, buttons, controlTransfers, inputEvent, receivedEvent, timerEvent, controllerEvent, messageInputs, entityQueries, reporters, gradientCommands, tileCommands, drawingCommands, collectionCommands, commandScopeError, valueInput } from '../src/schema.mjs';
 import {roomShaders} from '../src/room-shaders.mjs';
+import {physicsArgumentDefault} from '../src/physics-units.mjs';
 import {initScope,initialPhysicsFields,physicsModes} from '../src/init-properties.mjs';
 import { conditionalBranches, constantType, parseParameters, variableName } from '../src/script.mjs';
 import {callArguments, callBlock, definitionBlock, enclosingRoutine, registerRoutineBlocks, routineParameters, routineSignature} from './routine-blocks.js';
-import { argumentInput, logicDefinitions, logicStatements, collectionReporterType, collectionReporters, entityQueryStyle, reporterBlock, reporterBlockType, readValue, slot, queryPicker, referenceSlot, roomReadings } from './logic-blocks.js';
+import { argumentInput, logicDefinitions, logicStatements, collectionReporterType, collectionReporters, entityQueryStyle, reporterBlock, reporterBlockType, readValue, slot, numericSlot, queryPicker, referenceSlot, roomReadings } from './logic-blocks.js';
 
 Blockly.setLocale(English);
 
@@ -399,15 +400,15 @@ const theme = Blockly.Theme.defineTheme('gamewaffle',{
   },
   fontStyle:{family:'system-ui, sans-serif',weight:'600',size:12},
 });
-const block = (id, fields, values) => ({
+const block = (id, fields, values, inputSlot=slot) => ({
   kind:'block',type:'waffle_'+id,fields,
-  ...(values?{inputs:Object.fromEntries(Object.entries(values).map(([name,value])=>[name,slot(value)]))}:{}),
+  ...(values?{inputs:Object.fromEntries(Object.entries(values).map(([name,value])=>[name,inputSlot(value)]))}:{}),
 });
 const namedEntitySlot=()=>({shadow:{type:'waffle_entity_find',inputs:{arg0:referenceSlot('instance_ref')}}});
 const reporterChoices=(group,namedEntity=false)=>Object.entries(reporters).filter(([,spec])=>spec[0]===group)
   .map(([name,[,,,params]])=>({
     kind:'block',...reporterBlock(name,params.map(([kind,value])=>kind==='tile'?undefined:value),
-      (type,value)=>type==='entity'&&namedEntity?namedEntitySlot():slot(value)),
+      (type,value)=>type==='entity'&&namedEntity?namedEntitySlot():(type==='numeric'?numericSlot:slot)(value)),
   }));
 const entityChoices=(style,hasTileContext)=>Object.entries(entityQueries)
   .filter(([id])=>entityQueryStyle(id)===style&&(id!=='on_tile_top'||hasTileContext))
@@ -421,7 +422,7 @@ const entityChoices=(style,hasTileContext)=>Object.entries(entityQueries)
   }));
 const colorSlot=value=>({shadow:{type:'waffle_color',fields:{value}}});
 const colorInput=(id,key)=>key==='color'||id==='set_health_bar'&&['fill','track'].includes(key);
-const commands = (style,scope) => (groups[style].commands??[])
+const commands = (style,scope,pixelUnits) => (groups[style].commands??[])
   .filter(id=>!scope||!commandScopeError(id,scope))
   .map(id=>({
   kind:'block',type:commandType(id),
@@ -429,10 +430,10 @@ const commands = (style,scope) => (groups[style].commands??[])
   inputs:Object.fromEntries(Blocks[id][1].filter(([name,type])=>valueInput(type)||name===messageInputs[id])
     .map(([key,,value,optional])=>[key,key==='entity'?id==='clone_entity'&&!scope?.roomScript?slot(value):namedEntitySlot()
       :id==='follow_player'?{shadow:playerShadow(value)}
-      :colorInput(id,key)?colorSlot(value):slot(optional?null:value)])),
+      :colorInput(id,key)?colorSlot(value):slot(optional?null:physicsArgumentDefault(id,key,value,pixelUnits))])),
 }));
 const category = (style,contents) => ({kind:'category',name:groups[style].name,colour:groups[style].color,contents});
-const toolbox = (isRoom,isGame=false,isTile=false,isModule=false) => {
+const toolbox = (isRoom,isGame=false,isTile=false,isModule=false,pixelUnits=false) => {
   const scope=isModule?null:{roomScript:isRoom,gameScript:isGame,tileScript:isTile};
   const init=hat=>({...block(hat),next:{block:{type:'waffle_init_properties'}}});
   const choices={
@@ -448,11 +449,11 @@ const toolbox = (isRoom,isGame=false,isTile=false,isModule=false) => {
     input:[...(isGame?[block('bind_input'),block('input_binding'),block('controller_event')]:[]),
       ...(!isModule?[block('input_event',{action:'a',edge:'pressed'})]:[]),
       block('action',{action:'a'}),block('pressed',{pressed:'a'}),block('released',{released:'a'}),block('button',{button:'a'})],
-    operators:[block('whole'),block('real'),block('bool'),block('arithmetic',{operation:'add'},{left:4,right:2}),
-      block('compare',{operation:'equal'},{left:0,right:0}),
+    operators:[block('whole'),block('real'),block('bool'),block('arithmetic',{operation:'add'},{left:4,right:2},numericSlot),
+      block('compare',{operation:'equal'},{left:0,right:0},numericSlot),
       block('boolean_op',{operation:'and'},{left:false,right:false}),block('not',null,{left:false}),
       block('math_unary',{operation:'sin'},{left:{real:45}}),block('math_binary',{operation:'pow'},{left:{real:2},right:{real:2}}),
-      block('conversion',{operation:'to_real'},{left:0}),block('none')],
+      block('conversion',{operation:'to_real'},{left:0},numericSlot),block('none')],
     motion:isRoom?[]:[block('grounded')],
     entities:[...(!isRoom?[block('self'),block('actor',{actor:'x'}),block('actor_real',{actor:'x_real'}),
       block('actor_condition',{actor:'moving'})]:[]),...(!isTile?[block('last_clone')]:[])],
@@ -469,7 +470,7 @@ const toolbox = (isRoom,isGame=false,isTile=false,isModule=false) => {
   const startersFirst=['events','input','shaders'];
   return Object.keys(groups).flatMap(style=>{
     if(custom[style])return [{...category(style,[]),custom:custom[style]}];
-    const blocks=choices[style]??[], statements=commands(style,scope);
+    const blocks=choices[style]??[], statements=commands(style,scope,pixelUnits);
     const contents=[...(startersFirst.includes(style)?[...blocks,...statements]:[...statements,...blocks]),...entityChoices(style,isTile||isModule),
       ...reporterChoices(style,isRoom||isTile)];
     if(!contents.length)return [];
@@ -521,7 +522,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
     move:{scrollbars:{horizontal:true,vertical:true},drag:true,wheel:true},
     zoom:{controls:true,wheel:false,startScale:.75,minScale:.16,maxScale:1.6,scaleSpeed:1.15},
     plugins:{flyoutsVerticalToolbox:'responsive'},
-    toolbox:{kind:'categoryToolbox',contents:toolbox(isRoom,isGame,isTile)},
+    toolbox:{kind:'categoryToolbox',contents:toolbox(isRoom,isGame,isTile,false,references.pixelUnits)},
   });
   const data={sprites,items,actions,animations:[...animations],keys,menus,...references,fields:[],roomScript:isRoom,gameScript:isGame,tileScript:isTile,createEvent,createField};
   registries.set(workspace,data);
@@ -670,7 +671,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
     data.tileScript=tileScript;
     data.module=module;
     blockToolbox.clearSelection();
-    workspace.updateToolbox({kind:'categoryToolbox',contents:toolbox(roomScript,gameScript,tileScript,module)});
+    workspace.updateToolbox({kind:'categoryToolbox',contents:toolbox(roomScript,gameScript,tileScript,module,data.pixelUnits)});
     reportToolbox();
   }
   workspace.addChangeListener(event=>{
@@ -880,10 +881,11 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
         }
       } else if (Object.hasOwn(Blocks,op)) {
         for (const [key,type,fallback,optional] of Blocks[op][1]) {
+          const initial=physicsArgumentDefault(op,key,fallback,currentReferences.pixelUnits);
           if(op==='follow_player' && typeof (data[key]??fallback)==='number')inputs[key]={shadow:playerShadow(data[key]??fallback)};
           else if(colorInput(op,key)&&typeof (data[key]??fallback)==='string'&&/^#[0-9a-f]{6}$/i.test(data[key]??fallback))
             inputs[key]=colorSlot(data[key]??fallback);
-          else if (valueInput(type) || key===messageInputs[op]) value(key,optional?null:fallback);
+          else if (valueInput(type) || key===messageInputs[op]) value(key,optional?null:initial);
           else fields[key]=data[key]??fallback;
         }
       } else continue;
@@ -922,7 +924,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
       }
       else if(op==='while')result.push({op,condition:value('condition',false),body:stack('body')});
       else result.push({op,...Object.fromEntries(Blocks[op][1].map(([key,type,fallback,optional])=>
-        [key,valueInput(type) || (messageBlock && key===messageInputs[op]) ? value(key,optional?null:fallback) : field(key)]))});
+        [key,valueInput(type) || (messageBlock && key===messageInputs[op]) ? value(key,optional?null:physicsArgumentDefault(op,key,fallback,data.pixelUnits)) : field(key)]))});
     }
     return result;
   }

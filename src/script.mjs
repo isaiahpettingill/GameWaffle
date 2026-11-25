@@ -2,6 +2,7 @@ import { actorReadings, Blocks, Events, controlTransfers, inputEvent, receivedEv
 import {inventoryTypes,propertyAliases,propertyType,scalarTypes,validateCollections} from './collections.mjs';
 import {validResourceText} from './resource-tables.mjs';
 import {compileInitProperties} from './init-properties.mjs';
+import {physicsArgumentDefault} from './physics-units.mjs';
 
 const variableScopes = {local:0,global:1,flag:2,local_real:9,global_real:10,local_bool:11,global_bool:12,local_string:13,global_string:14};
 export const scopes = Object.keys(variableScopes);
@@ -23,6 +24,7 @@ export const operations = [
 ];
 const comparisons = ['equal','less','less_equal','not_equal','greater','greater_equal'];
 const logic = ['and','or','not'];
+const isNumeric = type => type==='integer'||type==='real';
 export const unaryMath = ['abs','to_real','to_integer','floor','ceil','round','trunc','sqrt','sin','cos','tan','asin','acos','atan','log','exp'];
 export const binaryMath = ['min','max','atan2','pow'];
 const toInteger = ['floor','ceil','round','trunc'];
@@ -123,7 +125,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
     return result;
   }
   try {
-  let scriptBorder=false,requiresAbi13=false,requiresAbi14=false,requiresAbi15=false,requiresAbi16=false,requiresAbi17=false,requiresAbi18=false,tileSensing=false;
+  let scriptBorder=false,requiresAbi13=false,requiresAbi14=false,requiresAbi15=false,requiresAbi16=false,requiresAbi17=false,requiresAbi18=false,requiresAbi19=false,tileSensing=false;
   const dependencies = new Set(), shaderUses=new Set(), backgroundUses = new Set(), shaderPresets = new Set(), fontUses = new Set();
   let scriptGravity=false,scriptJump=false,requiresAbi10=false,requiresAbi12=false;
   const events = {};
@@ -177,6 +179,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
       if(trace)trace(event,op,current);
       bytes.push(op,...operands);
     };
+    const promoteReal = register => emit(commands.calc,register,17,register,register);
     const patch = (offset,target) => { [bytes[offset],bytes[offset+1]] = word(target); };
     const jumpLater=()=>{
       emit(commands.jump,0,0);
@@ -235,6 +238,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
           const [,,result,params]=reporters[value.call];
           if(value.args.length!==params.length)throw Error(value.call+' takes '+params.length+' arguments');
           let numeric;
+          const integerRegisters=[];
           for(const [index,[type]] of params.entries()){
             const arg=value.args[index], register=target+index;
             if(Array.isArray(type)&&!type.includes(arg))throw Error('Choose '+type.join(', ')+' for '+value.call);
@@ -242,15 +246,17 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
               throw Error('Choose a project tile for '+value.call);
             const actual=expression(arg,register,depth+1);
             if(type==='numeric'){
-              if(actual!=='integer'&&actual!=='real')throw Error(value.call+' requires numeric values');
-              numeric??=actual;
-              requireType(actual,numeric,value.call,register);
-            }else if(type==='real'&&actual==='integer')emit(commands.calc,register,17,register,register);
+              if(!isNumeric(actual))throw Error(value.call+' requires numeric values');
+              if(actual==='integer')integerRegisters.push(register);
+              if(actual==='real'||numeric===undefined)numeric=actual;
+            }else if(type==='real'&&actual==='integer')promoteReal(register);
             else requireType(actual,Array.isArray(type)||type==='tile'?'string':type==='entity'?'integer':type,value.call,register);
           }
+          if(numeric==='real')for(const register of integerRegisters)promoteReal(register);
           emit(Opcodes.reporter,target,reporterCodes.indexOf(value.call),...Array.from({length:3},(_,i)=>word(params[i]?target+i:target)).flat());
           requiresAbi15=true;
           if(value.call==='text.lookup')requiresAbi17=true;
+          if(value.call==='physics.gravity')requiresAbi19=true;
           if(namespace==='tile')tileSensing=true;
           return result==='numeric'?numeric:result;
         }
@@ -290,6 +296,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
           const operation=Object.keys(entityQueries).indexOf(name);
           if(operation>=13)requiresAbi12=true;
           if(operation>=18)requiresAbi14=true;
+          if(name==='mass')requiresAbi19=true;
           const [,result,params]=query;
           if(value.args.length!==params.length)throw Error(value.call+' takes '+params.length+' arguments');
           params.forEach(([expected],index)=>{
@@ -340,6 +347,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
         const index=Object.keys(actorReadings).indexOf(value.actor);
         if(index<0)throw Error('Unknown actor property '+value.actor);
         if(index>=28)requiresAbi14=true;
+        if(value.actor==='mass')requiresAbi19=true;
         emit(commands.load,target,5,...word(index));
         return actorReadings[value.actor];
       } else if (value?.button != null) {
@@ -363,26 +371,32 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
         else if(type!=='integer'&&type!=='boolean')throw Error(name+' requires a number or boolean');
         return 'integer';
       }
+      if(name==='to_real'){
+        if(!isNumeric(type))throw Error(name+' requires a number');
+        if(type==='integer')promoteReal(target);
+        return 'real';
+      }
       const boolean = logic.includes(name);
       if(toInteger.includes(name)&&type==='integer')return 'integer';
       if(realMath.includes(name)&&type==='integer'){
-        emit(commands.calc,target,17,target,target);
+        promoteReal(target);
         type='real';
       }
       if (boolean) requireType(type,'boolean',name,target);
-      else if (name==='to_real') requireType(type,'integer',name);
       else if (realMath.includes(name) || toInteger.includes(name)) requireType(type,'real',name);
-      else if (!equality && type!=='integer' && type!=='real' && !(type==='string' && name==='add')) {
+      else if (!equality && !isNumeric(type) && !(type==='string' && name==='add')) {
         throw Error(name+' requires numeric operands'+(name==='add'?' or two strings':''));
       }
       if (!unary) {
         const other=expression(right===undefined?0:right,target+1,depth+1);
-        if(realMath.includes(name)&&other==='integer')emit(commands.calc,target+1,17,target+1,target+1);
+        if(!boolean&&isNumeric(type)&&isNumeric(other)&&type!==other){
+          promoteReal(type==='integer'?target:target+1);
+          type='real';
+        }
         else requireType(other,boolean?'boolean':type,name,target+1);
       }
       emit(commands.calc,target,op,target,unary?target:target+1);
       if (comparisons.includes(name)||logic.includes(name)) return 'boolean';
-      if (name==='to_real') return 'real';
       if (toInteger.includes(name)||name==='to_integer') return 'integer';
       return type;
     }
@@ -560,7 +574,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
           }
           const operands = Blocks[block.op][1].map(([key,type,fallback,optional],index)=>{
             if(block[key]===null && !optional)throw Error('None requires an optional input: '+key);
-            const value = block[key] ?? fallback;
+            const value = block[key] ?? physicsArgumentDefault(block.op,key,fallback,registry?.pixelUnits);
             if (valueInput(type)) {
               const actual=expression(value,index,depth+1);
               if(key==='entity')requireType(actual,'integer',key,index);
@@ -592,6 +606,6 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
     if (bytes.length >= 65535) throw Error('Script bytecode exceeds 64 KiB');
     if (bytes.length) events[event] = { b:typeof Buffer === "undefined" ? Uint8Array.from(bytes) : Buffer.from(bytes), n:names.values, k:constants.values, ...(reals.values.length ? {f:reals.values} : {}) };
   }
-  return { events, dependencies, backgroundUses, scriptBorder, shaderUses, shaderPresets, fontUses, scriptGravity, scriptJump, requiresAbi10, requiresAbi12, requiresAbi13, requiresAbi14, requiresAbi15, requiresAbi16, requiresAbi17, requiresAbi18, tileSensing };
+  return { events, dependencies, backgroundUses, scriptBorder, shaderUses, shaderPresets, fontUses, scriptGravity, scriptJump, requiresAbi10, requiresAbi12, requiresAbi13, requiresAbi14, requiresAbi15, requiresAbi16, requiresAbi17, requiresAbi18, requiresAbi19, tileSensing };
   } catch(error){error.node=current;throw error;}
 }

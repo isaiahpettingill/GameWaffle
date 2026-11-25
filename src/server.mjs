@@ -380,8 +380,9 @@ const server = createServer(async (req, res) => {
           const path=room.script??roomScriptPath(id);
           const old=await store.read(path).catch(error=>{if(error.code!=='ENOENT')throw error;return null;});
           const source=old&&path.endsWith('.ws')?old.toString():null;
-          const unit=source!=null?parseScript(source):old?decodeCbor(old):initialRoomScript(room);
-          const replacements=changeRoomView(unit,previous,view);
+          const pixelUnits=project.physicsUnits==='pixels';
+          const unit=source!=null?parseScript(source):old?decodeCbor(old):initialRoomScript(room,undefined,pixelUnits);
+          const replacements=changeRoomView(unit,previous,view,pixelUnits);
           let nextSource=source;
           const changes=[...replacements];
           if(source!=null)changes.sort(([left],[right])=>locations.get(right).from-locations.get(left).from);
@@ -410,7 +411,7 @@ const server = createServer(async (req, res) => {
           const files=[['project.json',JSON.stringify(project,null,2)+'\n']], scripts=new Map();
           for(const [id,room] of Object.entries(project.rooms??{}))if(!Object.hasOwn(old.rooms,id)&&!room.script){
             if(!/^[A-Za-z0-9_-]{1,64}$/.test(id))throw Error('Invalid room name');
-            const unit=initialRoomScript(room,project.roomDefaults);
+            const unit=initialRoomScript(room,project.roomDefaults,project.physicsUnits==='pixels');
             scripts.set('room:'+id,unit);files.push([roomScriptPath(id),encodeCbor(unit)]);
           }
           const newAnimatedTiles=Object.fromEntries(Object.entries(project.tiles??{}).filter(([id,tile])=>
@@ -477,7 +478,7 @@ const server = createServer(async (req, res) => {
           const file = (isGame?project.gameScript:isTile?null:project[collection][id].script) ?? defaultPath;
           const data = await store.read(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
           const script=data ? (isGame?await readGameScript(project,store.read):file.endsWith('.ws') ? {...parseScript(data.toString()),source:data.toString()} : decodeCbor(data)) :
-            isGame?initialGameScript(project):isTile?initialTileScript(project.tiles[id]):isRoom?initialRoomScript(project.rooms[id]):initialScript(project.sprites[id]);
+            isGame?initialGameScript(project):isTile?initialTileScript(project.tiles[id]):isRoom?initialRoomScript(project.rooms[id],undefined,project.physicsUnits==='pixels'):initialScript(project.sprites[id]);
           if(url.searchParams.has('debug')){
             const labels=new WeakMap();
             function index(source,name){

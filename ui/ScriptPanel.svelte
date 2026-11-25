@@ -42,7 +42,12 @@
     }catch{}
   }
   $effect(()=>{blockEditor?.updateRegistry(sprites,items,actions,animations,textKeys,menus,references);});
-  let error=$state(''), ready=$state(false), busy=$state(false);
+  let error=$state(''), errorNotice=$state(), ready=$state(false), busy=$state(false);
+  export function reportSaveError(){
+    if(!error)return '';
+    errorNotice?.focus();
+    return `${selected?selected+'.ws':title}: ${error}`;
+  }
   $effect(()=>{status=recovered?'Recovered script draft':saving?'Saving script…':dirty?'Unsaved script':'';});
   onMount(()=>{
     blockEditor=mountBlocks(host,changed,sprites,items,actions,animations,textKeys,menus,references,(compact,index)=>{
@@ -132,8 +137,9 @@
   async function save(){
     saving=true;
     const generation=editNumber;
+    let source=null;
     try{
-      const source=mode==='text'?textEditor.source():null;
+      source=mode==='text'?textEditor.source():null;
       const data=source!==null?await validateText(source,selected,registry()):blockEditor.save();
       if(source!==null){data.layout=original?.layout;data.source=source;}
       else if(original?.source && formatScript(original)===formatScript(data))data.source=original.source;
@@ -145,7 +151,11 @@
       error='';
       if(generation===editNumber){dirty=false;recovered=false;await draft.write(null);}
       return true;
-    }catch(err){error=err.message;return false;}finally{saving=false;}
+    }catch(err){
+      const line=source!=null&&Number.isInteger(err.from)?source.slice(0,err.from).split('\n').length:null;
+      error=(line==null?'':`Line ${line}: `)+err.message;
+      return false;
+    }finally{saving=false;}
   }
   function closeDiscard(){
     dialog='';
@@ -174,7 +184,7 @@
   }
   function addMovement(){
     try{
-      const stack=movementPreset(preset),unit=parseScript('on tick\n'+stack+'end');
+      const stack=movementPreset(preset,references.pixelUnits),unit=parseScript('on tick\n'+stack+'end');
       if(mode==='text'){
         const source=textEditor.source();
         parseScript(source);
@@ -279,7 +289,7 @@
       </div>
     </div>
   </header>
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
+  {#if error}<p class="error" role="alert" tabindex="-1" bind:this={errorNotice}>{error}</p>{/if}
   <div inert={busy||!ready} hidden={mode!=='blocks'} class="workspace block-workspace" bind:this={host}></div>
   <div inert={busy||!ready} hidden={mode!=='text'} class="workspace" bind:this={textHost}></div>
 </section>

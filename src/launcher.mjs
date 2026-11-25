@@ -93,10 +93,10 @@ export async function launch(port,open){
           title=name;
           const view=form.get('view')==='top_down'?'top_down':'platformer';
           const room={title:'First room',cols:24,rows:16,view,entities:[],layers:[{name:'Ground',order:0,collidable:true,cells:[]}]};
-          const settings={name,start:'room',tileSize:16,sprites:{},tiles:{},audio:{},rooms:{room},gameScript:gameScriptPath};
+          const settings={name,start:'room',tileSize:16,physicsUnits:'pixels',sprites:{},tiles:{},audio:{},rooms:{room},gameScript:gameScriptPath};
           const manifest=JSON.stringify(settings,null,2);
           const script=encodeCbor(initialGameScript(settings,{examples:true}));
-          const roomScript=encodeCbor(initialRoomScript(room));
+          const roomScript=encodeCbor(initialRoomScript(room,undefined,true));
           const archive=form.get('storage')==='archive';
           const base=projectBasename(name);
           const occupied=new Set((await readdir(destination)).map(entry=>entry.toLowerCase()));

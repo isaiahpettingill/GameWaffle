@@ -11,6 +11,7 @@ import {compileMidi} from './midi.mjs';
 import {readGameScript} from './game-script.mjs';
 import {tileScriptPath} from './tile-script.mjs';
 import {resolveTileTag} from './tile-tag.mjs';
+import {pixelsPerMeter} from './physics-units.mjs';
 import {roomScriptPath} from './room-script.mjs';
 import {propertyAliases,validateCollections} from './collections.mjs';
 import {pack} from './pack.mjs';
@@ -73,7 +74,7 @@ const integer = (n, min, max, label) => {
   return number(n, min, max, label);
 };
 
-function props(value = {}, defaultMode) {
+function props(value = {}, defaultMode, pixelUnits=false) {
   const mode = value.mode ?? defaultMode;
   if (!physicsModes.includes(mode)) throw Error(`Unknown physics mode: ${mode}`);
   if (value.mass != null) number(value.mass, .0001, 100_000, 'mass');
@@ -84,7 +85,7 @@ function props(value = {}, defaultMode) {
     group: integer(value.group ?? 0, -32768, 32767, 'collision group'),
     gravity: number(value.gravity ?? 1, -8, 8, 'gravity scale'), fixed: value.fixed ?? true,
     health: number(value.health ?? 1, .001, 1_000_000, 'health'),
-    buoyancy: number(value.buoyancy ?? .75, 0, 4, 'fluid buoyancy'),
+    buoyancy: number(value.buoyancy ?? (pixelUnits?1:.75), 0, 4, 'fluid buoyancy'),
     drag: number(value.drag ?? 2, 0, 20, 'fluid drag'), damage: number(value.damage ?? 0, 0, 100_000, 'fluid damage per second') };
 }
 
@@ -286,6 +287,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
   if (!store && root.endsWith('.waffleproj')) store=await (await import('./project-store.mjs')).projectStore(root);
   const read = store?.read ?? ((name,encoding)=>readFile(projectPath(root,name),encoding));
   const project = draft ?? JSON.parse(await read('project.json','utf8'));
+  const pixelUnits=project.physicsUnits==='pixels';
+  const gravityScale=pixelUnits?pixelsPerMeter:1;
   const gameUnit=scripts.get('game')??await readGameScript(project,read);
   const declarations=gameUnit?.declarations;
   const collections=validateCollections(gameUnit?.collections);
@@ -328,7 +331,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       allShaders[id]={...definition,title:shader.title??id};
     }catch(error){throw Error('Shader '+(shader.title??id)+': '+error.message);}
   }
-  const registry={shaders:allShaders,tiles:project.tiles??{},fonts:{...project.bitfonts,builtin:true},controls,menus,events,sounds:project.audio??{},roomScript:false,
+  const registry={pixelUnits,shaders:allShaders,tiles:project.tiles??{},fonts:{...project.bitfonts,builtin:true},controls,menus,events,sounds:project.audio??{},roomScript:false,
     sprites:project.sprites??{},flags:flagValues,constants:gameUnit?.constants,collections,items:project.items??{},
     propertyAliases:propertyAliases({...project.variables,...declarations?.globals},flagValues,project.items),text:localization.tables[localization.locale]??{}};
   const gameScript=gameUnit?compileScript(gameUnit,await loadModules(gameUnit,read),undefined,{...registry,gameScript:true,roomScript:true}):null;
@@ -344,8 +347,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     return { image: id, ms: frame.duration };
   }
 
-  const scriptAbi=script=>script?.requiresAbi18?18:script?.requiresAbi17?17:script?.requiresAbi16?16:script?.requiresAbi15?15:script?.requiresAbi14?14:script?.requiresAbi13?13:script?.requiresAbi12?12:script?.requiresAbi10?10:9;
-  let runtimeAbi=Math.max(scriptAbi(gameScript),gameUnit?12:9);
+  const scriptAbi=script=>script?.requiresAbi19?19:script?.requiresAbi18?18:script?.requiresAbi17?17:script?.requiresAbi16?16:script?.requiresAbi15?15:script?.requiresAbi14?14:script?.requiresAbi13?13:script?.requiresAbi12?12:script?.requiresAbi10?10:9;
+  let runtimeAbi=Math.max(scriptAbi(gameScript),gameUnit?12:9,pixelUnits?19:0);
   let tileSensing=Boolean(gameScript?.tileSensing);
   for(const id of gameScript?.shaderUses??[])usedShaders.add(id);
   const sprites = Object.create(null), dependencies = new Map(), spriteFonts = new Map();
@@ -376,7 +379,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     tileSensing||=script.tileSensing;
     dependencies.set(id,script.dependencies);
     spriteFonts.set(id,script.fontUses);
-    sprites[id] = { clips, components:components(sprite.components), respawn:respawnRule(sprite.respawn,flagValues), scriptJump:sprite.legacyBuiltInJump==null?script.scriptJump:!sprite.legacyBuiltInJump, scriptGravity:sprite.gravityMode!=null?sprite.gravityMode==='script':Boolean(sprite.scriptGravity||script.scriptGravity), program:script.events, physics: props({...sprite.physics,...script.initPhysics}, 'none'), width: sprite.width ?? ase.width,
+    sprites[id] = { clips, components:components(sprite.components), respawn:respawnRule(sprite.respawn,flagValues), scriptJump:sprite.legacyBuiltInJump==null?script.scriptJump:!sprite.legacyBuiltInJump, scriptGravity:sprite.gravityMode!=null?sprite.gravityMode==='script':Boolean(sprite.scriptGravity||script.scriptGravity), program:script.events, physics: props({...sprite.physics,...script.initPhysics}, 'none',pixelUnits), width: sprite.width ?? ase.width,
       height: sprite.height ?? ase.height, layer: sprite.layer ?? 0, animation: sprite.animation ?? 'default',
       emitter:sprite.emitter?{effect:sprite.emitter.effect,rate:sprite.emitter.rate,offset:sprite.emitter.offset??[0,0]}:null, alwaysActive:sprite.alwaysActive??false, team: sprite.team ?? 0, projectile: sprite.projectile };
     number(sprites[id].width, 1, 8192, 'sprite width');
@@ -430,7 +433,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       register(`tile/${id}/${group*clips.length+v}/${f}`,ase,i,flags))));
     tiles[id] = {
       variants: variantGroups.flat(), authoredVariants:clips.length,
-      physics: props(tile.physics, mode),
+      physics: props(tile.physics, mode,pixelUnits),
       hosts:[],variantPhysics:[],
     };
     const compiled=tiles[id];
@@ -519,7 +522,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     const width = cols * size, height = rows * size;
     const view = room.view ?? (Math.abs(room.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer');
     if (!['platformer','top_down'].includes(view)) throw Error(`Unknown room view: ${view}`);
-    const gravity = view === 'top_down' ? 0 : number(settings.gravity ?? platformGravity, -100, 100, 'room gravity');
+    const gravity = view === 'top_down'?0:number(settings.gravity??platformGravity*gravityScale,-100*gravityScale,100*gravityScale,'room gravity')/gravityScale;
     const cameraZoom = number(settings.cameraZoom ?? 1, .25, 4, 'default camera zoom');
     if(cameraZoom!==1)runtimeAbi=Math.max(runtimeAbi,10);
     const bottomInset=Math.min(rows-1,integer(settings.cameraBottomInset??0,0,1023,'bottom camera inset'));
@@ -734,7 +737,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
   const coverArt=await compileCover(project.coverImage,project.coverCrop,read);
   const presetProgram=[...usedShaders].some(id=>id.startsWith('preset:'))
     ?await compileShader(await readFile(new URL('./shaders/presets.spv',import.meta.url))):null;
-  return { runtimeAbi, controls,items,menus,events:Object.keys(events),localization,minimap,saveId:project.saveId??project.name, name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
+  return { runtimeAbi, pixelUnits, controls,items,menus,events:Object.keys(events),localization,minimap,saveId:project.saveId??project.name, name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
     gameProgram:gameScript?.events,initialGlobals,collections,roomPreviewBackgrounds,
     shaders:Object.fromEntries([...usedShaders].map(id=>[id,id.startsWith('preset:')?{...presetProgram,...allShaders[id]}:allShaders[id]])),
     shaderDefinitions:Object.fromEntries(Object.entries(allShaders).map(([id,{title,uniformSize,parameters}])=>[id,{title,uniformSize,parameters}])) ,

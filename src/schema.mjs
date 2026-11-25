@@ -39,7 +39,7 @@ export const Blocks = {
   advance_tile_frame:['Advance this tile frame by %1',[['steps','integer',1]]],
   set_tile_friction:['Set this tile friction to %1',[['friction','number',{real:0.35}]]],
   set_tile_body:['Set this tile body to %1',[['mode',['none','static','dynamic','kinematic','sensor','one_way','breakable','fluid','ladder'],'static']]],
-  force_entity:['Apply force to %1\nX %2 Y %3 N',[['entity','integer',0],['x','number',0],['y','number',-20]]],
+  force_entity:['Apply force to %1\nX %2 Y %3',[['entity','integer',0],['x','number',0],['y','number',-20]]],
   draw_space:['Draw in %1 coordinates',[['space',['world','hud'],'world']]],
   fill:['Fill shapes with %1',[['color','string','#cba6f7']]],
   no_fill:['No fill',[]],
@@ -68,8 +68,8 @@ export const Blocks = {
   emit_event:['Emit event %1',[['event','text','']]],
   emit_event_with_entity:['Emit event %1 with entity %2',[['event','text',''],['entity','integer',0]]],
   apply_gravity:['Apply gravity with modifier %1',[['modifier','number',1,'optional']]],
-  force:['Apply force X %1 Y %2 N',[['x','number',0],['y','number',0]]],
-  impulse:['Apply impulse X %1 Y %2 N·s',[['x','number',0],['y','number',0]]],
+  force:['Apply force X %1 Y %2',[['x','number',0],['y','number',0]]],
+  impulse:['Apply impulse X %1 Y %2',[['x','number',0],['y','number',0]]],
   follow_player:['Follow player %1',[['player','number',1]]],
   set_position:['Go to X %1 Y %2',[['x','number',0],['y','number',0]]],
   show_menu:['Show menu %1',[['menu','text','pause']]],
@@ -154,7 +154,7 @@ export const Blocks = {
   fire_projectile:['Fire %1 toward %2 at speed %3 with %4 damage',[
     ['projectile','text','spark'],['aim',['facing','position','trajectory','heat_seek'],'facing'],['speed','number',8],['amount','number',1],
   ]],
-  jump_force: ['Jump with force %1 N', [['force','number',240]]],
+  jump_force: ['Jump with force %1', [['force','number',240]]],
   jump: ['Jump at speed %1', [['speed', 'number', 8]]],
   damage: ['Deal %1 damage in a %2 × %3 attack box', [['amount', 'number', 1], ['range', 'number', 28], ['height', 'number', 24]]],
   fire: ['Fire %1 at speed %2 with %3 damage', [['aim', ['facing','position','trajectory','heat_seek'], 'facing'], ['speed','number',8], ['amount','number',1]]],
@@ -216,7 +216,7 @@ export const actorReadings = {
   last_spawn:'integer',answer:'integer',item_count:'integer',moving:'boolean',is_player:'boolean',facing:'integer',
   x_real:'real',y_real:'real',vx_real:'real',vy_real:'real',health_real:'real',
   menu_choice:'integer',menu_item:'string',menu_id:'string',used_item:'string',event_sender:'integer',event_entity:'integer',
-  last_clone:'integer',clone_source:'integer',is_clone:'boolean',
+  last_clone:'integer',clone_source:'integer',is_clone:'boolean',mass:'real',
 };
 const readingNames=Object.keys(actorReadings);
 export const readings=readingNames.filter(name=>['integer','boolean'].includes(actorReadings[name]));
@@ -244,6 +244,7 @@ export const entityQueries = {
   on_tile_top: ['Entity %1 touches the top of this tile?','boolean',[['integer',0]]],
   is_clone: ['Entity %1 is a clone?','boolean',[['integer',0]]],
   clone_source: ['Source of clone %1','integer',[['integer',0]]],
+  mass: ['Mass of entity %1','real',[['integer',0]]],
 };
 
 
@@ -284,4 +285,5 @@ export const reporters={
   'math.random_integer':['operators','Random integer from %1 to %2','integer',[['integer',1],['integer',10]]],
   'math.random_real':['operators','Random real from %1 to %2','real',[['real',{real:0}],['real',{real:1}]]],
   'text.lookup':['text','Look up text for %1','string',[['string','greeting']]],
+  'physics.gravity':['motion','Room gravity','real',[]],
 };
