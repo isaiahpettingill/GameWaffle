@@ -433,7 +433,13 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
           const amount = block.value === undefined ? defaults[type] : block.value;
           const value = block.op==='change'?{calc:'add',left:{scope:block.scope,get:block.name},right:amount}:amount;
           if (block.op==='change' && !['integer','real'].includes(type)) throw Error('Change by requires a numeric variable');
-          requireType(expression(value,0,depth+1),type,'Variable '+block.name,0);
+          const actual=expression(value,0,depth+1);
+          if(type==='integer'&&actual==='real'){
+            current=block;
+            const realVariable=`${block.scope}_real.${block.name}`;
+            throw Error(`Variable ${block.name} requires an integer value. Use ${realVariable} to keep decimals, or convert the value with math.to_integer.`);
+          }
+          requireType(actual,type,'Variable '+block.name,0);
           emit(commands.store,variableScope,...word(named(block.name,block.scope)),0);
         } else if (block.op === 'if') {
           const {branches,otherwise}=conditionalBranches(block);
