@@ -28,7 +28,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { compileProject, previewTiles, previewRoomArt, inspectBitfont, discoverAssets, describeArt, projectPath } from './compiler.mjs';
 import { encodeCbor, decodeCbor } from './cartridge.mjs';
 import { initialScript,buttons,Opcodes } from './schema.mjs';
-import { embedCartridge, playerTemplate } from './web-export.mjs';
+import { exportStandalone } from './web-export.mjs';
 import { Runtime, initSync } from '../web-built/runtime/runtime.js';
 
 if(process.env.GW_PARENT_PIPE){process.stdin.resume();process.stdin.once("end",()=>process.exit(0));}
@@ -199,7 +199,7 @@ const server = createServer(async (req, res) => {
       res.writeHead(302,{Location:new URL('/'+url.search,await launcher).href});res.end();return;
     }
     if (url.pathname === '/export.html' && req.method === 'GET') {
-      return send(res, 200, embedCartridge(await readFile(playerTemplate, 'utf8'), await exportBytes(url)), 'text/html; charset=utf-8');
+      return send(res, 200, await exportStandalone(await exportBytes(url)), 'text/html; charset=utf-8');
     }
     if (url.pathname === '/game.waffle' || url.pathname === '/demo.waffle'){
       res.setHeader('Cache-Control','no-store');

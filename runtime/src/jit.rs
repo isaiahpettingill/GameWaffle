@@ -79,25 +79,58 @@ impl Region {
     }
 
     pub fn run(&self, registers: &mut [f64; 64], cache: &mut Cache) -> bool {
+        if let Some(compiled) = self.compiled.get() {
+            return compiled.as_ref().is_some_and(|code| code.run(registers));
+        }
         const HOT: u8 = 24;
         let hits = self.hits.get();
         if hits < HOT {
             self.hits.set(hits + 1);
             return false;
         }
-        if self.compiled.get().is_none() {
-            if let Some(code) = cache.kernels.get(&self.signature) {
-                let _ = self.compiled.set(Some(Rc::clone(code)));
-            } else if std::mem::take(&mut cache.compile_available) {
-                let compiled = backend::Code::compile(&self.steps).map(Rc::new);
-                if let Some(code) = &compiled && cache.kernels.len() < 256 {
-                    cache.kernels.insert(self.signature.clone(), Rc::clone(code));
-                }
-                let _ = self.compiled.set(compiled);
+        if let Some(code) = cache.kernels.get(&self.signature) {
+            let _ = self.compiled.set(Some(Rc::clone(code)));
+        } else if std::mem::take(&mut cache.compile_available) {
+            let compiled = backend::Code::compile(&self.steps).map(Rc::new);
+            if let Some(code) = &compiled && cache.kernels.len() < 256 {
+                cache.kernels.insert(self.signature.clone(), Rc::clone(code));
             }
+            let _ = self.compiled.set(compiled);
         }
         self.compiled.get().and_then(Option::as_ref)
             .is_some_and(|code| code.run(registers))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn ordered_kernels<'a>(regions: impl Iterator<Item = &'a Region>) -> (Vec<&'a [Step]>, Vec<(&'a Region, usize)>) {
+    let mut indices = HashMap::new();
+    let mut kernels = Vec::new();
+    let plan = regions.map(|region| {
+        let index = *indices.entry(region.signature.as_slice()).or_insert_with(|| {
+            let index = kernels.len();
+            kernels.push(region.steps.as_ref());
+            index
+        });
+        (region, index)
+    }).collect();
+    (kernels, plan)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn precompile<'a>(regions: impl Iterator<Item = &'a Region>) -> Vec<u8> {
+    let (kernels, _) = ordered_kernels(regions);
+    if kernels.is_empty() { Vec::new() } else { backend::encode_module(&kernels) }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn use_precompiled<'a>(module: &[u8], regions: impl Iterator<Item = &'a Region>) {
+    let (kernels, plan) = ordered_kernels(regions);
+    if let Some(codes) = backend::Code::install(module, kernels.len()) {
+        let codes: Vec<_> = codes.into_iter().map(Rc::new).collect();
+        for (region, index) in plan {
+            let _ = region.compiled.set(Some(Rc::clone(&codes[index])));
+        }
     }
 }
 
@@ -228,15 +261,24 @@ mod backend {
 
     #[wasm_bindgen(inline_js = r#"
 const availableSlots = new WeakMap();
-export function waffleInstallKernel(code, memory, table) {
+export function waffleInstallKernels(code, memory, table, count) {
+    const allocated = [];
     try {
         const kernel = new WebAssembly.Instance(new WebAssembly.Module(code), {env: {memory}});
-        const available = availableSlots.get(table);
-        const index = available?.length ? available.pop() : table.grow(1);
-        table.set(index, kernel.exports.run);
-        return index;
+        if (Object.keys(kernel.exports).length !== count) return new Uint32Array();
+        const functions = Array.from({length: count}, (_, i) => kernel.exports['k'+i]);
+        if (functions.some(fn => typeof fn !== 'function')) return new Uint32Array();
+        for (const fn of functions) {
+            const available = availableSlots.get(table);
+            const index = available?.length ? available.pop() : table.grow(1);
+            if (!index) throw new Error('Invalid kernel slot');
+            allocated.push(index);
+            table.set(index, fn);
+        }
+        return Uint32Array.from(allocated);
     } catch {
-        return -1;
+        for (const index of allocated) waffleRemoveKernel(index, table);
+        return new Uint32Array();
     }
 }
 export function waffleRemoveKernel(index, table) {
@@ -246,7 +288,7 @@ export function waffleRemoveKernel(index, table) {
 }
 "#)]
     extern "C" {
-        fn waffleInstallKernel(code: &[u8], memory: JsValue, table: JsValue) -> i32;
+        fn waffleInstallKernels(code: &[u8], memory: JsValue, table: JsValue, count: usize) -> Vec<u32>;
         fn waffleRemoveKernel(index: u32, table: JsValue);
     }
 
@@ -272,57 +314,80 @@ export function waffleRemoveKernel(index, table) {
         unsigned(usize::from(register) * 8, body);
     }
 
-    impl Code {
-        pub fn compile(steps: &[Step]) -> Option<Self> {
-            let mut module = b"\0asm\x01\0\0\0".to_vec();
-            section(&mut module, 1, &[1, 0x60, 1, 0x7f, 1, 0x7f]); // (i32) -> i32
-            section(&mut module, 2, b"\x01\x03env\x06memory\x02\0\0");
-            section(&mut module, 3, &[1, 0]);
-            section(&mut module, 7, b"\x01\x03run\0\0");
+    fn encode_body(steps: &[Step]) -> Vec<u8> {
+        // One f64 temporary for checking each result before continuing.
+        let mut body = vec![1, 1, 0x7c];
+        for &step in steps {
+            let dst = match step {
+                Step::Real { dst, value } => {
+                    body.extend([0x20, 0, 0x44]); // local.get ptr; f64.const
+                    body.extend(value.to_le_bytes());
+                    dst
+                }
+                Step::Math { dst, lhs, rhs, op } => {
+                    load(&mut body, lhs);
+                    load(&mut body, rhs);
+                    body.push(match op {
+                        Op::Add => 0xa0,
+                        Op::Subtract => 0xa1,
+                        Op::Multiply => 0xa2,
+                        Op::Divide => 0xa3,
+                    });
+                    // If abs(result) <= MAX is false, return zero and replay in the VM.
+                    body.extend([0x22, 1, 0x99, 0x44]);
+                    body.extend(f64::MAX.to_le_bytes());
+                    body.extend([0x65, 0x45, 0x04, 0x40, 0x41, 0, 0x0f, 0x0b]);
+                    body.extend([0x20, 0, 0x20, 1]);
+                    dst
+                }
+            };
+            body.extend([0x39, 3]); // f64.store align=8
+            unsigned(usize::from(dst) * 8, &mut body);
+        }
+        body.extend([0x41, 1, 0x0b]);
+        body
+    }
 
-            // One f64 temporary for checking each result before continuing.
-            let mut body = vec![1, 1, 0x7c];
-            for &step in steps {
-                let dst = match step {
-                    Step::Real { dst, value } => {
-                        body.extend([0x20, 0, 0x44]); // local.get ptr; f64.const
-                        body.extend(value.to_le_bytes());
-                        dst
-                    }
-                    Step::Math { dst, lhs, rhs, op } => {
-                        load(&mut body, lhs);
-                        load(&mut body, rhs);
-                        body.push(match op {
-                            Op::Add => 0xa0,
-                            Op::Subtract => 0xa1,
-                            Op::Multiply => 0xa2,
-                            Op::Divide => 0xa3,
-                        });
-                        // If abs(result) <= MAX is false, return zero and replay in the VM.
-                        body.extend([0x22, 1, 0x99, 0x44]);
-                        body.extend(f64::MAX.to_le_bytes());
-                        body.extend([0x65, 0x45, 0x04, 0x40, 0x41, 0, 0x0f, 0x0b]);
-                        body.extend([0x20, 0, 0x20, 1]);
-                        dst
-                    }
-                };
-                body.extend([0x39, 3]); // f64.store align=8
-                unsigned(usize::from(dst) * 8, &mut body);
-            }
-            body.extend([0x41, 1, 0x0b]);
-            let mut code = vec![1];
+    pub fn encode_module(kernels: &[&[Step]]) -> Vec<u8> {
+        let mut module = b"\0asm\x01\0\0\0".to_vec();
+        section(&mut module, 1, &[1, 0x60, 1, 0x7f, 1, 0x7f]); // (i32) -> i32
+        section(&mut module, 2, b"\x01\x03env\x06memory\x02\0\0");
+        let mut types = Vec::new();
+        unsigned(kernels.len(), &mut types);
+        types.resize(types.len() + kernels.len(), 0);
+        section(&mut module, 3, &types);
+        let mut exports = Vec::new();
+        let mut code = Vec::new();
+        unsigned(kernels.len(), &mut exports);
+        unsigned(kernels.len(), &mut code);
+        for (index, steps) in kernels.iter().enumerate() {
+            let name = format!("k{index}");
+            unsigned(name.len(), &mut exports);
+            exports.extend(name.bytes());
+            exports.push(0);
+            unsigned(index, &mut exports);
+            let body = encode_body(steps);
             unsigned(body.len(), &mut code);
             code.extend(body);
-            section(&mut module, 10, &code);
-            let index = waffleInstallKernel(
-                &module,
+        }
+        section(&mut module, 7, &exports);
+        section(&mut module, 10, &code);
+        module
+    }
+
+    impl Code {
+        pub fn compile(steps: &[Step]) -> Option<Self> {
+            Self::install(&encode_module(&[steps]), 1)?.pop()
+        }
+
+        pub fn install(module: &[u8], count: usize) -> Option<Vec<Self>> {
+            let indices = waffleInstallKernels(
+                module,
                 wasm_bindgen::memory(),
                 wasm_bindgen::function_table(),
+                count,
             );
-            u32::try_from(index)
-                .ok()
-                .filter(|index| *index != 0)
-                .map(Self)
+            (indices.len() == count).then(|| indices.into_iter().map(Self).collect())
         }
 
         pub fn run(&self, registers: &mut [f64; 64]) -> bool {

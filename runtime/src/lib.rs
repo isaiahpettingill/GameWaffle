@@ -45,6 +45,68 @@ const CONTROL_RESUME_FUEL: usize = 8 * vm::SLICE;
 const CONTROL_FUEL: usize = 24 * vm::SLICE;
 const SCRIPT_FUEL: usize = RESUME_FUEL + EVENT_FUEL + TICK_FUEL + LATE_FUEL + CONTROL_RESUME_FUEL + CONTROL_FUEL;
 
+type SpritePrograms = BTreeMap<String, vm::Programs>;
+
+fn read_cartridge_game(bytes: &[u8]) -> Result<Game, String> {
+    if bytes.len() < 111 || bytes.len() > cartridge::MAX_CARTRIDGE {
+        return Err("Invalid cartridge size".into());
+    }
+    let (bytes, signature) = bytes.split_at(bytes.len() - cartridge::SIGNATURE_SIZE);
+    let key = ed25519_dalek::VerifyingKey::from_bytes(signature[..32].try_into().unwrap())
+        .map_err(|_| "Invalid cartridge signing key")?;
+    key.verify_strict(
+        bytes,
+        &ed25519_dalek::Signature::from_bytes(signature[32..].try_into().unwrap()),
+    )
+    .map_err(|_| "Invalid cartridge signature")?;
+    let data = cartridge::Sections::read(bytes)?.simulation()?;
+    ciborium::from_reader(data.as_slice()).map_err(|error| error.to_string())
+}
+
+fn decode_programs(game: &mut Game) -> Result<SpritePrograms, String> {
+    if game.controls.len() > 72 {
+        return Err("Too many input actions".into());
+    }
+    game.sprites.iter_mut().map(|(id, sprite)| {
+        if !physics::valid_colliders(&sprite.collider)
+            || sprite.frame_colliders.values().any(|shapes| !physics::valid_colliders(shapes))
+        {
+            return Err(format!("Invalid sprite collider: {id}"));
+        }
+        let events = std::mem::take(&mut sprite.program).into_iter().map(|(event, encoded)| {
+            let program = vm::Program::decode(encoded, &game.controls)
+                .map_err(|error| format!("{id}/{event}: {error}"))?;
+            Ok((event, Rc::new(program)))
+        }).collect::<Result<_, String>>()?;
+        Ok((id.clone(), events))
+    }).collect()
+}
+
+#[cfg(target_arch = "wasm32")]
+const AOT_VERSION: &[u8] = b"GW-AOT\x01";
+
+#[cfg(target_arch = "wasm32")]
+fn numeric_regions(programs: &SpritePrograms) -> impl Iterator<Item = &jit::Region> {
+    programs.values().flat_map(|events| events.values()).flat_map(|program| program.numeric_regions())
+}
+
+/// Build the companion module without starting the game or running its scripts.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn compile_aot_scripts(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let mut game = read_cartridge_game(bytes)?;
+    let programs = decode_programs(&mut game)?;
+    let module = jit::precompile(numeric_regions(&programs));
+    if module.is_empty() {
+        return Ok(module);
+    }
+    let mut payload = Vec::with_capacity(AOT_VERSION.len() + 64 + module.len());
+    payload.extend(AOT_VERSION);
+    payload.extend(&bytes[bytes.len() - 64..]);
+    payload.extend(module);
+    Ok(payload)
+}
+
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 struct Broadcast {
     name: String,
@@ -229,7 +291,7 @@ pub struct Runtime {
     event_deliveries: std::collections::VecDeque<EventDelivery>,
     restored: bool,
     pending_instances: Vec<(u32, Spawn)>,
-    programs: BTreeMap<String, vm::Programs>,
+    programs: SpritePrograms,
     timer_schedules: BTreeMap<String, Vec<(Rc<str>, u64, bool)>>,
     game_properties: GameProperties,
     seed: u32,
@@ -303,20 +365,20 @@ impl Runtime {
         bytes: &[u8], room: Option<String>, connected: u8, gamepads: Option<u8>,
         width: u32, height: u32, seams: bool,
     ) -> Result<Runtime, String> {
-        if bytes.len() < 111 || bytes.len() > cartridge::MAX_CARTRIDGE {
-            return Err("Invalid cartridge size".into());
-        }
-        let (bytes, signature) = bytes.split_at(bytes.len() - cartridge::SIGNATURE_SIZE);
-        let key = ed25519_dalek::VerifyingKey::from_bytes(signature[..32].try_into().unwrap())
-            .map_err(|_| "Invalid cartridge signing key")?;
-        key.verify_strict(
-            bytes,
-            &ed25519_dalek::Signature::from_bytes(signature[32..].try_into().unwrap()),
-        )
-        .map_err(|_| "Invalid cartridge signature")?;
-        let data = cartridge::Sections::read(bytes)?.simulation()?;
-        let game: Game = ciborium::from_reader(data.as_slice()).map_err(|error| error.to_string())?;
-        Self::from_game_with_controllers(game, room, connected, gamepads, [width, height], seams)
+        let game = read_cartridge_game(bytes)?;
+        Self::from_game_with_controllers(game, room, connected, gamepads, [width, height], seams, &[])
+    }
+
+    /// Start an embedded web game with its trusted, export-generated companion module.
+    #[cfg(target_arch = "wasm32")]
+    pub fn from_cartridge_with_aot(
+        bytes: &[u8], aot: &[u8], room: Option<String>, gamepads: Option<u8>, width: u32, height: u32,
+    ) -> Result<Runtime, String> {
+        let game = read_cartridge_game(bytes)?;
+        let module = aot.strip_prefix(AOT_VERSION)
+            .and_then(|data| data.strip_prefix(&bytes[bytes.len() - 64..]))
+            .unwrap_or_default();
+        Self::from_game_with_controllers(game, room, 1, gamepads, [width, height], true, module)
     }
 
     pub fn enable_debug(&mut self) {
@@ -706,12 +768,12 @@ impl Runtime {
     }
 
     fn from_game(game: Game, room: Option<String>) -> Result<Self, String> {
-        Self::from_game_with_controllers(game, room, 1, None, [640, 480], false)
+        Self::from_game_with_controllers(game, room, 1, None, [640, 480], false, &[])
     }
 
     fn from_game_with_controllers(
         mut game: Game, room: Option<String>, connected: u8, gamepads: Option<u8>,
-        camera_window: [u32; 2], camera_seams: bool,
+        camera_window: [u32; 2], camera_seams: bool, _aot: &[u8],
     ) -> Result<Self, String> {
         game.collections.validate()?;
         if !game.rooms.contains_key(&game.start) {
@@ -729,8 +791,10 @@ impl Runtime {
                 return Err("Invalid room dimensions or actor count".into());
             }
         }
-        if game.controls.len() > 72 {
-            return Err("Too many input actions".into());
+        let programs = decode_programs(&mut game)?;
+        #[cfg(target_arch = "wasm32")]
+        if !_aot.is_empty() {
+            jit::use_precompiled(_aot, numeric_regions(&programs));
         }
         let control_events = game
             .controls
@@ -743,26 +807,6 @@ impl Runtime {
                 )
             })
             .collect();
-        let mut programs: BTreeMap<String, vm::Programs> = BTreeMap::new();
-        for (id, sprite) in &mut game.sprites {
-            if !physics::valid_colliders(&sprite.collider)
-                || sprite
-                    .frame_colliders
-                    .values()
-                    .any(|shapes| !physics::valid_colliders(shapes))
-            {
-                return Err(format!("Invalid sprite collider: {id}"));
-            }
-            let events = std::mem::take(&mut sprite.program)
-                .into_iter()
-                .map(|(event, encoded)| {
-                    let program = vm::Program::decode(encoded, &game.controls)
-                        .map_err(|error| format!("{id}/{event}: {error}"))?;
-                    Ok::<_, String>((event, Rc::new(program)))
-                })
-                .collect::<Result<_, _>>()?;
-            programs.insert(id.clone(), events);
-        }
         let timer_schedules = programs.iter().filter_map(|(name, events)| {
             let timers: Vec<_> = events.keys().filter_map(|event| {
                 let (kind, interval) = event.split_once('.')?;

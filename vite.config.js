@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { viteSingleFile } from 'vite-plugin-singlefile';
-import { cartridgeMarker } from './src/web-export.mjs';
+import { aotMarker, cartridgeMarker } from './src/web-export.mjs';
 
 export default defineConfig(() => {
   const standalone = process.env.GAMEWAFFLE_STANDALONE === '1';
@@ -10,10 +10,8 @@ export default defineConfig(() => {
     plugins: [svelte(), ...(standalone ? [
       {
         name: 'gamewaffle-cartridge-slot',
-        transformIndexHtml: () => [{
-          tag: 'script', attrs: { id: 'gamewaffle-cartridge', type: 'application/octet-stream' },
-          children: cartridgeMarker, injectTo: 'body-prepend',
-        }],
+        transformIndexHtml: () => [['gamewaffle-cartridge', cartridgeMarker], ['gamewaffle-aot', aotMarker]]
+          .map(([id, children]) => ({tag:'script', attrs:{id,type:'application/octet-stream'}, children, injectTo:'body-prepend'})),
       },
       viteSingleFile(),
     ] : [])],

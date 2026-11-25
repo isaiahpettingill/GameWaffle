@@ -182,6 +182,8 @@ Use `R.greeting` or `R["greeting"]` in WaffleScript when the key is known. Use `
 
 In Studio, open **File → Export…** and choose **Standalone web game**. Studio saves the project and downloads one HTML file. The file contains the game cartridge and the WebAssembly runtime. Open it in a browser or put it on a static web server. The game can run offline. On Android, use a browser that supports WebAssembly and use the touch controls.
 
+Standalone HTML exports automatically compile eligible WaffleScript real-number arithmetic to WebAssembly. Those blocks can use the compiled code during game startup and the first simulation tick. Control flow and engine calls use the WaffleScript VM, which also provides a fallback if the compiled code cannot be loaded.
+
 Choose **Cartridge** to download the `.waffle` file. If the project has translation tables, select a language for each playable export. To play this file, select **Open cartridge** in the player.
 
 After you build Studio, use these commands to export from the command line.

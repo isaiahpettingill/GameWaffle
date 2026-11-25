@@ -38,7 +38,7 @@
     if(window.opener){window.opener.focus();window.close();}
     if(!window.closed)location.replace('./index.html');
   }
-  let startingRoom, currentBytes;
+  let startingRoom, currentBytes, currentAot;
   const keyboard = { ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right', KeyZ:'a',Semicolon:'a',Quote:'b',Space:'x',MouseLeft:'a',MouseRight:'b',KeyX:'b',KeyC:'x',Enter:'menu',KeyW:'up',KeyS:'down',KeyA:'left',KeyD:'right' };
   const second = { KeyI:'up',KeyK:'down',KeyJ:'left',KeyL:'right',KeyN:'a',KeyM:'b',Comma:'x',Period:'menu' };
   const gamepad = [12,13,14,15,0,1,2,9];
@@ -51,18 +51,19 @@
     return box?.width&&box?.height?[Math.floor(box.width),Math.floor(box.height)]:[640,480];
   }
 
-  async function load(bytes, requestedRoom) {
+  async function load(bytes, requestedRoom, aot) {
     const next = unpack(bytes);
     const room = Object.hasOwn(next.rooms, requestedRoom) ? requestedRoom : next.start;
     const version = ++loadVersion;
     const firstAtlas = await loadAtlas(next.atlases[room]);
-    const loadedRuntime = await createRuntime(bytes, room, Math.min(connectedPads().length,4),cameraWindow());
+    const loadedRuntime = await createRuntime(bytes, room, Math.min(connectedPads().length,4),cameraWindow(),aot);
     if (version !== loadVersion) { loadedRuntime.free(); return; }
     runtime?.free();
     runtime = loadedRuntime;
     runtime.set_seed(crypto.getRandomValues(new Uint32Array(1))[0]);
     cart = next;
     currentBytes = bytes;
+    currentAot = aot;
     startingRoom = room;
     atlasImages = {[room]:firstAtlas};
     audio.setCart(next);
@@ -286,7 +287,7 @@
   }
   function localReset() {
     disconnect();
-    if (cart) load(currentBytes, startingRoom).catch(err=>{ error=String(err.message ?? err); });
+    if (cart) load(currentBytes, startingRoom, currentAot).catch(err=>{ error=String(err.message ?? err); });
   }
   function countChanged() {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({kind:'join',players}));
@@ -302,7 +303,10 @@
           ? Uint8Array.from(atob(encoded),c=>c.charCodeAt(0))
           : new Uint8Array(await (await fetch('./game.waffle')).arrayBuffer());
         const room = hosted ? new URLSearchParams(location.search).get('room') : undefined;
-        await load(buffer, room);
+        const aot = encoded && document.getElementById('gamewaffle-aot')?.textContent.trim();
+        let kernels;
+        if(aot){try{kernels=Uint8Array.from(atob(aot),c=>c.charCodeAt(0));}catch{/* Use the cartridge bytecode. */}}
+        await load(buffer, room, kernels);
       } catch (err) { error=String(err.message ?? err); status='Choose a cartridge'; }
     })();
     loop = requestAnimationFrame(tick);

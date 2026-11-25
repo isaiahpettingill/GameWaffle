@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { cp, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { build } from 'vite';
-import { cartridgeMarker, playerTemplate } from './web-export.mjs';
+import { aotMarker, cartridgeMarker, playerTemplate } from './web-export.mjs';
 
 const options = { stdio: 'inherit' };
 if (process.argv.includes('--native')) {
@@ -29,7 +29,7 @@ await build();
 const player = 'web-built/standalone/player.html';
 await rename(player, playerTemplate);
 const template = await readFile(playerTemplate,'utf8');
-const empty=template.replace(cartridgeMarker,'');
+const empty=template.replace(cartridgeMarker,'').replace(aotMarker,'');
 await Promise.all([writeFile('web-built/standalone/gamewaffle-player.html',empty),writeFile(player,empty)]);
 if (!process.argv.includes('--player-only')) {
   if(process.argv.includes('--check-demo')){

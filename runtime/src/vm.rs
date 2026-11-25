@@ -120,6 +120,13 @@ pub struct Program {
     regions: Vec<jit::Region>,
 }
 
+#[cfg(target_arch = "wasm32")]
+impl Program {
+    pub(crate) fn numeric_regions(&self) -> impl Iterator<Item = &jit::Region> {
+        self.regions.iter()
+    }
+}
+
 pub struct Machine {
     payload: [i64; 2],
     used_item: Option<Rc<str>>,
