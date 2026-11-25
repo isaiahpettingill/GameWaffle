@@ -59,6 +59,7 @@
   const tileIds=$derived(Object.keys(tiles));
   const tileChoices=$derived(tileIds.filter(id=>id.toLowerCase().includes(query.trim().toLowerCase())));
   function tileVariant(id, x, y, selected) {
+    // Keep the appearance of rooms saved before placements stored their variant.
     const count = tileArt[id]?.length || 1;
     return selected ?? ((x * 37 + y * 17) % count);
   }
@@ -179,7 +180,7 @@
       ? rectangle(displayCell(gesture.start),hover) : rectangle(hover,hover);
     ctx.strokeRect(area.x*size+.5,area.y*size+.5,area.cols*size-1,area.rows*size-1);
     if (tool === 'paint' && tileId && !gesture) {
-      const img = image(tileArt[tileId]?.[tileVariant(tileId,hover.x,hover.y,brushVariant())]);
+      const img = image(tileArt[tileId]?.[brushVariant()??0]);
       if (img?.complete && img.naturalWidth) {
         ctx.globalAlpha = .55;
         ctx.drawImage(img,hover.x*size,hover.y*size,size,size);
@@ -384,14 +385,22 @@
     return variant !== 'auto' && Number(variant) < (tileArt[tileId]?.length ?? 0) ? Number(variant) : undefined;
   }
 
+  function placedCell(x,y,id,selected) {
+    const count = tileArt[id]?.length ?? 0;
+    if (selected == null && count > 1) selected = Math.floor(Math.random()*count);
+    return selected == null ? [x,y,id] : [x,y,id,selected];
+  }
+
   function stamp(x,y) {
     const key = cellKey(x,y);
-    const old = gesture.cells.get(key);
     if (gesture.kind === 'erase') {
       if (gesture.cells.delete(key)) gesture.changed = true;
       return;
     }
-    const after = [x,y,gesture.tile,...(gesture.variant == null ? [] : [gesture.variant])];
+    if (gesture.stamped?.has(key)) return;
+    gesture.stamped?.add(key);
+    const old = gesture.cells.get(key);
+    const after = placedCell(x,y,gesture.tile,gesture.variant);
     if (old?.[2] === after[2] && old?.[3] === after[3]) return;
     gesture.cells.set(key,after);
     gesture.changed = true;
@@ -523,7 +532,10 @@
       const layer = room.layers[layerIndex];
       const kind = erase ? 'erase' : tool;
       if (!layer || hidden[layerIndex] || (kind !== 'erase' && !tileId)) return;
-      gesture = {kind,id:event.pointerId,start:p,previous:p,layer:layerIndex,tile:tileId,variant:brushVariant(),
+      const selected = brushVariant();
+      const randomStroke = kind === 'paint' && selected == null && tileArt[tileId]?.length > 1;
+      gesture = {kind,id:event.pointerId,start:p,previous:p,layer:layerIndex,tile:tileId,variant:selected,
+        stamped:randomStroke ? new Set() : undefined,
         cells:new Map(layer.cells.map(cell=>[cellKey(cell[0],cell[1]),cell])),changed:false};
       if(grow){
         gesture.growth={left:0,top:0,right:0,bottom:0};
@@ -580,7 +592,7 @@
     } else if (type===tileDragType && Object.hasOwn(tiles,id)) {
       chooseTile(id);
       const layers=[...room.layers], layer=layers[layerIndex];
-      layers[layerIndex]={...layer,cells:[...layer.cells.filter(([x,y])=>x!==p.x||y!==p.y),[p.x,p.y,id]]};
+      layers[layerIndex]={...layer,cells:[...layer.cells.filter(([x,y])=>x!==p.x||y!==p.y),placedCell(p.x,p.y,id)]};
       onEdit({...room,layers},'tile paint in '+(room.title??roomId));
     }
     hover = null;
@@ -847,7 +859,7 @@
           {#if hidden[layerIndex]}<small>Show the layer to paint it.</small>{/if}
         {/if}
         {#if tileArt[tileId]?.length > 1}
-          <label>Variant <select aria-label="Variant" bind:value={variant}><option value="auto">Automatic</option>
+          <label>Variant <select aria-label="Variant" bind:value={variant}><option value="auto">Random</option>
             {#each tileArt[tileId] as _, index}<option value={String(index)}>{index+1}</option>{/each}
           </select></label>
         {/if}

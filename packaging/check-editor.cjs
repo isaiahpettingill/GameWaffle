@@ -226,8 +226,44 @@ for(const width of [1280,800,390,320]){
       await dataTransfer.dispose();
     };
     await drop('application/x-gamewaffle-sprite',maker.sprite);
-    await drop('application/x-gamewaffle-tile','stone');
-    await page.waitForFunction(async()=> (await(await fetch('./api/project')).json()).project.rooms.yard.layers.some(layer=>layer.cells.some(([x,y,id])=>x===2&&y===2&&id==='stone')));
+    const cellCenter=(x,y)=>xy((x+.5)*size,(y+.5)*size);
+    const expectStone=async (label,y,variants)=>until(label,async()=>{
+      const {layers}=(await getProject()).rooms.yard;
+      return layers.some(layer=>variants.every((variant,index)=>layer.cells.some(
+        ([x,row,id,selected])=>x===index+2&&row===y&&id==='stone'&&selected===variant)));
+    },page);
+    const originalRandom=await page.evaluateHandle(()=>Math.random);
+    const setRandom=value=>page.evaluate(value=>{Math.random=()=>value;},value);
+    try{
+      await setRandom(.99);
+      await drop('application/x-gamewaffle-tile','stone');
+      await expectStone('Random variant on drop',2,[1]);
+
+      const variant=page.getByLabel('Variant',{exact:true});
+      assert.equal(await variant.locator('option:checked').textContent(),'Random');
+      await page.mouse.move(...cellCenter(2,3));
+      await page.mouse.down();
+      await setRandom(.01);
+      await page.mouse.move(...cellCenter(4,3),{steps:4});
+      await page.mouse.up();
+      await expectStone('Stable random variants during a stroke',3,[1,0,0]);
+
+      await page.getByRole('button',{name:'Rectangle',exact:true}).click();
+      await setRandom(.99);
+      await page.mouse.move(...cellCenter(2,4));
+      await page.mouse.down();
+      await page.mouse.move(...cellCenter(4,4));
+      await page.mouse.up();
+      await expectStone('Random variants across a rectangle',4,[1,1,1]);
+
+      await page.getByRole('button',{name:'Brush',exact:true}).click();
+      await variant.selectOption('0');
+      await page.mouse.click(...cellCenter(2,5));
+      await expectStone('Explicit brush variant',5,[0]);
+    }finally{
+      await page.evaluate(random=>{Math.random=random;},originalRandom);
+      await originalRandom.dispose();
+    }
     assert.equal((await getProject()).rooms.yard.entities.length,initial.entities.length);
 
     await page.getByRole('button',{name:'Place entity',exact:true}).click();
