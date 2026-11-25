@@ -1,4 +1,4 @@
-import { buttons, readings, realReadings, stringReadings, entityQueries, reporters } from '../src/schema.mjs';
+import { buttons, controlTransfers, readings, realReadings, stringReadings, entityQueries, reporters } from '../src/schema.mjs';
 import { binaryMath, scopes, unaryMath } from '../src/script.mjs';
 
 const prefix = 'waffle_';
@@ -85,8 +85,8 @@ const definitions = {
   pressed:['input','%1 just pressed?',[text('pressed','x')],'condition','True on the first tick of a press.'],
   released:['input','%1 just released?',[text('released','x')],'condition','True on the first tick after a release.'],
   action:['input','%1 is down?', [text('action','jump')],'condition','True every tick while the input action is held.'],
-  item_key:['items','Item reference %1',[text('item','coin')],'value','Compare this to the item just used.'],
-  item:['items','Count of %1',[text('item','coin')],'value'],
+  item_key:['collections','Item reference %1',[text('item','coin')],'value','Compare this to the item just used.'],
+  item:['collections','Count of %1',[text('item','coin')],'value'],
   integer:['operators','%1',[number('value',0)],'value'],
   whole:['operators','%1',[{...number('value',0),precision:1}],'value','An exact integer.'],
   real:['operators','real %1',[number('value',0.5)],'value'],
@@ -116,6 +116,9 @@ const definitions = {
   if_then:['control','if %1 then %2',[input('condition'),body('body')]],
   while:['control','while %1 %2',[input('condition'),body('body')]],
   wait:['control','Wait %1 ticks',[input('ticks')]],
+  return:['control','Return',[],null,'End this event handler or procedure.'],
+  break:['control','Break',[],null,'Leave the nearest enclosing loop.'],
+  continue:['control','Continue',[],null,'Skip to the next iteration of the nearest enclosing loop.'],
 };
 
 export const collectionReporters={
@@ -289,4 +292,4 @@ export function slot(value, fallback, imports) {
   return {...(fallback!==undefined?{shadow:writeValue(fallback,imports)}:{}),block};
 }
 
-export const logicStatements = new Set(['if','while','repeat','set','change','wait','call']);
+export const logicStatements = new Set(['if','while','repeat','set','change','wait','call',...controlTransfers]);

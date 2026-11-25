@@ -30,6 +30,13 @@ assert.deepEqual(compileScript(script,modules),compileScript(parseScript(formatS
 assert.throws(()=>compileScript(parseScript('proc spin()\nspin()\nend')),/Recursive/);
 assert.throws(()=>compileScript(parseScript('def invalid(n)\nreturn typo\nend')),/parameter/);
 assert.throws(()=>parseScript('on tick\n jump(\nend'),e=>e.from===14);
+for(const keyword of ['break','continue']){
+  assert.throws(()=>compileScript(parseScript(`on tick\n  ${keyword}\nend`)),/inside a repeat or while loop/);
+  assert.throws(()=>compileScript(parseScript(`proc helper()\n  ${keyword}\nend\non tick\n  repeat 1\n    helper()\n  end\nend`)),/inside a repeat or while loop/);
+}
+const earlyExit=parseScript('on tick\n repeat 3\n  if action.a\n   continue()\n  end\n  break\n end\n return\nend');
+assert.deepEqual(parseScript(formatScript(earlyExit)),earlyExit);
+assert.throws(()=>parseScript('on tick\n  return 3\nend'),/without a value/);
 console.log('Passed WaffleScript round trips, module expansion, and diagnostics');
 const gravity=compileScript(parseScript('on tick\n apply_gravity(none)\nend'));
 for(const argument of ['','1'])assert.deepEqual(compileScript(parseScript('on tick\n apply_gravity('+argument+')\nend')),gravity);

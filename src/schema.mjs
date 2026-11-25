@@ -3,6 +3,7 @@ export const effects=['sparks','dust','smoke','flame','bubbles','rain','snow'];
 export const platformGravity = 16;
 export const roomBorder = (room, topDown) => room.border ?? (room.closedEdges == null ? (topDown ? 'closed' : 'sides') : room.closedEdges ? 'closed' : 'open');
 export const Events = ['init','start','clone_start','game_startup','use_item', 'restored', 'tick', 'a', 'b', 'x', 'menu', 'begin_contact', 'end_contact', 'damage', 'destroy', 'animation_finished', 'menu_selected'];
+export const controlTransfers = ['return','break','continue'];
 export const receivedEvent=name=>/^received\.[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name);
 export const inputEvent=name=>/^(pressed|released)\.[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name);
 export const controllerEvent=name=>/^controller_(connected|disconnected)\.[1-4]$/.test(name);

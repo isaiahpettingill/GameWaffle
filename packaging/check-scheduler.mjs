@@ -94,6 +94,66 @@ assert.deepEqual(work(replay),all,'Scheduler order survives a save and restore')
 stressed.free();
 replay.free();
 
+const flow=scenario(0);
+flow.scripts.set('maker',parseScript(`proc first()
+  repeat 8
+    wait(1)
+    change global.calls by 1
+    return
+  end
+  global.unreachable = 1
+end
+on a
+  repeat 3
+    first()
+    change global.after_call by 1
+  end
+  repeat 5
+    change global.repeat_count by 1
+    if global.repeat_count == 2
+      continue
+    end
+    if global.repeat_count == 4
+      break
+    end
+    change global.repeat_score by 1
+  end
+  while global.outer < 4
+    change global.outer by 1
+    if global.outer < 2
+      continue
+    end
+    repeat 3
+      change global.inner by 1
+      break
+    end
+    change global.after_inner by 1
+    if global.outer == 3
+      break
+    end
+  end
+  return
+  global.unreachable = 2
+end
+on b
+  global.other_event = 1
+end`));
+const flowCart=pack(await compileProject('demo',flow));
+const running=Runtime.from_cartridge(flowCart), resumed=Runtime.from_cartridge(flowCart);
+running.advance_buttons(48,1);
+const suspended=running.save_game();
+assert.equal(decodeSave(suspended).globals.other_event,'1');
+assert.equal(decodeSave(suspended).globals.after_call,undefined);
+resumed.load_game(suspended);
+for(const runtime of [running,resumed]){
+  runtime.advance_buttons(0,12);
+  const globals=decodeSave(runtime.save_game()).globals;
+  for(const [name,value] of Object.entries({calls:3,after_call:3,repeat_count:4,repeat_score:2,outer:3,inner:2,after_inner:2,other_event:1}))
+    assert.equal(globals[name],String(value),name);
+  assert.equal(globals.unreachable,undefined);
+  runtime.free();
+}
+
 const broadcasts=scenario(100);
 broadcasts.scripts.set('busy',parseScript('on received.pulse\n change local.messages by 1\nend'));
 broadcasts.scripts.set('maker',parseScript('on pressed.a\nrepeat 96\nemit_event("pulse")\nend\nend'));

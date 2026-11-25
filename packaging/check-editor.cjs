@@ -1052,16 +1052,32 @@ assert.match(await authoring.locator('.cm-content').innerText(),/property densit
 await scriptFile.selectOption('entity:maker');
 await until('Entity script picker',async()=>await scriptFile.inputValue()==='entity:maker');
 await authoring.getByRole('button',{name:'Text',exact:true}).click();
-await authoring.locator('.cm-content').fill('on a\n  clone_entity(entity.id)\nend\non clone\n  delete_clone()\nend\n');
+await authoring.locator('.cm-content').fill(`on a
+  repeat 3
+    if entity.grounded
+      continue
+    end
+    clone_entity(entity.id)
+    break
+  end
+  return
+end
+on clone
+  delete_clone()
+end
+`);
 await until('Clone script saved',async()=>{
   const unit=await(await authoring.request.get(url+'/api/script/maker')).json();
   return unit.events?.clone_start?.[0]?.op==='delete_clone';
 });
 await authoring.getByRole('button',{name:'Blocks',exact:true}).click();
-for(const type of ['clone_start','clone_entity','delete_clone'])
+for(const type of ['clone_start','clone_entity','delete_clone','return','break','continue'])
   await authoring.locator('.blocklyBlockCanvas .waffle_'+type).waitFor();
 const entityCode=authoring.getByRole('region',{name:'Entity code'});
 const entityWorkspace=entityCode.locator('.block-workspace');
+const entityCategories=await entityWorkspace.locator('.blocklyToolboxCategoryLabel').allTextContents();
+assert.ok(!entityCategories.includes('Legacy items'));
+await checkPalette(entityCode,entityWorkspace,'Control',{includes:['return','break','continue']});
 await checkPalette(entityCode,entityWorkspace,'Combat',{includes:['fire_projectile','damage','damage_entity'],excludes:['fire']});
 for(const [category,type] of [['Control','if'],['Math & logic','arithmetic']]){
   const flyout=await openPalette(entityCode,entityWorkspace,category);
@@ -1069,7 +1085,9 @@ for(const [category,type] of [['Control','if'],['Math & logic','arithmetic']]){
 }
 await entityCode.getByRole('button',{name:'Fit blocks',exact:true}).click();
 await authoring.getByRole('button',{name:'Text',exact:true}).click();
-assert.match(await authoring.locator('.cm-content').innerText(),/on clone\s+delete_clone\(\)/);
+const cloneScript=await authoring.locator('.cm-content').innerText();
+assert.match(cloneScript,/on clone\s+delete_clone\(\)/);
+for(const keyword of ['return','break','continue'])assert.match(cloneScript,new RegExp('^ +'+keyword+'$','m'));
 await authoring.locator('.cm-content').fill(`on tick
   if camera.touching_edge(entity.id, "left") and tile.touching(entity.id, "water", "any")
     local_string.note = string.letter(string.join("🪿", "ice"), 1)

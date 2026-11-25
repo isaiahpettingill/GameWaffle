@@ -135,6 +135,24 @@ end
 
 A dynamic body uses the room gravity and its own gravity scale by default. For conditional gravity, choose **Entities → Physics settings → Gravity control → Script applies gravity each tick**, then run `apply_gravity(none)` from **On tick** whenever gravity should apply. A modifier of `none` uses a multiplier of 1. Skipping the call leaves gravity off for that tick.
 
+### Early exits and loops
+
+Use **Return** in **Control** to exit the current event or procedure. When a procedure returns, its caller continues at the next statement. In a `repeat` or `while` loop, **Break** exits the nearest loop and **Continue** skips to its next iteration. In a counted loop, a skipped iteration still counts toward the total.
+
+```ruby
+on tick
+  if not action.right
+    return
+  end
+  repeat 4
+    move_by(1, 0)
+    if camera.touching_room_edge(entity.id, "right")
+      break
+    end
+  end
+end
+```
+
 **Code → Movement preset…** inserts editable movement into **On tick**. The platformer preset reads held directions and checks for a grounded jump on the first tick of an X press. The top-down preset reads held directions on both axes. Assigning a controller connects input to an instance. Set its body to Dynamic when it needs physics movement.
 
 ```ruby
@@ -290,7 +308,7 @@ sets the same effect each tick. The **Appearance** palette also supports
 timed emitters and bursts at an offset. Emission is shared between active
 entities when the room hits its particle budget.
 
-## Game menus and inventory
+## Game menus
 
 Create named menus in **Game → Menus**. Open a menu with `show_menu("pause")`
 or open the starting menu from a starting room entity’s `on start` event.
@@ -298,10 +316,8 @@ Use Up and Down to highlight an option, A to select it, or B to cancel.
 The room is paused while a menu is open.
 
 Handle `on menu_selected` and read `entity.menu_id` and `entity.menu_choice`.
-Choices start at 1. Cancel returns 0. `show_inventory()` lists carried items.
-The selected item’s ID appears in `entity.menu_item`. Use
-`use_selected_item()` to apply its item settings and run `on use_item`.
-Menu labels and item display names can use a `text.key` from **Game → Text**.
+Choices start at 1. Cancel returns 0. Menu labels can use a `text.key` from
+**Game → Text**. Use **Collections** to author inventories and item properties.
 
 ## Text and languages
 

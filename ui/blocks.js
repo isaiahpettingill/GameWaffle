@@ -5,7 +5,7 @@ import './block-picker.js';
 import {installBlockSelection} from './block-selection.js';
 import {wheelPixels} from './pixel-display.js';
 import {branchBody,branchCondition} from './conditional-block.js';
-import { Events, Blocks, buttons, inputEvent, receivedEvent, timerEvent, controllerEvent, messageInputs, entityQueries, reporters, gradientCommands, tileCommands, drawingCommands, collectionCommands, commandScopeError, valueInput } from '../src/schema.mjs';
+import { Events, Blocks, buttons, controlTransfers, inputEvent, receivedEvent, timerEvent, controllerEvent, messageInputs, entityQueries, reporters, gradientCommands, tileCommands, drawingCommands, collectionCommands, commandScopeError, valueInput } from '../src/schema.mjs';
 import {roomShaders} from '../src/room-shaders.mjs';
 import {initScope,initialPhysicsFields,physicsModes} from '../src/init-properties.mjs';
 import { conditionalBranches, constantType, parseParameters, variableName } from '../src/script.mjs';
@@ -41,11 +41,11 @@ const groups = {
   drawing: {name:'Drawing',color:'#594aad',commands:drawingCommands},
   text: {name:'Text & HUD',color:'#5a536d',commands:['draw_text','set_hud_font','counter','bar','hide','say','ask','show_menu','set_minimap']},
   collections: {name:'Collections',color:'#725b26',commands:collectionCommands},
-  items: {name:'Legacy items',color:'#725b26',commands:['show_inventory','use_selected_item','give','take','give_player','take_player',
-    'count_player','use_player_item','item_icon']},
 };
 // Older commands still need styling when existing code is opened or pasted.
+const legacyInventory=['show_inventory','use_selected_item','give','take','give_player','take_player','count_player','use_player_item','item_icon'];
 const commandStyles = {release_camera:'camera',fire:'combat',
+  ...Object.fromEntries(legacyInventory.map(id=>[id,'collections'])),
   ...Object.fromEntries(Object.entries(groups).flatMap(([style,group])=>(group.commands??[]).map(id=>[id,style])))};
 const eventLabels = {
   start:'room starts', game_startup:'game starts', use_item:'an item is used', restored:'a save loads', tick:'every tick',
@@ -443,7 +443,8 @@ const toolbox = (isRoom,isGame=false,isTile=false,isModule=false) => {
       block(isTile?'tile_event':isRoom?'room_event':'world_event',{event:isTile?'begin_contact':'start'}),
       ...(!isRoom&&!isTile?[block('clone_start')]:[])]),block('event_sender'),block('event_entity')],
     control:[{...block('if',null,{condition:false}),extraState:{otherwise:false}},
-      block('repeat',null,{times:5}),block('while',null,{condition:false}),block('wait',null,{ticks:1})],
+      block('repeat',null,{times:5}),block('while',null,{condition:false}),block('wait',null,{ticks:1}),
+      ...controlTransfers.map(id=>block(id))],
     input:[...(isGame?[block('bind_input'),block('input_binding'),block('controller_event')]:[]),
       ...(!isModule?[block('input_event',{action:'a',edge:'pressed'})]:[]),
       block('action',{action:'a'}),block('pressed',{pressed:'a'}),block('released',{released:'a'}),block('button',{button:'a'})],
@@ -463,7 +464,6 @@ const toolbox = (isRoom,isGame=false,isTile=false,isModule=false) => {
       ...Object.entries(collectionReporters).map(([name,[,keys]])=>({
         kind:'block',type:collectionReporterType(name),inputs:keys.includes('index')?{index:slot(1)}:{},
       }))],
-    items:[block('item'),block('item_key'),block('actor',{actor:'used_item'})],
   };
   const custom={variables:'WAFFLE_VARIABLES',routines:'WAFFLE_ROUTINES'};
   const startersFirst=['events','input','shaders'];
@@ -907,6 +907,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
       else if(op==='call')result.push({op,name:field('name'),args:callArguments(block)});
       else if (op==='set' || op==='change') result.push({op,scope:field('scope'),name:field('name'),value:value('value',variableDefault(field('scope'),op==='change'?1:0))});
       else if (op==='wait') result.push({op,ticks:value('ticks',1)});
+      else if (controlTransfers.includes(op)) result.push({op});
       else if (op==='repeat') result.push({op,times:value('times',1),body:stack('body')});
       else if(op==='if'||op==='if_then'){
         const head={op:'if',condition:value('condition',false),body:stack('body')};
@@ -974,7 +975,7 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
   function editRoutine(id,name,parameters){
     const definition=workspace.getBlockById(id);
     if(!definitionBlock(definition))return;
-    if(!variableName(name)||Object.hasOwn(Blocks,name)||['wait','item_key'].includes(name))throw Error('Enter a valid routine name');
+    if(!variableName(name)||Object.hasOwn(Blocks,name)||['wait','item_key',...controlTransfers].includes(name))throw Error('Enter a valid routine name');
     if(declarations().some(block=>block!==definition&&block.getFieldValue('name')===name))throw Error('This routine name is already used');
     const oldName=definition.getFieldValue('name');
     const rename=new Map(parameters.filter(param=>param.original&&param.original!==param.name).map(param=>[param.original,param.name]));

@@ -1,4 +1,4 @@
-import {Blocks,Events,inputEvent,receivedEvent,timerEvent,controllerEvent} from './schema.mjs';
+import {Blocks,Events,controlTransfers,inputEvent,receivedEvent,timerEvent,controllerEvent} from './schema.mjs';
 import {binaryMath, conditionalBranches, constantType, formatParameters, maxParameters, parseParameters, scopes, unaryMath} from './script.mjs';
 import {validResourceText} from './resource-tables.mjs';
 
@@ -146,6 +146,11 @@ export function parseScript(source){
       }else if(peek()==='repeat' && (tokens[i+1]?.s!=='(' || tokens[i+1].at>tokens[i].at+6)){
         i++;
         const times=expr();eol();row={op:'repeat',times,body:body()};need('end');
+      }else if(controlTransfers.includes(peek())){
+        const op=id();
+        if(eat('('))need(')');
+        if(peek()!==undefined&&peek()!=='\n')fail('Use '+op+' without a value');
+        row={op};
       }else if(peek()==='change' && scopes.includes(tokens[i+1]?.s) && tokens[i+2]?.s==='.'){
         i++;
         const [scope,name]=qualified().split('.');
@@ -349,6 +354,7 @@ export function formatScript(script){
       if(b.op==='set')line=b.scope+'.'+b.name+' = '+value(b.value);
       else if(b.op==='change')line='change '+b.scope+'.'+b.name+' by '+value(b.value);
       else if(b.op==='wait')line='wait('+value(b.ticks)+')';
+      else if(controlTransfers.includes(b.op))line=b.op;
       else if(b.op==='call')line=b.name+'('+b.args.map(value).join(', ')+')';
       else line=b.op+'('+Blocks[b.op][1].map(([key,,fallback,optional])=>value(Object.hasOwn(b,key)?b[key]:optional?null:fallback)).join(', ')+')';
       lines.push(pad+line);

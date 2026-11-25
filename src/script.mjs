@@ -1,4 +1,4 @@
-import { actorReadings, Blocks, Events, inputEvent, receivedEvent, timerEvent, controllerEvent, Opcodes, messageInputs, entityQueries, reporters, commandScopeError, collectionCommands, collectionQueries, valueInput } from './schema.mjs';
+import { actorReadings, Blocks, Events, controlTransfers, inputEvent, receivedEvent, timerEvent, controllerEvent, Opcodes, messageInputs, entityQueries, reporters, commandScopeError, collectionCommands, collectionQueries, valueInput } from './schema.mjs';
 import {inventoryTypes,propertyAliases,propertyType,scalarTypes,validateCollections} from './collections.mjs';
 import {validResourceText} from './resource-tables.mjs';
 import {compileInitProperties} from './init-properties.mjs';
@@ -96,7 +96,7 @@ function validateScriptDefinition(script,modules,routines,registry) {
   }
   for(const name of script.imports??[])if(!Object.hasOwn(modules,name))throw Error('Unknown module '+name);
   for(const [name,r] of routines){
-    if(!variableName(name) || Object.hasOwn(Blocks,name) || name==='wait' || !Array.isArray(r.params) ||
+    if(!variableName(name) || Object.hasOwn(Blocks,name) || name==='wait' || controlTransfers.includes(name) || !Array.isArray(r.params) ||
        r.params.some(p=>!variableName(p)) || new Set(r.params).size!==r.params.length ||
        r.params.length>maxParameters || (r.paramTypes!=null && (!Array.isArray(r.paramTypes) || r.paramTypes.length!==r.params.length ||
        r.paramTypes.some(type=>!types.includes(type)))))throw Error('Invalid routine '+name);
@@ -178,6 +178,13 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
       bytes.push(op,...operands);
     };
     const patch = (offset,target) => { [bytes[offset],bytes[offset+1]] = word(target); };
+    const jumpLater=()=>{
+      emit(commands.jump,0,0);
+      return bytes.length-2;
+    };
+    function patchAll(offsets,target=bytes.length){
+      for(const offset of offsets)patch(offset,target);
+    }
     function enter(depth) {
       if (++nodes > 2048 || depth > 32 || bytes.length > 60000) throw Error('Script is too large or too deeply nested');
     }
@@ -379,7 +386,12 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
       if (toInteger.includes(name)||name==='to_integer') return 'integer';
       return type;
     }
-    function sequence(list,depth) {
+    function compileLoopBody(list,depth,flow){
+      const loop={breaks:[],continues:[]};
+      sequence(list,depth,{...flow,loop});
+      return loop;
+    }
+    function sequence(list,depth,flow) {
       enter(depth);
       if (!Array.isArray(list)) throw Error('Expected a list of blocks');
       for (const block of list) {
@@ -388,7 +400,17 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
         if(block.op==='init_properties')throw Error('Connect one Init properties block directly below On init or On game startup');
         if(block.op==='init_property')throw Error('Put static physics properties inside Init properties');
         if (block.op===validation)expression(block.value,0,depth+1);
-        else if (block.op==='call')call(block.name,block.args,false,r=>sequence(r.body,depth+1),(arg,type,name)=>checkArgument(arg,type,name,depth));
+        else if (block.op==='call')call(block.name,block.args,false,r=>{
+          const returns=[];
+          sequence(r.body,depth+1,{returns});
+          patchAll(returns);
+        },(arg,type,name)=>checkArgument(arg,type,name,depth));
+        else if (block.op==='return') flow.returns.push(jumpLater());
+        else if (block.op==='break'||block.op==='continue') {
+          if(!flow.loop)throw Error('Use '+block.op+' inside a repeat or while loop');
+          const targets=block.op==='break'?flow.loop.breaks:flow.loop.continues;
+          targets.push(jumpLater());
+        }
         else if (block.op === 'set' || block.op === 'change') {
           const variableScope = scope(block.scope), type = scopeType(block.scope);
           const amount = block.value === undefined ? defaults[type] : block.value;
@@ -405,15 +427,12 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
             requireType(expression(branch.condition===undefined?false:branch.condition,0,depth+1),'boolean','if',0);
             emit(commands.branch,0,0,0);
             const falseTarget=bytes.length-2;
-            sequence(branch.body??[],depth+1);
-            if(index+1<branches.length||otherwise?.length){
-              emit(commands.jump,0,0);
-              endTargets.push(bytes.length-2);
-            }
+            sequence(branch.body??[],depth+1,flow);
+            if(index+1<branches.length||otherwise?.length)endTargets.push(jumpLater());
             patch(falseTarget,bytes.length);
           }
-          if(otherwise?.length)sequence(otherwise,depth+1);
-          for(const target of endTargets)patch(target,bytes.length);
+          if(otherwise?.length)sequence(otherwise,depth+1,flow);
+          patchAll(endTargets);
         } else if(block.op==='inventory_set'&&block.inventory==='game'&&Object.hasOwn(aliases.game,block.property)){
           if(block.index!==1)throw Error('Use slot 1 for a Game property');
           const {type,name,scope:variableScope}=aliases.game[block.property];
@@ -453,9 +472,11 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
           requireType(expression(block.condition===undefined?false:block.condition,0,depth+1),'boolean',block.op,0);
           emit(commands.branch,0,0,0);
           const falseTarget = bytes.length-2;
-          sequence(block.body ?? [],depth+1);
+          const loop=compileLoopBody(block.body??[],depth+1,flow);
+          patchAll(loop.continues,start);
           emit(commands.jump,...word(start));
           patch(falseTarget,bytes.length);
+          patchAll(loop.breaks);
         } else if (block.op === 'repeat') {
           const count = 63-repeatDepth;
           requireType(expression(block.times===undefined?1:block.times,0,depth+1),'integer','repeat');
@@ -467,11 +488,13 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
           emit(commands.calc,0,operations.indexOf('less'),0,count);
           emit(commands.branch,0,0,0);
           const end = bytes.length-2;
-          sequence(block.body??[],depth+1);
+          const loop=compileLoopBody(block.body??[],depth+1,flow);
+          patchAll(loop.continues);
           expression(1,0,depth+1);
           emit(commands.calc,count,operations.indexOf('subtract'),count,0);
           emit(commands.jump,...word(start));
           patch(end,bytes.length);
+          patchAll(loop.breaks);
           repeatDepth--;
         } else if (block.op === 'wait') {
           requireType(expression(block.ticks===undefined?1:block.ticks,0,depth+1),'integer','wait');
@@ -563,7 +586,9 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
         }
       }
     }
-    sequence(body,0);
+    const returns=[];
+    sequence(body,0,{returns});
+    patchAll(returns);
     if (bytes.length >= 65535) throw Error('Script bytecode exceeds 64 KiB');
     if (bytes.length) events[event] = { b:typeof Buffer === "undefined" ? Uint8Array.from(bytes) : Buffer.from(bytes), n:names.values, k:constants.values, ...(reals.values.length ? {f:reals.values} : {}) };
   }
