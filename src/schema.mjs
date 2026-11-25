@@ -78,7 +78,7 @@ export const Blocks = {
     ['x','number',4],['y','number',4],['scale','integer',1,'optional'],
   ]],
   draw_background_sprite:['Draw background sprite %2 named %1 · X %3 Y %4 · scroll %5 · scale %6',[
-    ['label','text','moon'],['sprite','text',''],['x','number',32],['y','number',24],['parallax','number',0],['scale','integer',1,'optional'],
+    ['label','text','moon'],['sprite','text',''],['x','number',32],['y','number',24],['parallax','number',1],['scale','integer',1,'optional'],
   ]],
   emit_event:['Emit event %1',[['event','text','']]],
   emit_event_with_entity:['Emit event %1 with entity %2',[['event','text',''],['entity','integer',0]]],

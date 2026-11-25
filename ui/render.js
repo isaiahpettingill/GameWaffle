@@ -2,7 +2,7 @@ import {drawWeather} from './room-weather.js';
 import {shaderMaskLayers} from '../src/room-shaders.mjs';
 import {postprocess} from './room-postprocess.js';
 import {runShaderPipeline} from './shader-pipeline.js';
-import {dialogue_lines,hd_frame,room_gradient_pixels} from '../web-built/runtime/runtime.js';
+import {dialogue_lines,hd_frame,room_gradient_region} from '../web-built/runtime/runtime.js';
 import {cameraView,fitFrame} from './camera.js';
 import {gamePixelSize,paintPixels,positionPixels} from './pixel-display.js';
 const images = new WeakMap();
@@ -11,8 +11,8 @@ const sceneBuffers = new WeakMap();
 const frameBuffers = new WeakMap();
 const gradients = new WeakMap();
 
-function drawBackground(ctx, owner, width, height, settings, fallback) {
-  const base=settings.background??fallback, gradient=settings.backgroundGradient;
+function drawBackground(ctx, owner, [x,y,width,height], settings, room) {
+  const base=settings.background??room.background, gradient=settings.backgroundGradient;
   if(!gradient){
     ctx.fillStyle=base;
     ctx.fillRect(0,0,width,height);
@@ -24,16 +24,19 @@ function drawBackground(ctx, owner, width, height, settings, fallback) {
     cached={surface:document.createElement('canvas')};
     gradients.set(owner,cached);
   }
-  if(cached.base!==base||cached.json!==json||cached.surface.width!==width||cached.surface.height!==height){
-    const pixels=room_gradient_pixels(width,height,json,base);
+  // Keep a camera-aligned region in memory so scrolling reuses the same pixels.
+  const margin=64, left=Math.floor(x/margin)*margin, top=Math.floor(y/margin)*margin;
+  const rasterWidth=width+margin, rasterHeight=height+margin;
+  const key=JSON.stringify([left,top,rasterWidth,rasterHeight,room.width,room.height,base,json]);
+  if(cached.key!==key){
+    const pixels=room_gradient_region(rasterWidth,rasterHeight,left,top,room.width,room.height,json,base);
     const surface=cached.surface;
-    if(surface.width!==width)surface.width=width;
-    if(surface.height!==height)surface.height=height;
-    surface.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer,pixels.byteOffset,pixels.byteLength),width,height),0,0);
-    cached.base=base;
-    cached.json=json;
+    if(surface.width!==rasterWidth)surface.width=rasterWidth;
+    if(surface.height!==rasterHeight)surface.height=rasterHeight;
+    surface.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer,pixels.byteOffset,pixels.byteLength),rasterWidth,rasterHeight),0,0);
+    cached.key=key;
   }
-  ctx.drawImage(cached.surface,0,0);
+  ctx.drawImage(cached.surface,x-left,y-top,width,height,0,0,width,height);
 }
 
 function bufferFor(cache,canvas,width,height){
@@ -153,7 +156,7 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false, pr
   ctx.imageSmoothingEnabled = false;
   const image = atlasImages[snapshot.room];
   if (!image) return;
-  drawBackground(ctx,canvas,width,height,settings,room.background);
+  drawBackground(ctx,canvas,[x,y,width,height],settings,room);
   const backdrop=settings.backgroundImage==null ? room.baked.find(layer=>layer.image==='room/background') :
     settings.backgroundImage ? {image:'room/background/'+settings.backgroundImage,
       width:room.width,height:room.height,parallax:settings.backgroundScroll} : null;
@@ -169,7 +172,7 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false, pr
     ctx.drawImage(image,...rect,Math.round(left-x*sprite.parallax),Math.round(top-y*sprite.parallax),
       rect[2]*sprite.scale,rect[3]*sprite.scale);
   }
-  const backgroundResult=runPasses(canvas,'background',scene,cart.shaders,settings.backgroundShaders,snapshot.tick);
+  const backgroundResult=runPasses(canvas,'background',scene,cart.shaders,settings.backgroundShaders,snapshot.tick,undefined,[x,y,room.width,room.height]);
   if(backgroundResult.image){
     ctx.drawImage(backgroundResult.image,0,0);
     backgroundResult.image.close?.();

@@ -183,7 +183,9 @@ on game startup
 end
 ```
 
-In a Room script, **Draw background sprite** puts art behind the tilemap and actors. Its X and Y start from the background's top left. Scroll `0` keeps the art fixed in the viewport and `1` moves it with the room. Use a value between them for parallax. Background names last until `hide` or the next room load.
+In a Room script, **Draw background sprite** puts art behind the tilemap and actors. Its X and Y start from the background's top left. Scroll defaults to `1` so the art moves with the room. Use `0` to fix it to the viewport or a value between them for parallax. Background names last until `hide` or the next room load.
+
+Background gradients are anchored to the room. Coordinates from `0` to `1` span its full width and height, and a radial radius of `1` equals the room's shorter side. The camera crops the gradient as it moves.
 
 ```ruby
 on init
@@ -195,6 +197,8 @@ end
 ```
 
 The background shader pipeline receives the color, gradient, background image, and background sprites. The renderer draws tiles and actors afterward. An empty background pipeline clears the effect. Custom pipelines use WebGPU in the browser and a supported GPU renderer in the standalone player.
+
+Background presets place effects such as volumetric lighting in room coordinates. A custom shader can use the automatic `vec2 room_origin` and `vec2 room_resolution` uniforms for the camera offset and room size in pixels. Use `(uv * resolution + room_origin) / room_resolution` for room-relative coordinates and `uv` to sample the visible background texture.
 
 ## Events and data
 

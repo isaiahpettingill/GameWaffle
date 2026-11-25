@@ -135,21 +135,24 @@ function bindStage(stage, gpu, definition, program, index, sourceIndex) {
   };
 }
 
-function writeUniforms(queue, slot, definition, data, width, height, tick) {
+function writeUniforms(queue, slot, definition, data, width, height, tick, room) {
   if (!slot.buffer) return;
   slot.words.fill(0);
   slot.words.set(data.slice(0,slot.words.length));
   const floats = new Float32Array(slot.words.buffer);
+  const [x,y,roomWidth,roomHeight]=room??[0,0,width,height];
   for (const param of definition.parameters) {
     const offset = param.offset/4;
     if (param.automatic==='resolution') { floats[offset]=width;floats[offset+1]=height; }
+    if (param.automatic==='room_origin') { floats[offset]=x;floats[offset+1]=y; }
+    if (param.automatic==='room_resolution') { floats[offset]=roomWidth;floats[offset+1]=roomHeight; }
     if (param.automatic==='time') floats[offset]=tick/60;
     if (param.automatic==='delta_time') floats[offset]=1/60;
   }
   queue.writeBuffer(slot.buffer,0,slot.words);
 }
 
-export function runShaderPipeline(owner, kind, source, shaders, passes, tick, size) {
+export function runShaderPipeline(owner, kind, source, shaders, passes, tick, size, room) {
   if (!passes?.length) return {};
   const gpu = getDevice();
   if (!gpu.device) return {status:gpu.status};
@@ -177,7 +180,7 @@ export function runShaderPipeline(owner, kind, source, shaders, passes, tick, si
     for (const [index,{definition,program,uniforms}] of pipeline.entries()) {
       const from = (index-Number(scaling)) % 2;
       const slot = bindStage(stage,gpu,definition,program,index,from);
-      writeUniforms(device.queue,slot,definition,uniforms,width,height,tick);
+      writeUniforms(device.queue,slot,definition,uniforms,width,height,tick,room);
       const view = index===pipeline.length-1 ? stage.context.getCurrentTexture().createView() : stage.views[from<0?0:1-from];
       const commands = encoder.beginRenderPass({colorAttachments:[{view,clearValue:[0,0,0,1],loadOp:'clear',storeOp:'store'}]});
       commands.setPipeline(program.pipeline);

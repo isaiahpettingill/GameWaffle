@@ -202,6 +202,7 @@ impl Pipeline {
         passes: &[ShaderPass],
         tick: u64,
         destination: FRect,
+        room: Option<([i32; 2], [u32; 2])>,
         paint: impl FnOnce(&mut Canvas<T>) -> Result<(), Error>,
     ) -> Result<(), Error> {
         let [width, height] = targets.dimensions;
@@ -232,6 +233,7 @@ impl Pipeline {
                     pass,
                     [width, height],
                     tick,
+                    room,
                 )?;
             } else {
                 let mut result = Ok(());
@@ -247,6 +249,7 @@ impl Pipeline {
                         pass,
                         [width, height],
                         tick,
+                        room,
                     );
                 })?;
                 result?;
@@ -265,17 +268,23 @@ fn draw_pass<T: RenderTarget>(
     pass: &ShaderPass,
     size: [u32; 2],
     tick: u64,
+    room: Option<([i32; 2], [u32; 2])>,
 ) -> Result<(), Error> {
     let mut words = [0u32; 64];
     for (word, value) in words.iter_mut().zip(&pass.uniforms) {
         *word = *value;
     }
+    let (origin, extent) = room.unwrap_or(([0, 0], size));
     for param in &shader.parameters {
         let offset = param.offset / 4;
         match param.automatic.as_deref() {
-            Some("resolution") if offset + 1 < words.len() => {
-                words[offset] = (size[0] as f32).to_bits();
-                words[offset + 1] = (size[1] as f32).to_bits();
+            Some("resolution" | "room_origin" | "room_resolution") if offset + 1 < words.len() => {
+                let values = match param.automatic.as_deref() {
+                    Some("room_origin") => origin.map(|axis| axis as f32),
+                    Some("room_resolution") => extent.map(|axis| axis as f32),
+                    _ => size.map(|axis| axis as f32),
+                };
+                words[offset..offset + 2].copy_from_slice(&values.map(f32::to_bits));
             }
             Some("time") if offset < words.len() => words[offset] = (tick as f32 / 60.).to_bits(),
             Some("delta_time") if offset < words.len() => words[offset] = (1f32 / 60.).to_bits(),
@@ -355,15 +364,18 @@ mod tests {
                 msl: String::new(),
                 msl_entry: String::new(),
                 spirv: include_bytes!("../../src/shaders/presets.spv").to_vec(),
-                uniform_size: 48,
-                parameters: vec![Parameter {
-                    offset: 0,
-                    automatic: Some("resolution".into()),
-                }],
+                uniform_size: 64,
+                parameters: [(0, "resolution"), (48, "room_origin"), (56, "room_resolution")]
+                    .into_iter()
+                    .map(|(offset, name)| Parameter {
+                        offset,
+                        automatic: Some(name.into()),
+                    })
+                    .collect(),
             },
         )]);
         let pass = |strength: f32, color: [f32; 3]| {
-            let mut uniforms = vec![0; 12];
+            let mut uniforms = vec![0; 16];
             uniforms[5] = strength.to_bits();
             for (index, component) in color.into_iter().enumerate() {
                 uniforms[8 + index] = component.to_bits();
@@ -387,6 +399,7 @@ mod tests {
             &passes,
             0,
             FRect::new(0., 0., 64., 64.),
+            None,
             |target| {
                 target.set_draw_color(sdl3::pixels::Color::RGB(0, 255, 0));
                 target.clear();
@@ -401,6 +414,30 @@ mod tests {
             assert_eq!(rgba[1], 0);
             assert!((126..=129).contains(&rgba[2]));
         });
+        let mut beam = pass(100., [1., 1., 1.]);
+        beam.uniforms[4] = 6;
+        let mut sample = |left: i32, x: usize| -> Result<[u8; 4], Error> {
+            pipeline.draw(
+                &mut canvas,
+                &mut targets,
+                &shaders,
+                std::slice::from_ref(&beam),
+                0,
+                FRect::new(0., 0., 64., 64.),
+                Some(([left, 0], [128, 96])),
+                |target| {
+                    target.set_draw_color(sdl3::pixels::Color::BLACK);
+                    target.clear();
+                    Ok(())
+                },
+            )?;
+            let surface = canvas.read_pixels(None)?.convert_format(PixelFormat::RGBA32)?;
+            let offset = 8 * surface.pitch() as usize + x * 4;
+            Ok(surface.with_lock(|rgba| rgba[offset..offset + 4].try_into().unwrap()))
+        };
+        let lit = sample(0, 32)?;
+        assert!(lit[0] > 128);
+        assert_eq!(lit, sample(16, 16)?);
         Ok(())
     }
 }

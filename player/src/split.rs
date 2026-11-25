@@ -195,10 +195,13 @@ pub(crate) fn draw<'a, T: RenderTarget>(
         if background_pipeline.is_some() && targets.background_shaders.as_ref().is_none_or(|shader| shader.dimensions != [w, h]) {
             targets.background_shaders = Some(shaders::Targets::new(creator, [w, h])?);
         }
+        let origin = crate::scene_origin(game, snapshot, [0, 0, w, h], Some(pane.focus));
         let gradient = targets.gradient.get(
             creator,
             settings.background_gradient.as_ref(),
             [w, h],
+            origin,
+            [room.width, room.height],
             settings.background.as_deref().unwrap_or(&room.background),
         )?;
         let frame = &mut targets.frame.as_mut().unwrap().2;
@@ -209,8 +212,8 @@ pub(crate) fn draw<'a, T: RenderTarget>(
                 game,
                 snapshot,
                 atlas,
-                [0, 0, w, h],
-                Some(pane.focus),
+                [w, h],
+                origin,
                 rectangles,
                 targets.ripple.as_mut(),
                 targets.hd.as_mut(),

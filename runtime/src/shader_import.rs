@@ -247,9 +247,11 @@ fn reflection(data: &[u8]) -> Result<Shader, String> {
                     let name = member.name.clone().unwrap_or_else(|| format!("parameter_{}", index + 1));
                     let automatic = match (name.as_str(), kind, lanes) {
                         ("resolution", "float", 2) => Some("resolution"),
+                        ("room_origin", "float", 2) => Some("room_origin"),
+                        ("room_resolution", "float", 2) => Some("room_resolution"),
                         ("time", "float", 1) => Some("time"),
                         ("delta_time", "float", 1) => Some("delta_time"),
-                        ("resolution" | "time" | "delta_time", _, _) => return Err(format!("Wrong type for automatic uniform {name}")),
+                        ("resolution" | "room_origin" | "room_resolution" | "time" | "delta_time", _, _) => return Err(format!("Wrong type for automatic uniform {name}")),
                         _ => None,
                     };
                     shader.parameters.push(Parameter { name, offset: member.offset, kind, lanes, automatic });

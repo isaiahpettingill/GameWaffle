@@ -55,7 +55,7 @@ export function registerShaderBlocks(registry, menu) {
         else if(previous?.connection)input.connection.connect(previous.connection);
       }
     }
-    const automatic=definition?.parameters.filter(parameter=>parameter.automatic)??[];
+    const automatic=definition?.parameters.filter(parameter=>parameter.automatic&&!parameter.hidden)??[];
     if(automatic.length)this.appendDummyInput('engine').appendField('Auto · '+automatic.map(parameter=>parameter.name).join(', '));
     this.setTooltip('The pass takes the previous image as input. Empty parameter inputs use their defaults.');
   },

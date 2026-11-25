@@ -15,7 +15,7 @@ import {shaderNodes,shaderTemplates,starterShader} from '../src/shader-graph.mjs
 import {shaderPalette} from '../ui/shader-palette.js';
 import {compileScript} from '../src/script.mjs';
 import {parseScript,formatScript} from '../src/wafflescript.mjs';
-import {Runtime,initSync,room_gradient_pixels} from '../web-built/runtime/runtime.js';
+import {Runtime,initSync,room_gradient_pixels,room_gradient_region} from '../web-built/runtime/runtime.js';
 
 const temporary=await mkdtemp(join(tmpdir(),'waffle-shaders-'));
 try{
@@ -24,7 +24,10 @@ try{
   const project=JSON.parse(await store.read('project.json','utf8'));
   const bytes=await readFile('src/shaders/presets.spv');
   const definition=await compileShader(bytes);
-  assert.equal(definition.uniformSize,48);
+  assert.equal(definition.uniformSize,64);
+  for(const [name,offset] of [['room_origin',48],['room_resolution',56]])
+    assert.deepEqual(definition.parameters.find(parameter=>parameter.name===name),
+      {name,offset,kind:'float',lanes:2,automatic:name});
   assert.deepEqual(definition.parameters.find(parameter=>parameter.name==='tint'),
     {name:'tint',offset:32,kind:'float',lanes:3});
   assert.match(definition.wgsl,/@fragment/);
@@ -155,7 +158,19 @@ end
       return frame.roomSettings;
     };
     const draw=settings=>room_gradient_pixels(16,12,JSON.stringify(settings.backgroundGradient),settings.background);
-    const pixel=(bytes,x,y)=>Array.from(bytes.slice((y*16+x)*4,(y*16+x)*4+3));
+    const drawRegion=(settings,left,top)=>room_gradient_region(16,12,left,top,63,47,
+      JSON.stringify(settings.backgroundGradient),settings.background);
+    const pixel=(bytes,x,y,width=16)=>Array.from(bytes.slice((y*width+x)*4,(y*width+x)*4+3));
+    function checkPan(settings,left,top){
+      const first=drawRegion(settings,left,top);
+      const second=drawRegion(settings,left+5,top+3);
+      const full=room_gradient_pixels(63,47,JSON.stringify(settings.backgroundGradient),settings.background);
+      for(let y=0;y<9;y++)for(let x=0;x<11;x++){
+        const expected=pixel(full,left+x+5,top+y+3,63);
+        assert.deepEqual(pixel(first,x+5,y+3),expected);
+        assert.deepEqual(pixel(second,x,y),expected);
+      }
+    }
     const line=step();
     const lineColors=draw(line);
     assert.ok(pixel(lineColors,7,6)[0]>200);
@@ -171,9 +186,11 @@ end
       assert.equal(pixels[i],pixels[i+2]);
     }
     assert.notDeepEqual([...new Set(pixels.slice(0,16*4).filter((_,index)=>index%4===0))],[0]);
+    checkPan(dither,-3,5);
     const radial=step(64), radialColors=draw(radial);
     assert.ok(pixel(radialColors,4,6)[0]>200);
     assert.ok(pixel(radialColors,12,6)[2]>200);
+    checkPan(radial,7,5);
     const checkpoint=gradientRuntime.save_game();
     assert.equal(step(16).backgroundGradient.foci[1],null);
     gradientRuntime.load_game(checkpoint);

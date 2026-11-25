@@ -6,6 +6,8 @@ const automatic=[
   {name:'resolution',offset:0,kind:'float',lanes:2,automatic:'resolution'},
   {name:'time',offset:8,kind:'float',lanes:1,automatic:'time'},
   {name:'delta_time',offset:12,kind:'float',lanes:1,automatic:'delta_time'},
+  {name:'room_origin',offset:48,kind:'float',lanes:2,automatic:'room_origin',hidden:true},
+  {name:'room_resolution',offset:56,kind:'float',lanes:2,automatic:'room_resolution',hidden:true},
 ];
 const presets=[
   ['tint',35,[0,0,0]], ['scanlines',35,[0,0,0],3], ['grid',35,[0,0,0],3],
@@ -16,7 +18,7 @@ const presets=[
 ];
 export const shaderPresets=Object.fromEntries(presets.map(([id,strength,tint,spacing,speed,radius],index)=>[
   'preset:'+id,{
-    title:roomShaders[id],uniformSize:48,
+    title:roomShaders[id],uniformSize:64,
     parameters:[
       ...automatic,{name:'preset',offset:16,kind:'int',lanes:1,defaults:[index],hidden:true},
       scalar('strength',20,strength),

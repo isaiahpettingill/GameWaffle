@@ -130,9 +130,15 @@ fn palette_pair(colors: &[[f32; 3]], target: [f32; 3]) -> Dither {
     result
 }
 
-/// Draw an opaque gradient in logical screen pixels. Ramp positions use normalized
-/// screen coordinates and radial distances use the shorter screen dimension.
-pub fn rasterize(output: &mut Vec<u8>, [width, height]: [u32; 2], gradient: &Gradient, base: Rgb) {
+/// Draw the visible region of the gradient in room pixels.
+pub fn rasterize(
+    output: &mut Vec<u8>,
+    [width, height]: [u32; 2],
+    [left, top]: [i32; 2],
+    [room_width, room_height]: [u32; 2],
+    gradient: &Gradient,
+    base: Rgb,
+) {
     output.clear();
     output.reserve(width as usize * height as usize * 4);
     let mut stops: Vec<_> = gradient
@@ -153,9 +159,9 @@ pub fn rasterize(output: &mut Vec<u8>, [width, height]: [u32; 2], gradient: &Gra
     let [x0, y0, x1, y1] = gradient.axis;
     let [dx, dy] = [x1 - x0, y1 - y0];
     let dot_inverse = (dx * dx + dy * dy).max(0.000001).recip();
-    let sx = (width as f32).recip();
-    let sy = (height as f32).recip();
-    let short_side = width.min(height).max(1) as f32;
+    let sx = (room_width as f32).recip();
+    let sy = (room_height as f32).recip();
+    let short_side = room_width.min(room_height) as f32;
     let radial: Vec<_> = gradient
         .foci
         .iter()
@@ -163,17 +169,19 @@ pub fn rasterize(output: &mut Vec<u8>, [width, height]: [u32; 2], gradient: &Gra
         .map(|focus| {
             let [x, y] = focus.center;
             (
-                x * width as f32,
-                y * height as f32,
+                x * room_width as f32,
+                y * room_height as f32,
                 (focus.radius * short_side).recip(),
                 focus.color.map(f32::from),
             )
         })
         .collect();
     for y in 0..height {
-        let row = y as f32 + 0.5;
+        let world_y = top + y as i32;
+        let row = world_y as f32 + 0.5;
         for x in 0..width {
-            let col = x as f32 + 0.5;
+            let world_x = left + x as i32;
+            let col = world_x as f32 + 0.5;
             let color = match gradient.kind {
                 GradientKind::Linear if !stops.is_empty() => {
                     let t = ((col * sx - x0) * dx + (row * sy - y0) * dy) * dot_inverse;
@@ -223,7 +231,7 @@ pub fn rasterize(output: &mut Vec<u8>, [width, height]: [u32; 2], gradient: &Gra
                         [r, g, b].map(|v| (((v << 3) | (v >> 2)) as u8).into()),
                     )
                 });
-                let threshold = (BAYER[y as usize & 3][x as usize & 3] + 0.5) / 16.;
+                let threshold = (BAYER[(world_y & 3) as usize][(world_x & 3) as usize] + 0.5) / 16.;
                 palette[usize::from(if pair.ratio > threshold {
                     pair.b
                 } else {
@@ -242,8 +250,29 @@ pub fn room_gradient_pixels(
     settings: &str,
     base: &str,
 ) -> Result<Vec<u8>, String> {
-    if !(1..=512).contains(&width) || !(1..=512).contains(&height) {
-        return Err("Gradient output exceeds the viewport limits".into());
+    room_gradient_region(width, height, 0, 0, width, height, settings, base)
+}
+
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn room_gradient_region(
+    width: u32,
+    height: u32,
+    left: i32,
+    top: i32,
+    room_width: u32,
+    room_height: u32,
+    settings: &str,
+    base: &str,
+) -> Result<Vec<u8>, String> {
+    if [width, height].iter().any(|size| !(1..=640).contains(size))
+        || [room_width, room_height]
+            .iter()
+            .any(|size| !(1..=4096).contains(size))
+        || [left, top]
+            .iter()
+            .any(|origin| !(-4096..=4096).contains(origin))
+    {
+        return Err("Invalid background gradient region".into());
     }
     let gradient: Gradient = serde_json::from_str(settings).map_err(|error| error.to_string())?;
     if !gradient.valid() {
@@ -253,6 +282,8 @@ pub fn room_gradient_pixels(
     rasterize(
         &mut pixels,
         [width, height],
+        [left, top],
+        [room_width, room_height],
         &gradient,
         rgb(base).unwrap_or([23, 24, 41]),
     );

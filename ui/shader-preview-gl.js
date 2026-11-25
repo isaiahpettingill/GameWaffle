@@ -50,9 +50,10 @@ export function createShaderPreviewGL(){
         location:gl.getUniformLocation(program,'params.'+parameter.name)}));
       return true;
     },
-    run(source,words,tick,size=[source.width,source.height]){
+    run(source,words,tick,size=[source.width,source.height],room){
       if(gl.isContextLost())return {status:'The WebGL shader preview was interrupted.'};
       const [width,height]=size;
+      const [x,y,roomWidth,roomHeight]=room??[0,0,width,height];
       if(canvas.width!==width)canvas.width=width;
       if(canvas.height!==height)canvas.height=height;
       gl.viewport(0,0,width,height);
@@ -67,6 +68,8 @@ export function createShaderPreviewGL(){
       for(const {automatic,lanes,location,offset} of parameters){
         if(location===null)continue;
         if(automatic==='resolution')gl.uniform2f(location,width,height);
+        else if(automatic==='room_origin')gl.uniform2f(location,x,y);
+        else if(automatic==='room_resolution')gl.uniform2f(location,roomWidth,roomHeight);
         else if(automatic==='time')gl.uniform1f(location,tick/60);
         else{
           const i=offset/4;

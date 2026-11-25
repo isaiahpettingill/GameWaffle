@@ -46,13 +46,13 @@
     status='';
   }
 
-  function runPasses(owner,kind,source,shaders,passes,tick,size){
+  function runPasses(owner,kind,source,shaders,passes,tick,size,room){
     const studioPass=passes?.[0]?.shader===previewKey;
-    if(studioPass&&useGL)return previewGL.run(source,uniforms,tick,size);
-    const result=runShaderPipeline(owner,kind,source,shaders,passes,tick,size);
+    if(studioPass&&useGL)return previewGL.run(source,uniforms,tick,size,room);
+    const result=runShaderPipeline(owner,kind,source,shaders,passes,tick,size,room);
     if(studioPass&&result.status==='The WebGPU device was lost.'&&lastGood!==rejected){
       try{useGL=Boolean(prepareGL(lastGood));}catch{useGL=false;}
-      if(useGL)return previewGL.run(source,uniforms,tick,size);
+      if(useGL)return previewGL.run(source,uniforms,tick,size,room);
       rejected=lastGood;
     }
     return result;

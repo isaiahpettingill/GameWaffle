@@ -187,10 +187,13 @@ impl Video {
                     );
                 }
                 let settings = snapshot.room_settings;
+                let origin = crate::scene_origin(game, &snapshot, view, layout.focus);
                 let gradient = textures.gradient.get(
                     creator,
                     settings.background_gradient.as_ref(),
                     [w, h],
+                    origin,
+                    [room.width, room.height],
                     settings.background.as_deref().unwrap_or(&room.background),
                 )?;
                 draw(
@@ -198,8 +201,8 @@ impl Video {
                     game,
                     &snapshot,
                     &mut textures.atlas,
-                    view,
-                    layout.focus,
+                    [w, h],
+                    origin,
                     &mut self.rectangles,
                     textures.ripple.as_mut(),
                     textures.hd.as_mut(),

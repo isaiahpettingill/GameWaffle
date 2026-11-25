@@ -238,14 +238,14 @@ fn scene_origin(
 
 fn draw_background<T: sdl3::render::RenderTarget>(
     canvas: &mut Canvas<T>, game: &Game, snapshot: &gamewaffle_runtime::Snapshot<'_>, atlas: &Texture<'_>,
-    [x, y]: [i32; 2], [w, h]: [u32; 2], gradient: Option<&Texture<'_>>,
+    [x, y]: [i32; 2], [w, h]: [u32; 2], gradient: Option<gradient::View<'_, '_>>,
 ) -> Result<(), Error> {
     let room = &game.media.rooms[snapshot.room];
     let source = &game.media.atlases[snapshot.room];
     let settings = snapshot.room_settings;
     let screen = FRect::new(0., 0., w as f32, h as f32);
-    if let Some(gradient) = gradient {
-        canvas.copy(gradient, None, screen)?;
+    if let Some((gradient, crop)) = gradient {
+        canvas.copy(gradient, crop, screen)?;
     } else {
         let color = settings.background.as_deref().unwrap_or(&room.background);
         let [r, g, b] = gamewaffle_runtime::gradient::rgb(color).unwrap_or([23, 24, 41]);
@@ -289,14 +289,14 @@ fn draw_world<T: sdl3::render::RenderTarget>(
     [x, y]: [i32; 2],
     [w, h]: [u32; 2],
     rectangles: &mut Vec<FRect>,
-    gradient: Option<&Texture<'_>>,
+    gradient: Option<gradient::View<'_, '_>>,
     background_effects: Option<(&shaders::Pipeline, &mut shaders::Targets<'_>)>,
 ) -> Result<(), Error> {
     let room = &game.media.rooms[snapshot.room];
     let source = &game.media.atlases[snapshot.room];
     if let Some((pipeline, targets)) = background_effects {
         pipeline.draw(canvas, targets, &game.media.shaders, &snapshot.room_settings.background_shaders,
-            snapshot.tick, FRect::new(0., 0., w as f32, h as f32), |canvas| {
+            snapshot.tick, FRect::new(0., 0., w as f32, h as f32), Some(([x, y], [room.width, room.height])), |canvas| {
                 draw_background(canvas, game, snapshot, atlas, [x, y], [w, h], gradient)
             })?;
     } else {
@@ -743,30 +743,28 @@ fn draw<T: sdl3::render::RenderTarget>(
     game: &Game,
     snapshot: &gamewaffle_runtime::Snapshot<'_>,
     atlas: &mut Texture<'_>,
-    view: [u32; 4],
-    focus: Option<[f32; 2]>,
+    [w, h]: [u32; 2],
+    origin: [i32; 2],
     rectangles: &mut Vec<FRect>,
     ripple_target: Option<&mut Texture<'_>>,
     hd_target: Option<&mut Texture<'_>>,
-    gradient: Option<&Texture<'_>>,
+    gradient: Option<gradient::View<'_, '_>>,
     room_effects: Option<(&shaders::Pipeline, &mut shaders::Targets<'_>)>,
     mut background_effects: Option<(&shaders::Pipeline, &mut shaders::Targets<'_>)>,
 ) -> Result<(), Error> {
-    let [_, _, w, h] = view;
     let room = &game.media.rooms[snapshot.room];
     let source = &game.media.atlases[snapshot.room];
     let override_shader = snapshot.room_settings.shader;
     let stack = snapshot.room_settings.shader_pipeline.as_deref();
     let shader = stack.is_none().then(|| override_shader.or(room.shader)).flatten();
     let hd = if stack.is_some() { 0 } else { room.hd_strength(override_shader) };
-    let origin = scene_origin(game, snapshot, view, focus);
     let scene_origin = origin.map(|axis| axis as f32);
     let rasterized = if let (Some(passes), Some((pipeline, targets))) = (stack, room_effects) {
         canvas.set_draw_color(Color::BLACK);
         canvas.clear();
         pipeline.draw(
             canvas, targets, &game.media.shaders, passes, snapshot.tick,
-            FRect::new(0., 0., w as f32, h as f32),
+            FRect::new(0., 0., w as f32, h as f32), None,
             |target| {
                 draw_world(target, game, snapshot, atlas, origin, [w, h], rectangles, gradient, background_effects.take())?;
                 draw_shapes(target, snapshot.shapes, false, scene_origin)
@@ -1607,10 +1605,13 @@ pub fn run_network(
                     }
                     let settings = snapshot.room_settings;
                     let room = &game.media.rooms[snapshot.room];
+                    let origin = scene_origin(game, snapshot, view, layout.focus);
                     let gradient = gradient_layer.get(
                         &creator,
                         settings.background_gradient.as_ref(),
                         room_size,
+                        origin,
+                        [room.width, room.height],
                         settings.background.as_deref().unwrap_or(&room.background),
                     )?;
                     draw(
@@ -1618,8 +1619,8 @@ pub fn run_network(
                         game,
                         snapshot,
                         texture.as_mut().unwrap(),
-                        view,
-                        layout.focus,
+                        room_size,
+                        origin,
                         &mut particle_rects,
                         ripple_texture.as_mut(),
                         hd_texture.as_mut(),
@@ -1677,7 +1678,7 @@ pub fn run_network(
             }
             shader_pipeline.draw(
                 &mut canvas, display_shader_targets.as_mut().unwrap(), &game.media.shaders, passes,
-                snapshot.tick, FRect::new(0., 0., display[0] as f32, display[1] as f32),
+                snapshot.tick, FRect::new(0., 0., display[0] as f32, display[1] as f32), None,
                 |target| {
                     target.set_draw_color(Color::RGB(14, 14, 22));
                     target.clear();

@@ -73,7 +73,7 @@ const finite=value=>typeof value==='number'&&Number.isFinite(value)&&Math.abs(va
 const float=value=>String(value)+(/[.e]/i.test(String(value))?'':'.0');
 const literal=(value,type)=>typeof value==='boolean'?String(value):Array.isArray(value)?type+'('+value.map(float).join(', ')+')':float(value);
 const named=/^[A-Za-z][A-Za-z0-9_]{0,31}$/;
-const reserved=new Set(['resolution','time','delta_time']);
+const reserved=new Set(['resolution','room_origin','room_resolution','time','delta_time']);
 const inputId=/^n[1-9]\d{0,4}$/;
 
 export function makeShaderNode(id,kind) {

@@ -12,6 +12,8 @@ layout(std140, set = 3, binding = 0) uniform Parameters {
     float speed;
     vec3 tint;
     float radius;
+    vec2 room_origin;
+    vec2 room_resolution;
 } params;
 
 float noise(vec2 p) {
@@ -20,29 +22,32 @@ float noise(vec2 p) {
 
 void main() {
     vec2 at = uv;
+    vec2 world = uv * params.resolution + params.room_origin;
+    vec2 extent = params.room_resolution.x > 0.0 ? params.room_resolution : params.resolution;
+    vec2 room_uv = world / extent;
     float amount = clamp(params.strength / 100.0, 0.0, 1.0);
     float spacing = max(2.0, params.spacing);
     if (params.preset == 4)
-        at.x += sin(6.2831853 * (uv.y * params.resolution.y / spacing + params.time * params.speed))
+        at.x += sin(6.2831853 * (world.y / spacing + params.time * params.speed))
             * (12.0 * amount / max(1.0,params.resolution.x));
     vec4 color = texture(screen, at);
-    vec2 pixel = floor(uv * params.resolution);
+    vec2 pixel = floor(world);
     float coverage = 1.0;
     if (params.preset == 1) {
         coverage = step(spacing - 1.0, mod(pixel.y,spacing));
     } else if (params.preset == 2) {
         coverage = max(step(spacing - 1.0, mod(pixel.y,spacing)),step(spacing - 1.0,mod(pixel.x,spacing)));
     } else if (params.preset == 3) {
-        coverage = smoothstep(clamp(params.radius / 100.0,0.0,0.95), 1.414, length(uv * 2.0 - 1.0));
+        coverage = smoothstep(clamp(params.radius / 100.0,0.0,0.95), 1.414, length(room_uv * 2.0 - 1.0));
     } else if (params.preset == 4) {
         coverage = 0.0;
     } else if (params.preset == 5) {
-        coverage = 0.14 + 0.70 * smoothstep(0.34,1.0,uv.y + 0.04 * sin(uv.x * 12.0 + params.time * params.speed));
+        coverage = 0.14 + 0.70 * smoothstep(0.34,1.0,room_uv.y + 0.04 * sin(room_uv.x * 12.0 + params.time * params.speed));
     } else if (params.preset == 6) {
-        vec2 light = uv - vec2(0.22 + uv.y * 0.46,0.0);
-        coverage = exp(-160.0 * light.x * light.x) * (1.0 - 0.72 * uv.y);
+        vec2 light = room_uv - vec2(0.22 + room_uv.y * 0.46,0.0);
+        coverage = exp(-160.0 * light.x * light.x) * (1.0 - 0.72 * room_uv.y);
     } else if (params.preset == 7) {
-        vec2 delta = uv - vec2(0.25,0.27);
+        vec2 delta = room_uv - vec2(0.25,0.27);
         coverage = 0.7 * exp(-600.0 * dot(delta,delta)) + 0.3 * exp(-90.0 * dot(delta,delta));
     } else if (params.preset >= 8 && params.preset <= 10) {
         vec2 direction = params.preset == 10 ? vec2(12.0,2.0) : params.preset == 9 ? vec2(-2.0,19.0) : vec2(3.0,6.0);
