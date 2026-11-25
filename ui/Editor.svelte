@@ -10,6 +10,7 @@
   import AssetLibrary from './AssetLibrary.svelte';
   import ShaderWorkspace from './ShaderWorkspace.svelte';
   import {editableArtFile,tileAssetTitle} from '../src/asset-types.mjs';
+  import {resolveTileTag,tileTagName} from '../src/tile-tag.mjs';
   let projectPath=$state(''),filter=$state(''),instanceFilter=$state('');
   import Sections from './Sections.svelte';
   import World from './World.svelte';
@@ -52,7 +53,7 @@
   let roomOperation=$state(''), newRoomName=$state(''), newRoomView=$state('platformer');
   let pendingTileSize=$state(null), collisionLayer=$state(0);
   const tileSets=$derived(groupTiles(project?.tiles??{}));
-  let tileArt=$state.raw({}), spriteArt=$state.raw({}), previewModes=$state.raw({});
+  let tileArt=$state.raw({}), spriteArt=$state.raw({}), previewModes=$state.raw({}), authoredVariants=$state.raw({});
   let historyVersion=$state(0), selectedEntity=$state(-1), roomPanel=$state('layers');
   let scriptPanel=$state(),assetLibrary=$state(),projectTimer,projectWrite;
   let shaderTarget=$state.raw(null),shaderSession=0;
@@ -296,6 +297,7 @@
     const nextTiles=Object.fromEntries(Object.entries(tiles).map(([id,data])=>
       [id,data.variants.map((bytes,index)=>png('tile/'+id+'/'+index,bytes))]));
     const nextModes=Object.fromEntries(Object.entries(tiles).map(([id,data])=>[id,data.variantModes??data.variants.map(()=>data.mode)]));
+    const nextCounts=Object.fromEntries(Object.entries(tiles).map(([id,data])=>[id,data.authoredVariants??data.variants.length]));
     const nextSprites=Object.fromEntries(Object.entries(next.spritePreviews??{}).map(([id,bytes])=>[id,png('sprite/'+id,bytes)]));
     const nextCover=next.coverArt?png('cover',next.coverArt):'';
     await Promise.allSettled(created.map(({image})=>image.decode()));
@@ -310,6 +312,7 @@
     previewKey=key;
     if(JSON.stringify(tileArt)!==JSON.stringify(nextTiles))tileArt=nextTiles;
     if(JSON.stringify(previewModes)!==JSON.stringify(nextModes))previewModes=nextModes;
+    if(JSON.stringify(authoredVariants)!==JSON.stringify(nextCounts))authoredVariants=nextCounts;
     if(JSON.stringify(spriteArt)!==JSON.stringify(nextSprites))spriteArt=nextSprites;
     coverPreview=nextCover;
     await tick();
@@ -962,7 +965,7 @@
     }catch(err){assetError=String(err.message??err);}
     finally{busy=false;}
   }
-  function tagSlug(tag){return tag.split(':')[0].toLowerCase().replace(/[^a-z0-9_-]+/g,'-');}
+  function tagSlug(tag){return tileTagName(tag).toLowerCase().replace(/[^a-z0-9_-]+/g,'-');}
   function importNewTags(previousArt){
     let added=false;
     for(const [path,ids] of Object.entries(groupTiles(project.tiles??{}))){
@@ -976,6 +979,15 @@
             tile.tag=previous[0]??'';
             added=true;
           }
+        }
+      }
+      for(const id of ids){
+        const tile=project.tiles[id];
+        if(!tile.tag)continue;
+        const resolved=resolveTileTag(tags,tile.tag);
+        if(resolved!==undefined && resolved!==tile.tag){
+          tile.tag=resolved;
+          added=true;
         }
       }
       const first=project.tiles[ids[0]];
@@ -992,16 +1004,18 @@
     const tags=art[path]?.tags??[];
     const collection=project.tiles??={};
     const existing=Object.entries(collection).filter(([,tile])=>tile.source===path);
+    const assigned=new Set(existing.map(([,tile])=>resolveTileTag(tags,tile.tag)??tile.tag??''));
     let first=existing[0]?.[0];
     let added=false;
     for(const [index,tag] of (tags.length?tags:['']).entries()){
-      if(existing.some(([,tile])=>(tile.tag??tags[0]??'')===tag))continue;
+      if(assigned.has(tag))continue;
       const slug=tagSlug(tag);
       const base=tag?stem+'-'+(slug||String(index+1)):stem;
       let id=base,n=2;
       while(Object.hasOwn(collection,id))id=base+'-'+n++;
       const name=project.assetInfo?.[path]?.name;
       collection[id]={source:path,setPrefix:stem,tag,physics:{},...(name?{title:tileAssetTitle(name,tag)}:{})};
+      assigned.add(tag);
       added=true;
       first??=id;
     }
@@ -1264,7 +1278,7 @@
         {:else if tab!=='game'&&room}
         {#key roomId}
           <RoomMap {room} {roomId} {projectPath} size={project.tileSize??24} tiles={project.tiles??{}} sprites={project.sprites??{}}
-            {tileArt} {spriteArt} {previewModes} {previewImage} backgroundUrl={roomBackground?'./api/room-art?path='+encodeURIComponent(roomBackground)+'&revision='+(art[roomBackground]?.revision??''):undefined} {layerIndex} bind:selectedEntity bind:tileId bind:spriteId={placementSprite} bind:tool={mapTool} bind:placeAs {busy}
+            {tileArt} {spriteArt} {previewModes} {authoredVariants} {previewImage} backgroundUrl={roomBackground?'./api/room-art?path='+encodeURIComponent(roomBackground)+'&revision='+(art[roomBackground]?.revision??''):undefined} {layerIndex} bind:selectedEntity bind:tileId bind:spriteId={placementSprite} bind:tool={mapTool} bind:placeAs {busy}
             undoLabel={historyStatus.undo} redoLabel={historyStatus.redo}
             onUndo={()=>restoreEdit(true)} onRedo={()=>restoreEdit(false)} onEdit={replaceRoom}
             onLayer={chooseLayer} onSprites={inspect=>{roomPanel='instances';if(inspect)mobilePane='Settings';if(actor)selectSprite(actor.sprite);}} onAssets={openTiles}

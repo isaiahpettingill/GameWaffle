@@ -5,7 +5,8 @@ import {PNG} from 'pngjs';
 import {encode as encodeQoa} from 'qoa-format';
 import {runCodec} from '../src/asset-codec.mjs';
 import {readAseprite} from '../src/ase.mjs';
-import {compileProject} from '../src/compiler.mjs';
+import {compileProject,previewTiles} from '../src/compiler.mjs';
+import {resolveTileTag} from '../src/tile-tag.mjs';
 import {unpack} from '../src/cartridge.mjs';
 import {pack,preparePack} from '../src/pack.mjs';
 import {decodePng} from '../src/png.mjs';
@@ -105,6 +106,42 @@ assert.deepEqual(readAseprite(Buffer.concat([ase,first,later])),{
   ]
 });
 assert.throws(()=>readAseprite(Buffer.concat([ase,first,later.subarray(0,-1)])));
+
+const tileName=Buffer.from('corner:mirror-all:');
+const tileTags=Buffer.alloc(29+tileName.length);
+tileTags.writeUInt16LE(1);
+tileTags.writeUInt16LE(tileName.length,27);
+tileTags.set(tileName,29);
+const tileFrame=aseFrame([aseChunk(0x2004,layer),aseChunk(0x2019,palette),aseChunk(0x2018,tileTags),
+  aseChunk(0x2005,Buffer.concat([cel,deflateSync(Buffer.from([0,1]))]))],100);
+const tileHeader=Buffer.from(ase);
+tileHeader.writeUInt32LE(tileHeader.length+tileFrame.length);
+tileHeader.writeUInt16LE(1,6);
+tileHeader.writeUInt16LE(8,8);
+tileHeader.writeUInt16LE(8,10);
+const tileSource='assets/tiles/corner.aseprite';
+const readTile=async()=>Buffer.concat([tileHeader,tileFrame]);
+const corner={source:tileSource,tag:'corner'};
+const {corner:preview}=await previewTiles({corner},8,readTile);
+assert.equal(preview.authoredVariants,1);
+assert.deepEqual(preview.variants.map(png=>{
+  const {data}=decodePng(png);
+  const index=Math.floor(data.findIndex((value,offset)=>offset%4===3&&value===128)/4);
+  return [index%8,Math.floor(index/8)];
+}),[[1,0],[6,0],[1,7],[6,7]]);
+const tagNames=['corner:mirror-x:','corner:mirror-all:'];
+assert.equal(resolveTileTag(tagNames,'corner:mirror-x:'),tagNames[0]);
+assert.equal(resolveTileTag(tagNames,'corner'),undefined);
+assert.equal(resolveTileTag(tagNames,'edge'),undefined);
+const tileProject={name:'Corners',start:'room',tileSize:8,tiles:{corner},rooms:{
+  room:{rows:4,cols:4,layers:[{name:'Ground',cells:[[0,0,'corner'],[1,0,'corner',2]]}]},
+}};
+const mirroredGame=await compileProject('demo',{project:tileProject,store:{read:async name=>{
+  if(name===tileSource)return readTile();
+  throw Object.assign(Error('Missing fixture file'),{code:'ENOENT'});
+}}});
+assert.deepEqual(mirroredGame.tilePreviews.corner.variants,preview.variants);
+assert.equal(tileProject.tiles.corner.tag,'corner');
 
 function wavFixture({bits=16,channels=2,float=false,extended=false,frames=5151}={}){
   const sampleRate=32000, bytes=bits/8, format=extended?40:16;

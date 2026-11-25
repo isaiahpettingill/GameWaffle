@@ -11,7 +11,7 @@
   import {paintPixels,positionPixels,wheelPixels} from './pixel-display.js';
 
   let {
-    room, roomId, projectPath, size, tiles, sprites, tileArt, spriteArt, previewModes, previewImage: image, backgroundUrl, layerIndex,
+    room, roomId, projectPath, size, tiles, sprites, tileArt, spriteArt, previewModes, authoredVariants, previewImage: image, backgroundUrl, layerIndex,
     selectedEntity = $bindable(-1), tileId = $bindable(''), spriteId = $bindable(''), tool = $bindable('select'),placeAs=$bindable(''),
     undoLabel, redoLabel, onUndo, onRedo, onEdit, onLayer, onSprites, onAssets, onPlay, busy, previewOnly=false,
   } = $props();
@@ -60,7 +60,7 @@
   const tileChoices=$derived(tileIds.filter(id=>id.toLowerCase().includes(query.trim().toLowerCase())));
   function tileVariant(id, x, y, selected) {
     // Keep the appearance of rooms saved before placements stored their variant.
-    const count = tileArt[id]?.length || 1;
+    const count = authoredVariants[id] || 1;
     return selected ?? ((x * 37 + y * 17) % count);
   }
 

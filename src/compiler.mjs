@@ -10,6 +10,7 @@ import {byteCache} from './compile-cache.mjs';
 import {compileMidi} from './midi.mjs';
 import {readGameScript} from './game-script.mjs';
 import {tileScriptPath} from './tile-script.mjs';
+import {resolveTileTag} from './tile-tag.mjs';
 import {roomScriptPath} from './room-script.mjs';
 import {propertyAliases,validateCollections} from './collections.mjs';
 import {pack} from './pack.mjs';
@@ -96,12 +97,12 @@ function blit(src, dest, x, y) {
 }
 
 function transformed(source, flags) {
-  const rotate = flags.includes('rot-90');
+  const rotate = flags.includes('rot-90'), mirrorX = flags.includes('mirror-x'), mirrorY = flags.includes('mirror-y');
   const width = rotate ? source.height : source.width, height = rotate ? source.width : source.height;
   const rgba = Buffer.alloc(width * height * 4);
   for (let y = 0; y < source.height; y++) for (let x = 0; x < source.width; x++) {
-    const mx = flags.includes('mirror-x') ? source.width - x - 1 : x;
-    const my = flags.includes('mirror-y') ? source.height - y - 1 : y;
+    const mx = mirrorX ? source.width - x - 1 : x;
+    const my = mirrorY ? source.height - y - 1 : y;
     const dx = rotate ? source.height - my - 1 : mx, dy = rotate ? mx : my;
     const from = (y * source.width + x) * 4;
     source.rgba.copy(rgba, (dy * width + dx) * 4, from, from + 4);
@@ -232,13 +233,21 @@ export async function describeArt(root,store) {
 
 function tileClips(id,tile,ase,size) {
   if(ase.width!==size || ase.height!==size)throw Error(`${id}: tile art must be ${size}×${size}`);
-  const tag = tile.tag ? ase.tags.find(entry => entry.name === tile.tag) : ase.tags[0];
-  if (tile.tag && !tag) throw Error(`Missing tile tag "${tile.tag}" for ${id}`);
-  const flags = (tag?.name ?? '').split(':').slice(1, -1).filter(flag => ['animated','fluid','mirror-x','mirror-y','rot-90'].includes(flag));
+  const name = resolveTileTag(ase.tags.map(tag=>tag.name),tile.tag);
+  if (tile.tag && name===undefined) throw Error(`Missing or ambiguous tile tag "${tile.tag}" for ${id} in ${tile.source}`);
+  const tag = ase.tags.find(entry=>entry.name===name);
+  const flags = (name ?? '').split(':').slice(1, -1);
   const indices = tag ? tagFrames(tag) : ase.frames.map((_, i) => i);
-  const animated = flags.includes('animated') || flags.includes('fluid');
-  const variants = animated ? [indices] : indices.map(i => [i]);
-  return {flags,variants};
+  const fluid=flags.includes('fluid');
+  const clips = flags.includes('animated') || fluid ? [indices] : indices.map(i => [i]);
+  const transforms=flags.filter(flag=>['mirror-x','mirror-y','rot-90'].includes(flag));
+  const groups=[transforms];
+  if(flags.includes('mirror-all')){
+    const flip=(transform,axis)=>transform.includes(axis)?transform.filter(flag=>flag!==axis):[...transform,axis];
+    const x=flip(transforms,'mirror-x'),y=flip(transforms,'mirror-y');
+    groups.push(x,y,flip(x,'mirror-y'));
+  }
+  return {groups,clips,mode:fluid?'fluid':'static'};
 }
 
 export async function previewTiles(tiles,size,read) {
@@ -247,12 +256,12 @@ export async function previewTiles(tiles,size,read) {
     key(id,'tile');
     if(!sources.has(tile.source))sources.set(tile.source,await readArt(tile.source,read));
     const ase=sources.get(tile.source);
-    const {flags,variants}=tileClips(id,tile,ase,size);
-    result[id]={mode:tile.physics?.mode??(flags.includes('fluid')?'fluid':'static'),variants:variants.map(([index])=>{
+    const {groups,clips,mode}=tileClips(id,tile,ase,size);
+    result[id]={mode:tile.physics?.mode??mode,authoredVariants:clips.length,variants:groups.flatMap(flags=>clips.map(([index])=>{
       const base={width:ase.width,height:ase.height,rgba:ase.frames[index].rgba};
       const image=flags.length?transformed(base,flags):base;
       return encodePng(image.width, image.height, image.rgba);
-    })};
+    }))};
   }
   return result;
 }
@@ -416,14 +425,16 @@ export async function compileProject(root, { project: draft, scripts = new Map()
   for (const [id, tile] of Object.entries(project.tiles ?? {})) {
     key(id, 'tile');
     const ase = await source(tile.source);
-    const {flags,variants}=tileClips(id,tile,ase,size);
+    const {groups,clips,mode}=tileClips(id,tile,ase,size);
+    const variantGroups=groups.map((flags,group)=>clips.map((indices,v)=>indices.map((i,f)=>
+      register(`tile/${id}/${group*clips.length+v}/${f}`,ase,i,flags))));
     tiles[id] = {
-      variants: variants.map((indices, v) => indices.map((i, f) => register(`tile/${id}/${v}/${f}`, ase, i, flags))),
-      physics: props(tile.physics, flags.includes('fluid') ? 'fluid' : 'static'),
+      variants: variantGroups.flat(), authoredVariants:clips.length,
+      physics: props(tile.physics, mode),
       hosts:[],variantPhysics:[],
     };
     const compiled=tiles[id];
-    const sequence=compiled.variants.flat();
+    const sequences=variantGroups.map(group=>group.flat());
     for(let variant=0;variant<compiled.variants.length;variant++){
       const key='tile:'+id+':'+variant;
       const bytes=scripts.has(key)?null:await read(tileScriptPath(id,variant)).catch(error=>{if(error.code!=='ENOENT')throw error;});
@@ -435,9 +446,10 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       if(!Object.keys(script.events).length)continue;
       const name='@tile/'+id+'/'+variant;
       const clip=frames=>({frames,repeat:0,durationMs:frames.reduce((total,frame)=>total+frame.ms,0)});
-      const clips={default:clip([compiled.variants[variant][0]]),sequence:clip(sequence)};
-      for(const [index,frame] of sequence.entries())clips['frame_'+index]=clip([frame]);
-      sprites[name]={clips,program:script.events,physics:compiled.variantPhysics[variant]??compiled.physics,width:size,height:size,layer:0,animation:'default',team:0};
+      const sequence=sequences[Math.floor(variant/compiled.authoredVariants)];
+      const animations={default:clip([compiled.variants[variant][0]]),sequence:clip(sequence)};
+      for(const [index,frame] of sequence.entries())animations['frame_'+index]=clip([frame]);
+      sprites[name]={clips:animations,program:script.events,physics:compiled.variantPhysics[variant]??compiled.physics,width:size,height:size,layer:0,animation:'default',team:0};
       dependencies.set(name,script.dependencies);spriteFonts.set(name,script.fontUses);
       compiled.hosts[variant]=name;
       runtimeAbi=Math.max(runtimeAbi,scriptAbi(script),12);
@@ -607,7 +619,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         if (!tile) throw Error(`Unknown tile: ${tileId}`);
         if (cells.has(y * cols + x)) throw Error(`Duplicate tile in room ${id} at ${x}, ${y}`);
         cells.set(y * cols + x, cell);
-        const selected=variant ?? ((x * 37 + y * 17) % tile.variants.length);
+        const selected=variant ?? ((x * 37 + y * 17) % tile.authoredVariants);
         const clip = tile.variants[selected];
         if (!clip) throw Error(`Unknown variant for ${tileId}`);
         const definition=tile.variantPhysics[selected]??tile.physics;
@@ -715,7 +727,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     return encodePng(width, height, data);
   }
   const tilePreviews = Object.fromEntries(Object.entries(tiles).map(([id, tile]) =>
-    [id, { mode: tile.physics.mode, variantModes: tile.variants.map((_,index)=>tile.variantPhysics[index]?.mode??tile.physics.mode),
+    [id, { mode: tile.physics.mode, authoredVariants:tile.authoredVariants, variantModes:tile.variants.map((_,index)=>tile.variantPhysics[index]?.mode??tile.physics.mode),
       variants: tile.variants.map(clip => thumbnail(clip[0])) }]));
   const spritePreviews = Object.fromEntries(Object.entries(sprites).filter(([id])=>!id.startsWith('@')).map(([id, sprite]) =>
     [id, thumbnail((sprite.clips[sprite.animation] ?? sprite.clips.default).frames[0])]));
