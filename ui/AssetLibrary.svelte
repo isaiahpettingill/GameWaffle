@@ -86,7 +86,7 @@
         name:name.trim(),tags:tagList(tags),soundFont,compress,tileCollision,
         ...(kind==='cover'?{coverCrop:$state.snapshot(coverCrop)}:{}),
         ...(sheet?{font:{glyphWidth:width,glyphHeight:height,assignments:$state.snapshot(assignments)}}:{})});
-      type=kind;query='';tag='';selected=path;
+      selected=path;
       if(shadersOnly)onShader(undefined,path);
       nextFile();
     }catch(err){error=err.message;}finally{saving=false;}
