@@ -30,7 +30,7 @@ npm start -- --project path/to/project
 4. Select an entity in **Project**. Click the map to add an instance. You can also drag the definition to the map.
 5. Select **Play room** to save and test the room.
 
-Use **Grid** to show tile boundaries. Use **Collision** to show collision tiles. Use **Pan**, the zoom controls, and **Fit** to change the view. Use **Undo** to reverse a complete brush stroke or room edit. Use **Redo** to apply the change again.
+Use **Grid** to show tile boundaries. Use **Collision** to show collision tiles. Use **Pan**, the zoom controls, and **Fit** to change the view. Select the painting layer and toggle its visibility in **Layers**. Use **Edit → Undo** to reverse a brush stroke or room edit and **Edit → Redo** to apply it again.
 
 | Task | Shortcut |
 |---|---|
@@ -47,7 +47,7 @@ On macOS, use Command in place of Ctrl.
 
 Add an entity once. Add as many instances of that definition as necessary. Instances use the same art and script. Each instance has its own name, position, and game state.
 
-Select a placed entity on the map or in **Placed entities**. Set its position and controller assignment there. Set starting health, animation, draw layer, or facing with `instance_property` in the Room script. Use the entity script for defaults shared by all its placements.
+Select a placed entity on the map or in **Placed entities** to set its position. Set its player slot, starting health, animation, draw layer, or facing with `instance_property` in the Room script. Use the entity script for defaults shared by all its placements.
 
 To create an instance during play, use **Create instance of** in a Blockly script. Select the entity. Set the X and Y offsets in pixels from the instance that runs the block. The new instance runs the **Start** event before its first physics step.
 
@@ -133,7 +133,7 @@ Select an asset to rename it or edit its tags. Renaming updates the display name
 
 Use [demo/project.json](demo/project.json) as an example. Put art and audio files in the project's `assets/` directory. Studio rebuilds the saved project when these files change. Select **Rebuild assets** to start a rebuild manually.
 
-- **Entities.** Choose a sprite file in **Entities → New entity**. Set the physics mode. Open **Collision filter** to set the category, mask, and group. Open **Appearance** to set the visual layer. Select **Code** beside an entity in the project sidebar to open its script. Select **Blocks** or **Text** in the script editor. Studio saves each sprite script as CBOR. The compiler converts the blocks to operation codes and operands.
+- **Entities.** Choose a sprite file in **Entities → New entity**. Open **Code** and select the entity in the Project sidebar or **Script file** picker. Set its starting physics and appearance in the script. Select **Blocks** or **Text** in the script editor. Studio saves each sprite script as CBOR. The compiler converts the blocks to operation codes and operands.
 - **Tiles.** Set the project tile size to 8 × 8, 16 × 16, 24 × 24, or 32 × 32 pixels. Use the same size for all tile frames. Import the Aseprite file as a tile set. Studio creates a tile for each tag. To add a tile while Studio is open, add a tag to the Aseprite file in the project folder and save the file. The new tile appears in the room palette. Save the project to keep the tile definition. The project sidebar lists each source file once. Select a tile in the room palette to paint with it. Each frame in the tag is a variant. Use `:animated:` or `:fluid:` to play the frames in sequence. Use `:mirror-x:`, `:mirror-y:`, or `:rot-90:` to transform the frames. Use `:mirror-all:` to add horizontally flipped, vertically flipped, and doubly flipped variants after the original ones. Editing modifiers keeps the tile’s ID when its tag name still identifies it uniquely. Set tile properties in Studio.
 - **Art.** Studio reads `.ase`, `.aseprite`, and `.png` files. It uses indexed palettes, transparency, frame times, and tag playback direction. Flatten native Aseprite tilemap layers and layers with non-normal blend modes before import.
 - **Collision.** Enable collision on a room layer to use its tile physics. Available tile types include solid tiles, one-way platforms, ladders, breakable tiles, fluid zones, and rigid bodies. The compiler combines adjacent static collision tiles and makes a separate texture atlas for each room.
@@ -338,7 +338,7 @@ Use a camera block to follow an instance, show a position, or follow a selected 
 
 Use **Collections** to declare an inventory, add objects, and read or update their fields. Use **Text & HUD** to show a counter, message, or game menu. Press A to advance dialogue.
 
-Import a custom font in **Assets → Bitfonts**. Use **Set HUD font** or pick a font on a text block to change it from a script.
+To import a custom font, choose **Load asset…** in Assets and set the asset type to **Bitfont**. Select a bitfont in the asset list to edit it. Use **Set HUD font** or pick a font on a text block to change it from a script.
 
 On desktop, press **F4** to map a controller. Press each control in order. The player saves the mapping for that controller model. Press **F5** to save, **F6** to select a slot, or **F9** to load. Android has save slots in **Game menu**. The web player has a slot selector.
 

@@ -100,7 +100,7 @@ for(const width of [1280,800,390,320]){
       await field.fill('key');
       await page.locator('.asset').filter({hasText:'key.png'}).waitFor();
       await field.clear();
-
+      assert.equal(await page.getByRole('button',{name:'Bitfonts',exact:true}).count(),0);
     }
     if(tab==='World'){
       await page.getByRole('heading',{name:'World map'}).waitFor();
@@ -125,6 +125,7 @@ for(const width of [1280,800,390,320]){
     }
     if(tab==='Resources')await page.getByRole('region',{name:'Resources'}).getByRole('button',{name:'Add text…',exact:true}).waitFor();
     if(tab==='Code'){
+      assert.equal(await page.locator('.project').getByRole('button',{name:/^Open script for /}).count(),0);
       await page.getByRole('button',{name:'Blocks',exact:true}).click();
       await page.locator('.blocklySvg:visible').first().waitFor();
       await page.getByRole('button',{name:'Text',exact:true}).click();
@@ -250,9 +251,21 @@ for(const width of [1280,800,390,320]){
     const getProject=()=>page.evaluate(async()=> (await(await fetch('./api/project')).json()).project);
     const initial=(await getProject()).rooms.yard;
     const maker=initial.entities.find(actor=>actor.player===0);
-    const spriteEntry=page.locator('.project .actor-entry').getByRole('button',{name:maker.sprite,exact:true});
+    const spriteEntry=page.locator('.project').getByRole('button',{name:maker.sprite,exact:true});
     await page.getByRole('button',{name:'Brush',exact:true}).click();
     assert.equal(await spriteEntry.getAttribute('draggable'),'false');
+    assert.equal(await page.getByLabel('Layer',{exact:true}).count(),0);
+    const layersPanel=page.locator('.inspector');
+    await layersPanel.getByRole('button',{name:/^Scenery Visual only/}).click();
+    assert.equal(await layersPanel.getByLabel('Layer name').inputValue(),'Scenery');
+    await layersPanel.getByRole('button',{name:/^Terrain Collision on/}).click();
+    const rendered=()=>art.evaluate(canvas=>canvas.toDataURL());
+    const visible=await rendered();
+    await layersPanel.getByRole('button',{name:'Hide Terrain',exact:true}).click();
+    await page.getByText('Show the layer in Layers to paint it.').waitFor();
+    await until('Terrain layer hidden',async()=>await rendered()!==visible,page);
+    await layersPanel.getByRole('button',{name:'Show Terrain',exact:true}).click();
+    await until('Terrain layer visible',async()=>await rendered()===visible,page);
     const tile=page.locator('.map .tile-list').getByRole('button',{name:'stone',exact:true});
     assert.equal(await tile.getAttribute('draggable'),'true');
     await roomMap.scrollIntoViewIfNeeded();
@@ -324,7 +337,7 @@ for(const width of [1280,800,390,320]){
     await inspector.getByText('Player 1',{exact:true}).waitFor();
     assert.equal(await inspector.getByLabel('Controlled by').count(),0);
     assert.equal(await inspector.getByLabel('Respawn',{exact:true}).count(),0);
-    await inspector.getByRole('button',{name:'Configure in room script',exact:true}).waitFor();
+    await inspector.getByRole('button',{name:'Open room script',exact:true}).waitFor();
     const entityTags=inspector.getByLabel('Tags',{exact:true});
     await entityTags.fill('Room guard');
     await entityTags.press('Enter');
@@ -335,6 +348,7 @@ for(const width of [1280,800,390,320]){
       actor=>actor.player===0&&actor.components?.includes('room_guard')),page);
 
     await page.locator('.inspector').getByRole('button',{name:'Room',exact:true}).click();
+    assert.equal(await inspector.getByRole('button',{name:'Open room script',exact:true}).count(),1);
     const name=page.getByLabel('Room name'), before=await name.inputValue();
     await name.fill('Saved room');await name.press('Tab');
     await page.waitForFunction(async()=>Object.values((await(await fetch('./api/project')).json()).project.rooms).some(r=>r.title==='Saved room'));
@@ -429,7 +443,9 @@ for(const width of [1280,800,390,320]){
     await page.getByText(/^Paused at tick · instruction 0/).waitFor();
     await page.locator('.debugger code').waitFor();
     await page.getByRole('button',{name:'Close',exact:true}).click();
-    await page.getByRole('button',{name:'Open script for maker',exact:true}).click();
+    await nav.getByText('Code',{exact:true}).click();
+    await page.locator('.project').getByRole('button',{name:'maker',exact:true}).click();
+    assert.equal(await page.getByLabel('Script file').inputValue(),'entity:maker');
     await page.getByRole('button',{name:'Text',exact:true}).click();
     const code='on start\n  set_health_bar(true, "#a6e3a1", "#313244")\nend\non tick\n  apply_gravity(none)\n  if pressed.x and actor.grounded\n    animate("idle")\n    jump_force(240)\n  end\nend\n';
     await page.locator('.cm-content').fill(code);
@@ -839,39 +855,56 @@ await assetSearch.clear();
 await assetTypeFilter.selectOption('');
 await assetTagFilter.selectOption('');
 assert.ok(await assetLibrary.locator('.asset').filter({hasText:'tag-test.png'}).isVisible());
-await assetLibrary.getByRole('button',{name:'Bitfonts',exact:true}).click();
-await assetLibrary.getByRole('button',{name:'Import bitfont…'}).click();
-const bitfont=authoring.getByRole('dialog',{name:'Import Bitfont'});
+await assetTypeFilter.selectOption('font');
+const loadFontAsset=authoring.getByRole('dialog',{name:'Load asset',exact:true});
+const loadFont=async file=>{
+  const chooser=authoring.waitForEvent('filechooser');
+  await assetLibrary.getByRole('button',{name:'Load asset…',exact:true}).click();
+  await (await chooser).setFiles(file);
+  assert.equal(await loadFontAsset.getByLabel('Asset type',{exact:true}).inputValue(),'font');
+};
+const saveFont=async()=>{
+  await loadFontAsset.getByRole('button',{name:'Load asset',exact:true}).click();
+  await loadFontAsset.waitFor({state:'hidden'});
+};
 const {PNG}=require('pngjs');
 const sheet=new PNG({width:12,height:8});
 sheet.data.fill(255);
-await bitfont.locator('input[type=file]').setInputFiles({name:'Tiny.png',mimeType:'image/png',buffer:PNG.sync.write(sheet)});
-await bitfont.getByLabel('Character for cell 1').fill('A');
-await bitfont.getByLabel('Character for cell 1').press('Enter');
-await bitfont.getByLabel('Character for cell 2').fill('á');
-await bitfont.getByRole('button',{name:'Import',exact:true}).click();
-await bitfont.waitFor({state:'hidden'});
+await loadFont({name:'Tiny.png',mimeType:'image/png',buffer:PNG.sync.write(sheet)});
+await loadFontAsset.getByLabel('Character for cell 1').fill('A');
+await loadFontAsset.getByLabel('Character for cell 1').press('Enter');
+await loadFontAsset.getByLabel('Character for cell 2').fill('á');
+await saveFont();
 await until('PNG bitfont',async()=>{
   const project=await readProject();
   return project.bitfonts?.tiny?.assignments[1]==='á';
 });
-await authoring.getByRole('button',{name:'Import bitfont…'}).click();
-await bitfont.locator('input[type=file]').setInputFiles({
+await loadFont({
   name:'YAFF Face.yaff',mimeType:'text/plain',
   buffer:Buffer.from("name: Test\ncell-size: 5 7\n'A':\n  .@.\n  @@@\n  @.@\n"),
 });
-await bitfont.getByRole('button',{name:'Import',exact:true}).click();
-await bitfont.waitFor({state:'hidden'});
+await saveFont();
 await until('YAFF bitfont',async()=> Boolean((await readProject()).bitfonts?.yaff_face));
-await authoring.getByRole('button',{name:'Import bitfont…'}).click();
+await assetLibrary.getByRole('button',{name:'Create bitfont from project file…',exact:true}).click();
+const createFont=authoring.getByRole('dialog',{name:'Create Bitfont',exact:true});
+await createFont.getByRole('button',{name:'Source file',exact:true}).click();
+await authoring.getByRole('dialog',{name:'Source file',exact:true}).getByRole('button',{name:'yaff-face.yaff',exact:true}).click();
+await createFont.getByLabel('Name',{exact:true}).fill('Alternate Face');
+await createFont.getByRole('button',{name:'Create',exact:true}).click();
+await createFont.waitFor({state:'hidden'});
+await until('Bitfont from project file',async()=> (await readProject()).bitfonts?.alternate_face?.source==='assets/fonts/yaff-face.yaff');
+await assetLibrary.locator('.asset').filter({hasText:'tiny.png'}).click();
+const editFont=authoring.getByRole('dialog',{name:'Edit Bitfont',exact:true});
+await editFont.getByRole('button',{name:'Cell 2 · á',exact:true}).click();
+assert.equal(await editFont.getByLabel('Character for cell 2').inputValue(),'á');
+await editFont.getByRole('button',{name:'Cancel',exact:true}).click();
 const tagged=await fs.readFile(path.join(project,'assets','sprites','pilot.aseprite'));
 const tagOffset=tagged.indexOf('idle');
 assert.ok(tagOffset>=0);
 tagged.write('U+41',tagOffset,'ascii');
-await bitfont.locator('input[type=file]').setInputFiles({name:'Tagged.aseprite',mimeType:'application/octet-stream',buffer:tagged});
-assert.equal(await bitfont.getByLabel('Glyph width (px)').count(),0);
-await bitfont.getByRole('button',{name:'Import',exact:true}).click();
-await bitfont.waitFor({state:'hidden'});
+await loadFont({name:'Tagged.aseprite',mimeType:'application/octet-stream',buffer:tagged});
+assert.equal(await loadFontAsset.getByLabel('Glyph width (px)').count(),0);
+await saveFont();
 await until('Aseprite bitfont',async()=> Boolean((await readProject()).bitfonts?.tagged));
 await views.getByRole('button',{name:'Game',exact:true}).click();
 await authoring.getByRole('button',{name:'Open game script'}).click();

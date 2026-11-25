@@ -1,7 +1,7 @@
 <script>
   import PagedList from './PagedList.svelte';
   let spriteFilter=$state('');
-  import {Layers3,SquareUserRound,Brush,Eraser,Square,Pipette,CopyPlus,MousePointer2,Hand,Undo2,Redo2,Play,ZoomIn,ZoomOut,Grid3x3,ScanLine,Magnet} from '@lucide/svelte';
+  import {Layers3,SquareUserRound,Brush,Eraser,Square,Pipette,CopyPlus,MousePointer2,Hand,Play,ZoomIn,ZoomOut,Grid3x3,ScanLine,Magnet} from '@lucide/svelte';
   const icons={paint:Brush,erase:Eraser,rect:Square,pick:Pipette,spawn:CopyPlus,select:MousePointer2,hand:Hand};
   import { platformGravity, roomBorder } from '../src/schema.mjs';
   import { onDestroy, tick } from 'svelte';
@@ -13,7 +13,7 @@
   let {
     room, roomId, projectPath, size, tiles, sprites, tileArt, spriteArt, previewModes, authoredVariants, previewImage: image, backgroundUrl, layerIndex,
     selectedEntity = $bindable(-1), tileId = $bindable(''), spriteId = $bindable(''), tool = $bindable('select'),authoring,
-    undoLabel, redoLabel, onUndo, onRedo, onEdit, onLayer, onSprites, onAssets, onPlay, busy, previewOnly=false,
+    hiddenLayers, onEdit, onLayer, onSprites, onAssets, onPlay, busy, previewOnly=false,
   } = $props();
 
   const tools = [
@@ -30,7 +30,7 @@
   let zoom = $state(null), viewportWidth = $state(1), viewportHeight = $state(1);
   let viewport=$state(), canvas = $state(), overlay=$state(), draft = $state.raw(null), hover = $state.raw(null), gesture;
   let mapStage, artwork, artworkFrame;
-  let space = $state(false), hidden = $state({});
+  let space = $state(false);
   let shift=$state.raw({left:0,top:0}), rightPaint=false, pendingOrigin;
   let viewReady=false,cameraTimer,lastCamera;
   const cameraKey=$derived('gamewaffle.room-view.'+JSON.stringify([projectPath,roomId]));
@@ -85,7 +85,7 @@
     if (background?.complete && background.naturalWidth)ctx.drawImage(background,0,0,width,height);
     const topDown = (view.view ?? (Math.abs(view.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer')) === 'top_down';
     const entries = [
-      ...orderedLayers(view).filter(({index})=>!hidden[index]).map(entry=>({...entry, sprite:false})),
+      ...orderedLayers(view).filter(({index})=>!hiddenLayers.has(index)).map(entry=>({...entry, sprite:false})),
       ...view.entities.map((actor,index)=>({actor,index,sprite:true,order:actor.layer ?? sprites[actor.sprite]?.layer ?? 0})),
     ].sort((a,b)=>a.order-b.order || Number(a.sprite)-Number(b.sprite)
       || ((view.ySort ?? topDown) && a.sprite && b.sprite
@@ -125,7 +125,7 @@
         ctx.lineWidth = 1;
       }
       for (const {item,index} of orderedLayers(view)) {
-        if (!(authoring?.collision[index]??item.collidable) || hidden[index]) continue;
+        if (!(authoring?.collision[index]??item.collidable) || hiddenLayers.has(index)) continue;
         for (const [x,y,id,variantIndex] of item.cells) {
           const type = previewModes[id]?.[tileVariant(id,x,y,variantIndex)] ?? tiles[id]?.physics?.mode ?? 'static';
           const color = collision[type];
@@ -510,7 +510,7 @@
       gesture = {kind:'hand',id:event.pointerId,x:event.clientX,y:event.clientY,left:viewport.scrollLeft,top:viewport.scrollTop};
     } else if (tool === 'pick') {
       const layers = orderedLayers(room).reverse();
-      const match = layers.filter(({index})=>!hidden[index]).map(entry=>({
+      const match = layers.filter(({index})=>!hiddenLayers.has(index)).map(entry=>({
         ...entry, cell:entry.item.cells.find(([x,y])=>x===p.x && y===p.y),
       })).find(entry=>entry.cell);
       if (match) {
@@ -531,7 +531,7 @@
     } else {
       const layer = room.layers[layerIndex];
       const kind = erase ? 'erase' : tool;
-      if (!layer || hidden[layerIndex] || (kind !== 'erase' && !tileId)) return;
+      if (!layer || hiddenLayers.has(layerIndex) || (kind !== 'erase' && !tileId)) return;
       const selected = brushVariant();
       const randomStroke = kind === 'paint' && selected == null && tileArt[tileId]?.length > 1;
       gesture = {kind,id:event.pointerId,start:p,previous:p,layer:layerIndex,tile:tileId,variant:selected,
@@ -565,7 +565,7 @@
   function acceptedDrag(event) {
     if (busy || previewOnly) return;
     if (spriteTool && event.dataTransfer.types.includes(spriteDragType)) return spriteDragType;
-    if (tilePainter && room.layers[layerIndex] && !hidden[layerIndex] && event.dataTransfer.types.includes(tileDragType)) return tileDragType;
+    if (tilePainter && room.layers[layerIndex] && !hiddenLayers.has(layerIndex) && event.dataTransfer.types.includes(tileDragType)) return tileDragType;
   }
 
   function dragOver(event) {
@@ -735,9 +735,6 @@
     }
   }
 
-  function toggleLayer() {
-    hidden = {...hidden,[layerIndex]:!hidden[layerIndex]};
-  }
 </script>
 
 <svelte:window onresize={queueArtwork} onpagehide={saveCamera} onpointerdown={event=>{rightPaint=event.button===2&&paintContext&&viewport?.contains(event.target);}}
@@ -749,8 +746,6 @@
       <small title="Room size in tiles">{room.cols} × {room.rows}</small>
     </div>
     <div class="row">
-      <button class="icon-button" aria-label={undoLabel?'Undo '+undoLabel:'Undo'} title={undoLabel?'Undo '+undoLabel+' (Ctrl+Z)':'Undo'} disabled={!undoLabel || busy} onclick={onUndo}><Undo2 size={15}/></button>
-      <button class="icon-button" aria-label={redoLabel?'Redo '+redoLabel:'Redo'} title={redoLabel?'Redo '+redoLabel+' (Ctrl+Shift+Z)':'Redo'} disabled={!redoLabel || busy} onclick={onRedo}><Redo2 size={15}/></button>
       {#if onPlay}<a class="button room-play" aria-label="Play room" title="Play the saved room" aria-disabled={busy}
         href={busy?undefined:`./player.html?playtest=1&room=${encodeURIComponent(roomId)}`} onclick={onPlay}><Play size={14}/><span>Play room</span></a>{/if}
     </div>
@@ -809,7 +804,7 @@
   {#if collisionView}<div class="legend"><span class="solid">Solid</span><span class="one-way">One-way</span><span class="fluid">Fluid</span><span class="ladder">Ladder</span><span class="dynamic">Moving</span><span class="breakable">Breakable</span><span class="sensor">Sensor</span></div>{/if}
   {#if spriteTool}
     {#if tool==='spawn'}
-      <div class="palette">
+      <div class="palette placement-palette">
         <strong>Entity type</strong><div class="field-row"><label>Find an entity<input type="search" bind:value={spriteFilter}></label></div>
         <div class="tile-list">
           <PagedList items={Object.keys(sprites)} query={spriteFilter} label="sprite choices" size={12}>{#snippet children(id)}
@@ -846,13 +841,7 @@
         </div>
       {:else if query}<p class="muted">No tiles match the search.</p>{/if}
       {#if tileIds.length}<div class="brush-options field-row">
-        {#if room.layers[layerIndex]}
-          <label>Layer <select aria-label="Layer" value={layerIndex} onchange={event=>onLayer(Number(event.currentTarget.value))}>
-            {#each orderedLayers(room).reverse() as {item,index}}<option value={index}>{item.name}</option>{/each}
-          </select></label>
-          <button aria-pressed={Boolean(hidden[layerIndex])} onclick={toggleLayer}>{hidden[layerIndex] ? 'Show layer' : 'Hide layer'}</button>
-          {#if hidden[layerIndex]}<small>Show the layer to paint it.</small>{/if}
-        {/if}
+        {#if hiddenLayers.has(layerIndex)}<small>Show the layer in Layers to paint it.</small>{/if}
         {#if tileArt[tileId]?.length > 1}
           <label>Variant <select aria-label="Variant" bind:value={variant}><option value="auto">Random</option>
             {#each tileArt[tileId] as _, index}<option value={String(index)}>{index+1}</option>{/each}
@@ -865,6 +854,7 @@
 
 <style>
   .map{display:flex;flex-direction:column;flex:1;min-height:0;overflow:auto;container-type:inline-size}
+  @media(min-width:1101px){.placement-palette{display:none}}
   .preview .viewport{border-block:0}
   .maphead,.view-tools{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem;}
   .maphead{flex:none;flex-wrap:nowrap;padding:.35rem .45rem}

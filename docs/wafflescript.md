@@ -164,7 +164,7 @@ end
 
 ## HUD text
 
-Under **Text**, use **Draw HUD text** to give a label a font, a screen anchor, and pixel offsets. Use the same name to update the label or remove it with **Hide HUD element**. Right and bottom offsets move the text inward from those edges. Use **Set HUD font** to choose the font for counters, dialogue, and menus. The font pickers list the fonts from **Game → Bitfonts**.
+Under **Text**, use **Draw HUD text** to give a label a font, a screen anchor, and pixel offsets. Use the same name to update the label or remove it with **Hide HUD element**. Right and bottom offsets move the text inward from those edges. Use **Set HUD font** to choose the font for counters, dialogue, and menus. The font pickers list bitfonts registered in Assets.
 
 ```ruby
 on start

@@ -103,7 +103,7 @@
     suggestedKind=type||initialKind;
     if(!saving)enqueue(event.dataTransfer.files);
   }
-  export function pick(type=initialKind) {
+  function pick(type=initialKind) {
     suggestedKind=type;
     picker.click();
   }
@@ -170,8 +170,6 @@
     <h2>{shadersOnly?'Shaders':'Assets'}</h2>
     {#if shadersOnly}
       <button type="button" class="primary" onclick={()=>onShader()}><Plus size={15}/>New shader…</button>
-    {:else}
-      <button type="button" aria-pressed={type==='font'} onclick={()=>type=type==='font'?'':'font'}><Type size={15}/>Bitfonts</button>
     {/if}
   </header>
   <div role="region" aria-label={shadersOnly?'Shader drop zone':'Asset drop zone'} class="dropzone" class:dragging

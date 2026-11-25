@@ -1,6 +1,6 @@
 <script>
   import productIcon from '../packaging/gamewaffle.svg?inline';
-  import {Network,Blocks,Images,Settings2,Play,DoorOpen as RoomIcon,Layers3,Search,SquareUserRound,Plus,Sparkles,Database,ExternalLink} from '@lucide/svelte';
+  import {Network,Blocks,Images,Settings2,Play,DoorOpen as RoomIcon,Layers3,Search,SquareUserRound,Plus,Sparkles,Database,ExternalLink,Eye,EyeOff} from '@lucide/svelte';
   const viewIcons={world:Network,room:RoomIcon,actors:SquareUserRound,blocks:Blocks,assets:Images,shaders:Sparkles,resources:Database,game:Settings2};
   import { buttons, platformGravity } from '../src/schema.mjs';
   import {roomSettingKeys} from '../src/room-script.mjs';
@@ -53,6 +53,7 @@
   const tileSets=$derived(groupTiles(project?.tiles??{}));
   let tileArt=$state.raw({}), spriteArt=$state.raw({}), previewModes=$state.raw({}), authoredVariants=$state.raw({});
   let historyVersion=$state(0), selectedEntity=$state(-1), roomPanel=$state('layers');
+  let hiddenLayers=$state.raw(new Set());
   let scriptPanel=$state(),assetLibrary=$state(),projectTimer,projectWrite;
   let shaderTarget=$state.raw(null),shaderSession=0;
   const shaderDrafts=new Map();
@@ -401,8 +402,12 @@
   }
   function applyProject(serialized,record){
     const previousTiles=JSON.stringify(project.tiles);
+    const previousLayerCount=room?.layers?.length;
     project=JSON.parse(serialized);
-    if(!project.rooms[roomId])roomId=project.start??Object.keys(project.rooms)[0];
+    if(!project.rooms[roomId]){
+      roomId=project.start??Object.keys(project.rooms)[0];
+      hiddenLayers=new Set();
+    }else if(project.rooms[roomId].layers?.length!==previousLayerCount)hiddenLayers=new Set();
     if(roomCode&&!project.rooms[roomCode])roomCode=roomId;
     if(!project.sprites?.[spriteId])spriteId=Object.keys(project.sprites??{})[0]??'';
     if(!project.sprites?.[codeSpriteId])codeSpriteId=spriteId;
@@ -566,6 +571,11 @@
     layerIndex=index;
     roomPanel='layers';
   }
+  function toggleLayer(index){
+    const next=new Set(hiddenLayers);
+    if(!next.delete(index))next.add(index);
+    hiddenLayers=next;
+  }
   function changeLayer(key,value){
     if(key==='name' && !value.trim())return;
     editRoom(next=>{next.layers[layerIndex][key]=value;});
@@ -590,6 +600,8 @@
   function removeLayer(){
     if(room.layers.length<2)return;
     editRoom(next=>next.layers.splice(layerIndex,1),'removal of '+layer.name);
+    hiddenLayers=new Set([...hiddenLayers].filter(index=>index!==layerIndex)
+      .map(index=>index>layerIndex?index-1:index));
     layerIndex=Math.min(layerIndex,room.layers.length-1);
     roomOperation='';
   }
@@ -679,7 +691,7 @@
       mapTool='spawn';
       return;
     }
-    openDefinition(id,tab==='actors'?'actors':'blocks');
+    openDefinition(id,tab==='blocks'?'blocks':'actors');
   }
   function dragDefinition(event,id){
     event.dataTransfer.setData(spriteDragType,id);
@@ -697,12 +709,6 @@
   function openTiles(){
     assetKind='tile';
     openTab('assets');
-  }
-  async function uploadTiles(){
-    if(busy)return;
-    openTiles();
-    await tick();
-    assetLibrary?.pick('tile');
   }
   async function selectTileset(path,id){
     openTiles();
@@ -722,7 +728,7 @@
       return;
     }
     if(id!==roomId){
-      roomPanel='layers';selectedEntity=-1;dimensions=null;mapTool='select';
+      roomPanel='layers';selectedEntity=-1;dimensions=null;mapTool='select';hiddenLayers=new Set();
       roomId=id;layerIndex=chooseInitialLayer(project.rooms[id]);
       inlinePlaytest=false;
     }
@@ -1098,8 +1104,8 @@
       </div>
     </details>
     <details name="studio-menu" class="export-menu"><summary>Edit</summary><div class="card">
-      <button disabled={scriptDirty||!historyStatus.undo} onclick={()=>restoreEdit(true)}>{historyStatus.undo?'Undo '+historyStatus.undo:'Undo'}</button>
-      <button disabled={scriptDirty||!historyStatus.redo} onclick={()=>restoreEdit(false)}>{historyStatus.redo?'Redo '+historyStatus.redo:'Redo'}</button>
+      <button disabled={busy||scriptDirty||!historyStatus.undo} onclick={()=>restoreEdit(true)} aria-keyshortcuts="Control+Z Meta+Z">{historyStatus.undo?'Undo '+historyStatus.undo:'Undo'}</button>
+      <button disabled={busy||scriptDirty||!historyStatus.redo} onclick={()=>restoreEdit(false)} aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z">{historyStatus.redo?'Redo '+historyStatus.redo:'Redo'}</button>
     </div></details>
     <details name="studio-menu" class="export-menu"><summary>Tools</summary><div class="card">
       <button onclick={debugRoom} disabled={busy||!project}>Debug room</button>
@@ -1181,21 +1187,21 @@
           </button>
         {/snippet}</PagedList>
       </div>
-      <div class="category">
-        <div class="heading row"><h3>Entities</h3><button class="small-button icon-button" title="Create entity" aria-label="Create entity" onclick={openEntityForm}><Plus size={14}/></button></div>
+      {#if tab!=='actors'}<div class="category">
+        <div class="heading row"><h3>Entities</h3></div>
         <PagedList items={Object.keys(project.sprites??{})} label="entities" query={filter} text={id=>project.sprites[id].title??id}>{#snippet children(id)}
-          {@const selected=tab==='room'?mapTool==='spawn'&&placementSprite===id:tab==='actors'?spriteId===id:tab==='blocks'&&!gameCode&&!activeTileCode&&!activeRoomCode&&codeSpriteId===id}
-          <div class="actor-entry"><button class="item" class:selected
-            aria-pressed={tab==='blocks'?selected:undefined}
+          {@const selected=tab==='room'?mapTool==='spawn'&&placementSprite===id:tab==='blocks'&&!gameCode&&!activeTileCode&&!activeRoomCode&&codeSpriteId===id}
+          <button class="item" class:selected
+            aria-pressed={authoringView?selected:undefined}
             draggable={tab==='room' && ['spawn','select'].includes(mapTool)} ondragstart={event=>dragDefinition(event,id)}
-            title={tab==='room' ? 'Choose entity for placement' : 'Select entity'}
+            title={tab==='room'?'Choose entity for placement':tab==='blocks'?'Open entity script':'Open entity type'}
             onclick={()=>chooseDefinition(id)}>
             {#if spriteArt[id]}<img src={spriteArt[id]} alt="" draggable="false">{:else}<SquareUserRound size={14}/>{/if}<span>{project.sprites[id].title??id}</span>
-          </button><button class="script-link" title={'Open script for '+id} aria-label={'Open script for '+id} onclick={()=>openDefinition(id,'blocks')}>Code</button></div>
+          </button>
         {/snippet}</PagedList>
-      </div>
+      </div>{/if}
       {#if tab!=='room'}<div class="category compact">
-        <div class="heading row"><h3>Tile sets</h3><button class="small-button icon-button" title="Add tile set" aria-label="Add tile set" onclick={uploadTiles}><Plus size={14}/></button></div>
+        <div class="heading row"><h3>Tile sets</h3></div>
         <PagedList items={Object.keys(tileSets)} label="tile sets" query={filter} text={path=>setName(path)+' '+path}>{#snippet children(path)}
           {@const first=tileSets[path][0]}
           <button class="item" title={path} class:selected={tab==='assets' && assetKind==='tile' && tile?.source===path} onclick={()=>selectTileset(path,first)}>
@@ -1214,8 +1220,7 @@
         {#key roomId}
           <RoomMap {room} {roomId} {projectPath} size={project.tileSize??24} tiles={project.tiles??{}} sprites={project.sprites??{}}
             {tileArt} {spriteArt} {previewModes} {authoredVariants} {previewImage} backgroundUrl={roomBackground?'./api/room-art?path='+encodeURIComponent(roomBackground)+'&revision='+(art[roomBackground]?.revision??''):undefined} {layerIndex} bind:selectedEntity bind:tileId bind:spriteId={placementSprite} bind:tool={mapTool} authoring={roomAuthoring[roomId]} {busy}
-            undoLabel={historyStatus.undo} redoLabel={historyStatus.redo}
-            onUndo={()=>restoreEdit(true)} onRedo={()=>restoreEdit(false)} onEdit={replaceRoom}
+            {hiddenLayers} onEdit={replaceRoom}
             onLayer={chooseLayer} onSprites={inspect=>{roomPanel='instances';if(inspect)mobilePane='Settings';}} onAssets={openTiles}
             onPlay={playtest} />
         {/key}
@@ -1283,7 +1288,7 @@
           previewFor={libraryPreview} onUpload={uploadLibraryAsset} onEdit={editLibraryAsset} onOpen={openLibraryAsset} onEditSource={editSourceFile} onShader={openShaderWorkspace}>
           {#snippet fontTools(visible)}
             <Bitfonts bind:this={bitfontsPanel} controlsVisible={visible} fonts={project.bitfonts??{}}
-              sources={assets} onImport={data=>{recordFile(data.edit,'font source import');if(!assets.includes(data.path))assets=[...assets,data.path].sort();}}
+              sources={assets}
               onSave={(id,config)=>{
                 (project.bitfonts??={})[id]=config;
                 updateDirty('bitfont settings');
@@ -1327,8 +1332,8 @@
             <button class:selected={roomPanel===id} aria-pressed={roomPanel===id} onclick={()=>roomPanel=id}>{label}</button>
           {/each}
         </div>
+        <button class="small-button room-script-link" onclick={openRoomScript}>Open room script</button>
         {#if roomPanel==='room'}
-          <button class="small-button" onclick={openRoomScript}>Open room script</button>
           <div class="row start-room">
             {#if (project.start??Object.keys(project.rooms)[0])===roomId}<small>Starting room</small>
             {:else}<button class="small-button" onclick={()=>set(project,'start',roomId)}>Set as starting room</button>{/if}
@@ -1348,13 +1353,19 @@
         {:else if roomPanel==='layers'}
           <div class="heading row mini"><h3>Draw order</h3><button class="small-button" disabled={busy} onclick={addLayer}>Add layer</button></div>
           {#each sortedLayers as {layer:item,index}}
-            <button class="item" class:selected={layerIndex===index} onclick={()=>chooseLayer(index)}>
-              <Layers3 size={14}/><span>{item.name}</span><small>{(roomAuthoring[roomId]?.collision[index]??item.collidable)?'Collision on':'Visual only'}</small>
-            </button>
+            {@const hidden=hiddenLayers.has(index)}
+            {@const visibilityAction=(hidden?'Show ':'Hide ')+item.name}
+            <div class="layer-row">
+              <button class="item" class:selected={layerIndex===index} aria-pressed={layerIndex===index} onclick={()=>chooseLayer(index)}>
+                <Layers3 size={14}/><span>{item.name}</span><small>{(roomAuthoring[roomId]?.collision[index]??item.collidable)?'Collision on':'Visual only'}</small>
+              </button>
+              <button class="small-button icon-button" aria-label={visibilityAction} title={visibilityAction} onclick={()=>toggleLayer(index)}>
+                {#if hidden}<EyeOff size={14}/>{:else}<Eye size={14}/>{/if}
+              </button>
+            </div>
           {/each}
           {#if layer}
             <label class="stack">Layer name <input value={layer.name} onchange={e=>changeLayer('name',e.currentTarget.value)}></label>
-            <button class="small-button" onclick={openRoomScript}>Configure layer in script</button>
             <label class="stack">Layer order <input type="number" min="-10000" max="10000" value={layer.order??layerIndex} onchange={e=>{
               const value=e.currentTarget.valueAsNumber;
               if(Number.isInteger(value)&&Math.abs(value)<=10000)changeLayer('order',value);
@@ -1382,7 +1393,6 @@
             <div class="row instance-source">
               <small>Entity type: {actor.sprite}</small>
               <button class="small-button" onclick={()=>openDefinition(actor.sprite)}>Edit type</button>
-              <button class="small-button" onclick={()=>openDefinition(actor.sprite,'blocks')}>Open script</button>
             </div>
             <label class="stack">Name in this room <input maxlength="64" value={actor.name} onchange={e=>changeActor('name',e.currentTarget.value)}></label>
             <div class="pair">
@@ -1393,7 +1403,6 @@
               <EntityTags tags={entityTagLabels} selected={actor.components??[]} inherited={definition?.components??[]}
                 resolveTag={resolveEntityTag} onChange={value=>changeActor('components',value)}/>
             {/key}
-            <button class="small-button" onclick={openRoomScript}>Configure in room script</button>
             <button class="small-button remove" onclick={()=>{editRoom(next=>next.entities.splice(selectedEntity,1));selectedEntity=-1;}}>Remove from room</button>
           {/if}
         {/if}
@@ -1482,7 +1491,8 @@
   {/if}
 {/if}
 <style>
-  .actor-entry{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center}.script-link{color:var(--accent);background:transparent}
+  .layer-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:.25rem}
+  .room-script-link{margin-bottom:.45rem}
   .update-panel{display:grid;gap:.45rem;padding:.55rem .75rem}.update-panel strong{min-width:8rem}
   .project-path{display:block;overflow-wrap:anywhere;font-size:.69rem;margin-bottom:.4rem}.project-filter{display:flex;align-items:center;gap:.3rem}.project-filter input{min-width:0}.actions{flex:1;}
   .actions{min-width:0;flex-wrap:nowrap}.actions .status{flex:1;text-align:end;margin-left:auto;}

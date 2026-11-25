@@ -106,13 +106,8 @@
 <svelte:window onclick={closeMenus} onkeydown={keys}/>
 <header class="projectbar"><img src={icon} width="26" height="26" alt=""><strong>GameWaffle Studio</strong></header>
 <nav class="studio-menus" aria-label="Application menu">
-  <details class="export-menu" name="menu"><summary>File</summary><div class="card">
-    <button disabled={!ready||busy} onclick={newProject}>New Project…</button>
-    <button disabled={!ready||busy} onclick={()=>pick('open')}>Open Project…</button>
-  </div></details>
   <details class="export-menu" name="menu"><summary>Tools</summary><div class="card">
     <button disabled={!ready||busy} onclick={()=>pick('default')}>Choose projects folder…</button>
-    <button disabled={!ready||busy} onclick={()=>submit('demo')}>Open Basalt Works example</button>
   </div></details>
 </nav>
 
@@ -138,7 +133,7 @@
       {/each}
     </div>
   {/if}
-  <button class="example" disabled={!ready||busy} onclick={()=>submit('demo')}><DoorOpen size={16}/>Open Example</button>
+  <button class="example" disabled={!ready||busy} onclick={()=>submit('demo')}><DoorOpen size={16}/>Open Basalt Works example</button>
   {#if error}<p role="alert">{error}</p>{/if}
 </main>
 
