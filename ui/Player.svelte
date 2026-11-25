@@ -82,7 +82,7 @@
     const fault=frame.events?.find(event=>event.kind==='script_error');
     if (fault) error=`Script ${fault.actor}/${fault.event}: ${fault.message}`;
     audio.setRoom(frame.room,frame.roomSettings);
-    for (const sound of frame.sounds) audio.play(sound,.65);
+    audio.apply(frame.sounds);
   }
   function paintFrame(frame){
     if (atlasImages[frame.room]) {

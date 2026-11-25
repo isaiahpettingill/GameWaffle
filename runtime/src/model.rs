@@ -511,6 +511,14 @@ pub enum RuntimeEvent {
     },
 }
 
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SoundCommand {
+    Play { entity: u32, sound: String },
+    Stop { entity: u32 },
+    RoomChanged,
+}
+
 #[derive(Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct RoomSettings {
@@ -693,6 +701,6 @@ pub struct Snapshot<'a> {
     pub icons: &'a BTreeMap<String, [i32; 2]>,
     pub bars: &'a BTreeMap<String, [i32; 2]>,
     pub counters: &'a BTreeMap<String, i32>,
-    pub sounds: &'a [String],
+    pub sounds: &'a [SoundCommand],
     pub events: &'a [RuntimeEvent],
 }

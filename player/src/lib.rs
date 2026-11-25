@@ -52,7 +52,7 @@ impl Game {
     }
     fn from_cartridge(bytes: &[u8], connected: u8, gamepads: Option<u8>, window: [u32; 2]) -> Result<Self, Error> {
         std::hint::black_box(
-            b"GAMEWAFFLE_CARTRIDGE_3\0GAMEWAFFLE_RUNTIME_ABI_3\0GAMEWAFFLE_RUNTIME_ABI_4\0GAMEWAFFLE_RUNTIME_ABI_5\0GAMEWAFFLE_RUNTIME_ABI_6\0GAMEWAFFLE_RUNTIME_ABI_7\0GAMEWAFFLE_RUNTIME_ABI_8\0GAMEWAFFLE_RUNTIME_ABI_9\0GAMEWAFFLE_RUNTIME_ABI_10\0GAMEWAFFLE_RUNTIME_ABI_11\0GAMEWAFFLE_RUNTIME_ABI_12\0GAMEWAFFLE_RUNTIME_ABI_13\0GAMEWAFFLE_RUNTIME_ABI_14\0GAMEWAFFLE_RUNTIME_ABI_15\0GAMEWAFFLE_RUNTIME_ABI_16\0GAMEWAFFLE_RUNTIME_ABI_17\0GAMEWAFFLE_RUNTIME_ABI_18\0GAMEWAFFLE_RUNTIME_ABI_19\0",
+            b"GAMEWAFFLE_CARTRIDGE_3\0GAMEWAFFLE_RUNTIME_ABI_3\0GAMEWAFFLE_RUNTIME_ABI_4\0GAMEWAFFLE_RUNTIME_ABI_5\0GAMEWAFFLE_RUNTIME_ABI_6\0GAMEWAFFLE_RUNTIME_ABI_7\0GAMEWAFFLE_RUNTIME_ABI_8\0GAMEWAFFLE_RUNTIME_ABI_9\0GAMEWAFFLE_RUNTIME_ABI_10\0GAMEWAFFLE_RUNTIME_ABI_11\0GAMEWAFFLE_RUNTIME_ABI_12\0GAMEWAFFLE_RUNTIME_ABI_13\0GAMEWAFFLE_RUNTIME_ABI_14\0GAMEWAFFLE_RUNTIME_ABI_15\0GAMEWAFFLE_RUNTIME_ABI_16\0GAMEWAFFLE_RUNTIME_ABI_17\0GAMEWAFFLE_RUNTIME_ABI_18\0GAMEWAFFLE_RUNTIME_ABI_19\0GAMEWAFFLE_RUNTIME_ABI_20\0",
         );
         let mut runtime = Runtime::from_cartridge_with_view(bytes, None, connected, gamepads, window[0], window[1], false)?;
         runtime.set_seed(
@@ -1411,7 +1411,7 @@ pub fn run_network(
                     }
                 }
                 for sound in game.runtime.sounds() {
-                    if let Err(error) = mixer.play(sound, &game.media.audio, false, 0.65) {
+                    if let Err(error) = mixer.apply(sound, &game.media.audio) {
                         eprintln!("{error}");
                     }
                 }

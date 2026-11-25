@@ -1,4 +1,5 @@
 use crate::media::Sound;
+use gamewaffle_runtime::SoundCommand;
 use sdl3::{
     AudioSubsystem,
     audio::{AudioFormat, AudioSpec, AudioStreamOwner},
@@ -162,6 +163,7 @@ pub(super) fn decode(sound: &Sound) -> Result<Samples, Error> {
 struct Voice {
     stream: AudioStreamOwner,
     data: Rc<Samples>,
+    entity: Option<u32>,
     looping: bool,
     cursor: usize,
 }
@@ -188,6 +190,17 @@ impl Mixer {
         sounds: &BTreeMap<String, Sound>,
         looping: bool,
         gain: f32,
+    ) -> Result<(), Error> {
+        self.play_voice(id, sounds, looping, gain, None)
+    }
+
+    fn play_voice(
+        &mut self,
+        id: &str,
+        sounds: &BTreeMap<String, Sound>,
+        looping: bool,
+        gain: f32,
+        entity: Option<u32>,
     ) -> Result<(), Error> {
         let Some(audio) = &self.audio else {
             return Ok(());
@@ -218,10 +231,26 @@ impl Mixer {
         self.voices.push(Voice {
             stream,
             data,
+            entity,
             looping,
             cursor: 0,
         });
         Ok(())
+    }
+    pub fn apply(&mut self, command: &SoundCommand, sounds: &BTreeMap<String, Sound>) -> Result<(), Error> {
+        match command {
+            SoundCommand::Play { entity, sound } => self.play_voice(sound, sounds, false, 0.65, Some(*entity)),
+            SoundCommand::Stop { entity } => {
+                self.voices.retain(|voice| voice.entity != Some(*entity));
+                Ok(())
+            }
+            SoundCommand::RoomChanged => {
+                for voice in &mut self.voices {
+                    voice.entity = None;
+                }
+                Ok(())
+            }
+        }
     }
     pub fn room(&mut self, music: Option<&str>, ambience: Option<&str>) -> bool {
         if self.tracks[0].as_deref() == music && self.tracks[1].as_deref() == ambience {

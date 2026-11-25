@@ -240,6 +240,7 @@ impl Program {
                 148 => "WW",
                 149 => "NW",
                 150 => "WW",
+                151 => "W",
                 2 => "WWW",
                 3 | 9 => "NWW",
                 5 | 7 | 8 => "N",
@@ -307,7 +308,7 @@ impl Program {
                     b'o' if opcode == 137 => index < 3,
                     b'o' if opcode == 138 => index < 2,
                     b'o' if opcode == 143 => index < 31,
-                    b'o' if opcode == 50 => index < 21,
+                    b'o' if opcode == 50 => index < 22,
                     b'o' if opcode == 126 => index < 6,
                     b'o' if opcode == 49 => matches!(index, 20 | 21 | 22 | 33 | 37),
                     b'o' => index < 34,
@@ -597,7 +598,7 @@ impl Machine {
 
 // The loader resolves each opcode once. Each handler reads the next handler
 // address directly from the decoded instruction stream.
-const HANDLERS: [Handler; 151] = [
+const HANDLERS: [Handler; 152] = [
     execute::<0>,
     execute::<1>,
     execute::<2>,
@@ -749,6 +750,7 @@ const HANDLERS: [Handler; 151] = [
     execute::<148>,
     execute::<149>,
     execute::<150>,
+    execute::<151>,
 ];
 fn execute<const OP: u8>(
     i: &Instruction,
@@ -760,6 +762,10 @@ fn execute<const OP: u8>(
     m.pc += 1;
     cx.fuel -= 1;
     match OP {
+        151 => {
+            cx.runtime.stop_sound(entity_id(&m.registers[i.args[0] as usize]));
+            Ok(())
+        }
         144..=149 => gradient::command(OP, i, program, m, cx),
         143 => reporters::evaluate(i, m, cx),
         141 => {
@@ -1800,6 +1806,7 @@ fn entity_query(
         18 => Value::from(i64::from(runtime.entity(entity_id(a)).is_some_and(|actor| actor.clone_source.is_some()))),
         19 => Value::from(runtime.entity(entity_id(a)).and_then(|actor| actor.clone_source).map_or(0, i64::from)),
         20 => Value::Real(runtime.entity(entity_id(a)).map_or(0.0, |actor| runtime.script_mass(actor))),
+        21 => Value::from(i64::from(runtime.touching_entity(cx.id, entity_id(a)))),
         _ => Value::Real(runtime.entity(entity_id(a)).map_or(0.0, |actor| {
             f64::from(match op {
                 4 => actor.p.x,

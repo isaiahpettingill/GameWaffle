@@ -37,7 +37,7 @@ const groups = {
   looks: {name:'Appearance',color:'#6a499c',commands:['animate','animate_once','flip_sprite_x','flip_sprite_y','set_sprite_rotation',
     'rotate_sprite','set_sprite_shadow','set_entity_layer','set_room_depth_sort','burst','burst_at','emit','set_emitter','emit_for','stop_fx']},
   shaders: {name:'Shaders',color:'#805584',commands:['set_room_shader','reset_room_shader']},
-  sound: {name:'Sound',color:'#885268',commands:['sound','set_room_music','set_room_ambience']},
+  sound: {name:'Sound',color:'#885268',commands:['sound','stop_sound','set_room_music','set_room_ambience']},
   display: {name:'Display',color:'#345d79',commands:['set_display_resolution','set_adaptive_display']},
   drawing: {name:'Drawing',color:'#594aad',commands:drawingCommands},
   text: {name:'Text & HUD',color:'#5a536d',commands:['draw_text','set_hud_font','counter','bar','hide','say','ask','show_menu','set_minimap']},
@@ -428,7 +428,7 @@ const commands = (style,scope,pixelUnits) => (groups[style].commands??[])
   kind:'block',type:commandType(id),
   fields:Object.fromEntries(Blocks[id][1].filter(([,type])=>Array.isArray(type)).map(([key,,fallback])=>[key,fallback])),
   inputs:Object.fromEntries(Blocks[id][1].filter(([name,type])=>valueInput(type)||name===messageInputs[id])
-    .map(([key,type,value,optional])=>[key,key==='entity'?id==='clone_entity'&&!scope?.roomScript?slot(value):namedEntitySlot()
+    .map(([key,type,value,optional])=>[key,key==='entity'?value?.actor==='id'&&!scope?.roomScript?slot(value):namedEntitySlot()
       :id==='follow_player'?{shadow:playerShadow(value)}
       :colorInput(id,key)?colorSlot(value):(type==='number'?numericSlot:slot)(optional?null:physicsArgumentDefault(id,key,value,pixelUnits))])),
 }));

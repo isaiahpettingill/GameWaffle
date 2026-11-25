@@ -160,6 +160,7 @@ export const Blocks = {
   fire: ['Fire %1 at speed %2 with %3 damage', [['aim', ['facing','position','trajectory','heat_seek'], 'facing'], ['speed','number',8], ['amount','number',1]]],
   chase: ['Find path to nearest player at speed %1', [['speed','number',2]]],
   sound: ['Play sound %1', [['sound','text','hit']]],
+  stop_sound: ['Stop playing sounds for %1', [['entity','integer',{actor:'id'}]]],
   velocity: ['Set velocity x %1 y %2', [['x','number',0], ['y','number',0]]],
   animate: ['Play animation %1', [['tag','text','idle']]],
   room: ['Go to room %1', [['room','text','yard']]],
@@ -182,6 +183,7 @@ export const Opcodes = Object.freeze({
   reporter:143,
   set_background_gradient:144,set_gradient_axis:145,set_gradient_stop:146,set_gradient_focus:147,
   set_gradient_palette_color:148,clear_gradient_slot:149,set_split_screen:150,
+  stop_sound:151,
   set_entity_layer:130,set_entity_team:131,set_entity_max_health:132,set_entity_friction:133,set_emitter:134,
 });
 export const collectionCommands=['inventory_append','inventory_remove','inventory_set','inventory_create_child','inventory_remove_child','array_append','array_set','array_remove'];
@@ -245,6 +247,7 @@ export const entityQueries = {
   is_clone: ['Entity %1 is a clone?','boolean',[['integer',0]]],
   clone_source: ['Source of clone %1','integer',[['integer',0]]],
   mass: ['Mass of entity %1','real',[['integer',0]]],
+  touching: ['Touching entity %1?','boolean',[['integer',0]]],
 };
 
 

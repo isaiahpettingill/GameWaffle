@@ -5,7 +5,7 @@ Open **Code** beside an entity. Edit its script on the right and use the stage o
 Both views use one compiler. The cartridge contains register bytecode. Studio
 keeps comments with the text until you change the program in Blocks.
 
-Use the **+** on an **if** block to add **else if** or **else**. Use **−** on a branch to remove it and detach any blocks inside. Text uses `elif` for the same chain. The chain runs the first matching branch. Put independent checks in separate `if` blocks to let both run on the same tick.
+Use the **+** on an **if** block to add **else if** or **else**. Use **−** on a branch to remove it and detach any blocks inside. In Text, write `if condition then` and `elif condition then`. The `then` keyword is optional. The chain runs the first matching branch. Put independent checks in separate `if` blocks to let both run on the same tick.
 
 Long loops yield automatically and resume from the same instruction. A `wait(1)` suspends that invocation until the next tick. Keep movement in `on tick` and use a separate event such as `on pressed.a` for a sequence that waits between actions.
 
@@ -50,6 +50,20 @@ end
 ```
 
 Choose a placed entity from the searchable **Find entity** block or connect an entity query. Set the starting zoom in the room inspector under **Camera**. Zoom is a multiplier from 0.25× to 4×, and 1× uses the game’s default zoom. **Reset room camera** restores the room’s default target and zoom. Use **Set room music** and **Set room ambience** to select a sound or choose **None**. In the room inspector under **Rendering**, use **Browse…** to import a PNG or Aseprite background into the project. You can also choose an existing project image.
+
+## Entity sounds and contact
+
+In **Sound**, use **Stop playing sounds for** to cut the sound effects started by the selected entity. Use **This entity** to stop its own sounds, or **Find entity** to choose another instance. Room music and ambience keep playing.
+
+In **Entities**, use **Touching entity?** in an `if` block to check whether this entity's collider is in contact with the selected entity. Sensor overlaps also count.
+
+```ruby
+on tick
+  if entity.touching(entity.find("Switch")) then
+    stop_sound(entity.id)
+  end
+end
+```
 
 ## Sprite shadows
 

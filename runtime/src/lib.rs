@@ -20,7 +20,7 @@ mod shader_import;
 mod vm;
 
 pub use camera::{Camera, viewport, viewport_zoom};
-pub use model::{ActorView, GameSettings, HudAnchor, HudText, Input, RuntimeEvent, ShadowPlacement, Snapshot};
+pub use model::{ActorView, GameSettings, HudAnchor, HudText, Input, RuntimeEvent, ShadowPlacement, Snapshot, SoundCommand};
 pub use shader::{RoomShader, ShaderKind, ShaderPass};
 
 use model::*;
@@ -211,7 +211,7 @@ pub struct Runtime {
     blocked: HashSet<usize>,
     gates: Vec<(Spawn, Option<u32>)>,
     gates_dirty: bool,
-    sounds: Vec<String>,
+    sounds: Vec<SoundCommand>,
     events: Vec<RuntimeEvent>,
     transition: Option<String>,
     pending_start: Vec<u32>,
@@ -353,6 +353,7 @@ impl Runtime {
     pub fn reset(&mut self) -> Result<(), String> {
         self.inputs = [Input::default(); 4];
         self.tick = 0;
+        self.sounds.clear();
         self.transition = None;
         self.game_properties.player_items = Default::default();
         self.checkpoint = None;
@@ -612,8 +613,14 @@ impl Runtime {
         &self.room
     }
 
-    pub fn sounds(&self) -> &[String] {
+    pub fn sounds(&self) -> &[SoundCommand] {
         &self.sounds
+    }
+
+    fn stop_sound(&mut self, entity: u32) {
+        if entity != 0 && self.sounds.len() < 128 {
+            self.sounds.push(SoundCommand::Stop { entity });
+        }
     }
 
     pub fn events(&self) -> &[RuntimeEvent] {
@@ -840,6 +847,10 @@ impl Runtime {
 
     fn load(&mut self, id: &str) -> Result<(), String> {
         let room = self.game.rooms.get(id).ok_or("Unknown room")?.clone();
+        self.sounds.retain(|command| !matches!(command, SoundCommand::Play { .. }));
+        if !self.room.is_empty() {
+            self.sounds.push(SoundCommand::RoomChanged);
+        }
         let game_actor = self.actors.remove(&0);
         if !self.actors.is_empty() {
             let state = self.room_memory();
@@ -883,7 +894,6 @@ impl Runtime {
         self.broadcasts.clear();
         self.event_deliveries.clear();
         self.pending_instances.clear();
-        self.sounds.clear();
         self.events.clear();
         self.next = 1;
         if let Some(mut actor) = game_actor {
@@ -1705,6 +1715,12 @@ impl Runtime {
             && entity.p.x + er > tile.p.x + l && entity.p.x + el < tile.p.x + r
     }
 
+    fn touching_entity(&self, source: u32, target: u32) -> bool {
+        source != target
+            && self.contacts.pairs.contains(&(source.min(target), source.max(target)))
+            && self.entity(target).is_some_and(Actor::active)
+    }
+
     fn deliver_broadcasts(&mut self, inputs: &[Input; 4], actions: &mut Vec<Action>) {
         while let Some(signal) = self.broadcasts.front() {
             let event = format!("received.{}", signal.name);
@@ -2370,7 +2386,10 @@ impl Runtime {
                 actor.face(v, top_down);
                 actor.velocity(&mut self.world, v);
             }
-            5 if self.sounds.len() < 64 => self.sounds.push(name.into()),
+            5 if self.sounds.len() < 64 => self.sounds.push(SoundCommand::Play {
+                entity: id,
+                sound: name.into(),
+            }),
             6 => self
                 .actors
                 .get_mut(&id)

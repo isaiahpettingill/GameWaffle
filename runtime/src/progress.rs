@@ -734,6 +734,7 @@ impl Runtime {
         self.inputs = Default::default();
         self.transition = None;
         self.tick = 0;
+        self.sounds.clear();
         self.load(&state.room)?;
         self.counters = state.counters;
         self.restored = true;

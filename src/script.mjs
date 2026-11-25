@@ -125,7 +125,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
     return result;
   }
   try {
-  let scriptBorder=false,requiresAbi13=false,requiresAbi14=false,requiresAbi15=false,requiresAbi16=false,requiresAbi17=false,requiresAbi18=false,requiresAbi19=false,tileSensing=false;
+  let scriptBorder=false,requiresAbi13=false,requiresAbi14=false,requiresAbi15=false,requiresAbi16=false,requiresAbi17=false,requiresAbi18=false,requiresAbi19=false,requiresAbi20=false,tileSensing=false;
   const dependencies = new Set(), shaderUses=new Set(), backgroundUses = new Set(), shaderPresets = new Set(), fontUses = new Set();
   let scriptGravity=false,scriptJump=false,requiresAbi10=false,requiresAbi12=false;
   const events = {};
@@ -301,6 +301,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
           if(operation>=13)requiresAbi12=true;
           if(operation>=18)requiresAbi14=true;
           if(name==='mass')requiresAbi19=true;
+          if(name==='touching')requiresAbi20=true;
           const [,result,params]=query;
           if(value.args.length!==params.length)throw Error(value.call+' takes '+params.length+' arguments');
           params.forEach(([expected],index)=>{
@@ -535,6 +536,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
           if(Opcodes[block.op]>=141)requiresAbi14=true;
           if(Opcodes[block.op]>=144)requiresAbi16=true;
           if(block.op==='set_split_screen')requiresAbi18=true;
+          if(block.op==='stop_sound')requiresAbi20=true;
           const scopeError=registry&&commandScopeError(block.op,registry);
           if(scopeError)throw Error(scopeError);
           if(block.op==='set_health_bar')for(const key of ['fill','track']){
@@ -615,6 +617,6 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
     if (bytes.length >= 65535) throw Error('Script bytecode exceeds 64 KiB');
     if (bytes.length) events[event] = { b:typeof Buffer === "undefined" ? Uint8Array.from(bytes) : Buffer.from(bytes), n:names.values, k:constants.values, ...(reals.values.length ? {f:reals.values} : {}) };
   }
-  return { events, dependencies, backgroundUses, scriptBorder, shaderUses, shaderPresets, fontUses, scriptGravity, scriptJump, requiresAbi10, requiresAbi12, requiresAbi13, requiresAbi14, requiresAbi15, requiresAbi16, requiresAbi17, requiresAbi18, requiresAbi19, tileSensing };
+  return { events, dependencies, backgroundUses, scriptBorder, shaderUses, shaderPresets, fontUses, scriptGravity, scriptJump, requiresAbi10, requiresAbi12, requiresAbi13, requiresAbi14, requiresAbi15, requiresAbi16, requiresAbi17, requiresAbi18, requiresAbi19, requiresAbi20, tileSensing };
   } catch(error){error.node=current;throw error;}
 }

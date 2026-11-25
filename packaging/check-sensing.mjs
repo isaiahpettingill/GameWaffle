@@ -7,6 +7,7 @@ import {pack} from '../src/pack.mjs';
 import {reporters} from '../src/schema.mjs';
 import {formatScript,parseScript} from '../src/wafflescript.mjs';
 import {numericSlot,reporterBlock,readValue,writeValue} from '../ui/logic-blocks.js';
+import {createAudio} from '../ui/audio.js';
 import {Runtime,initSync} from '../web-built/runtime/runtime.js';
 
 const demo=JSON.parse(await readFile('demo/project.json','utf8'));
@@ -209,3 +210,75 @@ for(const [key,value] of Object.entries({'real.vx':70.5,'real.vy':-1.5,'real.mas
   assert.ok(Math.abs(Number(pixelGlobals[key])-value)<.001,`${key}: expected ${value}, got ${pixelGlobals[key]}`);
 pixelRuntime.free();
 console.log('Passed pixel gravity, velocity, mass, force, and impulse checks');
+
+const contactProject={...project,audio:demo.audio,
+  sprites:{hero:project.sprites.hero,partner:{...project.sprites.hero,physics:{mode:'dynamic',gravity:0}}},
+  rooms:{yard:{cols:20,rows:12,entities:[{sprite:'hero',name:'Hero',player:0,x:100,y:100},
+    {sprite:'partner',name:'Partner',x:100,y:100}]}}};
+const contactHero=parseScript(`on start
+  sound("hit")
+end
+on tick
+  flag.touch = entity.touching(entity.find("Partner"))
+  flag.self = entity.touching(entity.id)
+  flag.missing = entity.touching(entity.find("Missing"))
+end
+on a
+  stop_sound(entity.find("Partner"))
+  sound("hit")
+  stop_sound(entity.id)
+  sound("hit")
+end
+on b
+  set_position(200, 100)
+end`);
+const touching=contactHero.events.tick[0].value;
+assert.deepEqual(readValue(blockModel(writeValue(touching))),touching);
+assert.deepEqual(parseScript(formatScript(contactHero)),contactHero);
+const partnerSound=parseScript('on start\n sound("hit")\nend');
+const contactCart=await compileProject('demo',{project:contactProject,scripts:new Map([['hero',contactHero],['partner',partnerSound]])});
+assert.equal(contactCart.runtimeAbi,20);
+const contactRuntime=Runtime.from_cartridge(pack(contactCart));
+const start=decodeFrame(contactRuntime.step_buttons(0));
+const heroId=start.actors.find(({name})=>name==='Hero').id, partnerId=start.actors.find(({name})=>name==='Partner').id;
+assert.deepEqual(start.sounds,[heroId,partnerId].map(entity=>({kind:'play',entity,sound:'hit'})));
+contactRuntime.step_buttons(0);
+assert.deepEqual(decodeSave(contactRuntime.save_game()).flags,['touch']);
+assert.deepEqual(decodeFrame(contactRuntime.step_buttons(16)).sounds,[
+  {kind:'stop',entity:partnerId},{kind:'play',entity:heroId,sound:'hit'},
+  {kind:'stop',entity:heroId},{kind:'play',entity:heroId,sound:'hit'},
+]);
+contactRuntime.step_buttons(32);
+contactRuntime.step_buttons(0);
+assert.deepEqual(decodeSave(contactRuntime.save_game()).flags,[]);
+contactRuntime.free();
+
+const voices=[];
+let finishDecode;
+globalThis.AudioContext=class {
+  resume() { return Promise.resolve(); }
+  close() { return Promise.resolve(); }
+  decodeAudioData() { return new Promise(resolve=>finishDecode=resolve); }
+  createGain() { return {gain:{},connect(){}}; }
+  createBufferSource() {
+    return {connect(){},start(){voices.push(this);},stop(){this.stopped=true;this.onended?.();}};
+  }
+};
+const audio=createAudio();
+audio.setCart({audio:{hit:{format:'wav',data:[]}},rooms:{yard:{music:'hit'}}});
+await audio.toggle();
+audio.setRoom('yard');
+audio.apply(start.sounds);
+audio.apply([{kind:'stop',entity:heroId}]);
+finishDecode({});
+await new Promise(setImmediate);
+assert.deepEqual(voices.map(({loop})=>loop),[true,false]);
+audio.apply([{kind:'play',entity:heroId,sound:'hit'}]);
+await new Promise(setImmediate);
+audio.apply([{kind:'stop',entity:partnerId}]);
+assert.deepEqual(voices.map(voice=>Boolean(voice.stopped)),[false,true,false]);
+audio.apply([{kind:'room_changed'},{kind:'stop',entity:heroId}]);
+assert.equal(voices[2].stopped,undefined);
+audio.dispose();
+delete globalThis.AudioContext;
+console.log('Passed entity contact, ordered sound commands, and scoped browser audio cancellation');

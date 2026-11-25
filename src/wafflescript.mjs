@@ -97,7 +97,7 @@ export function parseScript(source){
   function body(){
     const rows=[];
     function branch(start){
-      const condition=expr();eol();
+      const condition=expr();eat('then');eol();
       return mark({op:'if',condition,body:body()},start);
     }
     while(peek()!==undefined && !['end','else','elif'].includes(peek())){
@@ -340,7 +340,7 @@ export function formatScript(script){
       if(b.op==='if'){
         const {branches,otherwise}=conditionalBranches(b);
         for(const [index,branch] of branches.entries()){
-          lines.push(pad+(index?'elif':'if')+' '+value(branch.condition));
+          lines.push(pad+(index?'elif':'if')+' '+value(branch.condition)+' then');
           body(branch.body,n+1);
         }
         if(otherwise){lines.push(pad+'else');body(otherwise,n+1);}

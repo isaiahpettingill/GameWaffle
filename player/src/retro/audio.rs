@@ -2,11 +2,13 @@ use crate::{
     Game,
     sound::{Samples, decode},
 };
+use gamewaffle_runtime::SoundCommand;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, rc::Rc};
 
 struct Voice {
     id: String,
+    entity: Option<u32>,
     sample: Rc<Samples>,
     position: u64,
     gain: f32,
@@ -22,6 +24,8 @@ pub(super) struct SavedAudio {
 #[derive(Deserialize, Serialize)]
 struct SavedVoice {
     id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    entity: Option<u32>,
     position: u64,
     gain: f32,
     looping: bool,
@@ -43,6 +47,7 @@ impl Audio {
                 .iter()
                 .map(|voice| SavedVoice {
                     id: voice.id.clone(),
+                    entity: voice.entity,
                     position: voice.position,
                     gain: voice.gain,
                     looping: voice.looping,
@@ -58,7 +63,7 @@ impl Audio {
                 continue;
             }
             let prev = self.voices.len();
-            self.play(game, &voice.id, voice.gain, voice.looping);
+            self.play(game, &voice.id, voice.gain, voice.looping, voice.entity);
             if let Some(restored) = self.voices.get_mut(prev) {
                 restored.position = voice.position;
             }
@@ -66,7 +71,7 @@ impl Audio {
         self.tracks = state.tracks;
     }
 
-    fn play(&mut self, game: &Game, id: &str, gain: f32, looping: bool) {
+    fn play(&mut self, game: &Game, id: &str, gain: f32, looping: bool, entity: Option<u32>) {
         if self.voices.len() >= 16 {
             return;
         }
@@ -84,6 +89,7 @@ impl Audio {
         if let Some(sample) = &self.cache[id] {
             self.voices.push(Voice {
                 id: id.to_owned(),
+                entity,
                 sample: sample.clone(),
                 position: 0,
                 gain,
@@ -101,12 +107,20 @@ impl Audio {
             self.tracks = [music.map(str::to_owned), ambience.map(str::to_owned)];
             for (id, gain) in [(music, 0.55), (ambience, 0.4)] {
                 if let Some(id) = id {
-                    self.play(game, id, gain, true);
+                    self.play(game, id, gain, true, None);
                 }
             }
         }
-        for id in game.runtime.sounds() {
-            self.play(game, id, 0.65, false);
+        for command in game.runtime.sounds() {
+            match command {
+                SoundCommand::Play { entity, sound } => self.play(game, sound, 0.65, false, Some(*entity)),
+                SoundCommand::Stop { entity } => self.voices.retain(|voice| voice.entity != Some(*entity)),
+                SoundCommand::RoomChanged => {
+                    for voice in &mut self.voices {
+                        voice.entity = None;
+                    }
+                }
+            }
         }
         let mut mix = [0f32; 1600];
         self.voices.retain_mut(|v| {

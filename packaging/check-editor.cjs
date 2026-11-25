@@ -589,6 +589,9 @@ for(const width of [1280,800,390,320]){
   local.target = entity.find("maker")
   velocity(17, 1)
   local_real.speed = math.sin(30.0)
+  if entity.touching(entity.last_spawn) then
+    stop_sound(entity.id)
+  end
   local_bool.run = local_real.speed > 0.0
   if local_bool.run
     repeat 2
@@ -601,6 +604,8 @@ end
     await page.waitForFunction(async source=>(await(await fetch('./api/script/pilot')).json()).source===source,typedCode);
     await page.getByRole('button',{name:'Blocks',exact:true}).click();
     await page.locator('.blocklyBlockCanvas').getByText('sin (°)',{exact:true}).waitFor();
+    await page.locator('.blocklyBlockCanvas').getByText('Touching entity',{exact:true}).waitFor({state:'attached'});
+    await page.locator('.blocklyBlockCanvas').getByText('Stop playing sounds for',{exact:true}).waitFor({state:'attached'});
     await page.getByRole('button',{name:'Text',exact:true}).click();
     assert.equal((await page.locator('.cm-content').innerText()).trim(),typedCode.trim());
     await page.getByRole('button',{name:'Blocks',exact:true}).click();

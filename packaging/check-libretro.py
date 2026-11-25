@@ -230,6 +230,47 @@ step((0, 1))
 dimensions(301, 207)
 assert len(geometry_updates) == 1
 unload()
+sound_cart = subprocess.check_output(
+    ['node', '--input-type=module', '-e', '''
+        import {readFileSync} from 'node:fs';
+        import {compileProject} from './src/compiler.mjs';
+        import {pack} from './src/pack.mjs';
+        import {parseScript} from './src/wafflescript.mjs';
+        const demo=JSON.parse(readFileSync('demo/project.json','utf8'));
+        const speaker={source:demo.sprites.maker.source,physics:{mode:'none'}};
+        const project={name:'Sound owners',start:'room',audio:demo.audio,
+          sprites:{hero:speaker,partner:speaker}, rooms:{room:{cols:16,rows:12,entities:[
+            {sprite:'hero',name:'Hero',player:0,x:60,y:60},{sprite:'partner',name:'Partner',x:100,y:60},
+          ]}}};
+        const plays='on start\\n sound("music")\\nend\\n';
+        const scripts=new Map([['hero',parseScript(plays+`on pressed.a
+          stop_sound(entity.id)
+        end
+        on pressed.b
+          stop_sound(entity.find("Partner"))
+        end`)],['partner',parseScript(plays)]]);
+        process.stdout.write(pack(await compileProject('demo',{project,scripts})));
+    '''],
+    cwd=Path(__file__).resolve().parents[1],
+)
+sound_buffer = c.create_string_buffer(sound_cart)
+assert load(c.byref(Game(None, c.cast(sound_buffer, ptr), len(sound_cart), None)))
+step()
+both, _ = capture()
+step()
+both_playing = audio_hashes[-1]
+assert restore(both, len(both))
+step((0, 8))  # A cuts Hero's voice.
+one_playing = audio_hashes[-1]
+assert audio[-1][1] > 0 and one_playing != both_playing
+step((0, 0))  # B cuts Partner's voice.
+silence = hashlib.sha256(bytes(1600 * 2)).digest()
+assert audio_hashes[-1] == silence
+assert restore(both, len(both))
+step((0, 0))
+assert audio_hashes[-1] == one_playing, 'Stopping either owner should leave the other voice audible'
+unload()
 function('deinit', None)()
 print('Passed libretro input, video, audio, frame-exact rollback, checkpoint, reset, and save RAM checks')
 print('Passed libretro aspect ratio, stable split-screen geometry, native HD output, and scripted resolution changes')
+print('Passed libretro entity-scoped audio stopping after rollback')

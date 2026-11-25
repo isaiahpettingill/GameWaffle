@@ -108,7 +108,9 @@ assert.throws(()=>parseScript('const speed = entity.x'),/literal/);
 
 const chain='on tick\n  if action.right\n    velocity(2, 0)\n  elif action.left\n    velocity(-2, 0)\n  else\n    velocity(0, 0)\n  end\nend\n';
 const nested=chain.replace('  elif action.left','  else\n    if action.left').replace('  end\nend','    end\n  end\nend');
+const thenChain=chain.replace(/^(  (?:if|elif) .+)$/gm,'$1 then');
+assert.deepEqual(parseScript(thenChain),parseScript(chain));
 assert.deepEqual(compileScript(parseScript(nested)),compileScript(parseScript(chain)));
-assert.match(formatScript(parseScript(nested)),/^  elif action\.left$/m);
+assert.equal(formatScript(parseScript(nested)),thenChain.trimEnd()+'\n');
 const longChain='on tick\nif false\n'+Array.from({length:40},()=> 'elif false\n').join('')+'end\nend\n';
 assert.ok(compileScript(parseScript(longChain)).events.tick.b.length>0);
