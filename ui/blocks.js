@@ -8,7 +8,7 @@ import {branchBody,branchCondition} from './conditional-block.js';
 import { Events, Blocks, buttons, controlTransfers, inputEvent, receivedEvent, timerEvent, controllerEvent, messageInputs, entityQueries, reporters, gradientCommands, tileCommands, drawingCommands, collectionCommands, commandScopeError, valueInput } from '../src/schema.mjs';
 import {roomShaders} from '../src/room-shaders.mjs';
 import {physicsArgumentDefault} from '../src/physics-units.mjs';
-import {initScope,initialPhysicsFields,initialDefinitionFields,instanceFields,spawnFields,physicsModes} from '../src/init-properties.mjs';
+import {initScope,initialFieldsFor,instanceFields,layerFields,physicsModes} from '../src/init-properties.mjs';
 import { conditionalBranches, constantType, parseParameters, variableName } from '../src/script.mjs';
 import {callArguments, callBlock, definitionBlock, enclosingRoutine, registerRoutineBlocks, routineParameters, routineSignature} from './routine-blocks.js';
 import { argumentInput, logicDefinitions, logicStatements, collectionReporterType, collectionReporters, entityQueryStyle, reporterBlock, reporterBlockType, readValue, slot, numericSlot, queryPicker, referenceSlot, roomReadings } from './logic-blocks.js';
@@ -45,7 +45,7 @@ const groups = {
 };
 // Older commands still need styling when existing code is opened or pasted.
 const legacyInventory=['show_inventory','use_selected_item','give','take','give_player','take_player','count_player','use_player_item','item_icon'];
-const commandStyles = {release_camera:'camera',fire:'combat',instance_property:'events',layer_property:'events',
+const commandStyles = {release_camera:'camera',fire:'combat',instance_property:'events',layer_property:'events',room_exit:'events',alternate_exit:'events',
   ...Object.fromEntries(legacyInventory.map(id=>[id,'collections'])),
   ...Object.fromEntries(Object.entries(groups).flatMap(([style,group])=>(group.commands??[]).map(id=>[id,style])))};
 const eventLabels = {
@@ -91,7 +91,7 @@ function blockDefinition(id, messageInput = false) {
     type:messageInput?commandType(id):'waffle_'+id, message0:statementLabels[id]??message, style:commandStyles[id],
     args0:fields.map(([name,type,fallback,optional])=>{
       if(name==='name'&&(id==='instance_property'||id==='layer_property'))
-        return {type:'field_dropdown',name,options:Object.entries(id==='instance_property'?instanceFields:spawnFields).map(([key,[label]])=>[label,key])};
+        return {type:'field_dropdown',name,options:Object.entries(id==='instance_property'?instanceFields:layerFields).map(([key,[label]])=>[label,key])};
       if (valueInput(type) || (messageInput && name===messageInputs[id]))
         return {type:'input_value',name,check:optional?['WaffleValue','WaffleNone']:'WaffleValue'};
       if (Array.isArray(type))
@@ -128,11 +128,6 @@ Blockly.defineBlocksWithJsonArray([
   {type:'waffle_init_body',message0:'Initial body: %1',style:'events',previousStatement:'waffle',nextStatement:'waffle',
     tooltip:'The compiler creates the body with this mode.',
     args0:[{type:'field_dropdown',name:'mode',options:physicsModes.map(mode=>[mode.replaceAll('_',' '),mode])}]},
-  {type:'waffle_init_property',message0:'Initial %1 = %2',style:'events',previousStatement:'waffle',nextStatement:'waffle',
-    tooltip:'Use a literal. The compiler sets this property before creating the entity or tile.',args0:[
-      {type:'field_dropdown',name:'name',options:Object.entries({...initialPhysicsFields,...initialDefinitionFields}).map(([key,label])=>[label,key])},
-      {type:'input_value',name:'value',check:'WafflePhysicsLiteral'},
-    ]},
   {type:'waffle_declare',message0:'Declare %1 %2 = %3',style:'variables',args0:[
     {type:'field_dropdown',name:'kind',options:[['global','globals'],['flag','flags'],['event','events'],['constant','constants']]},
     {type:'field_input',name:'name',text:'score'}, {type:'input_value',name:'value',check:'WaffleValue'},
@@ -187,6 +182,14 @@ Blockly.Blocks.waffle_init_properties={init(){
     tooltip:'Configure the starting properties for this '+scope+'.',
     args0:[{type:'input_statement',name:'body',check:'waffle'}],
     previousStatement:'waffle_init_properties',nextStatement:'waffle'});
+}};
+Blockly.Blocks.waffle_init_property={init(){
+  const scope=initScope(registry(this));
+  this.jsonInit({message0:'Initial %1 = %2',style:'events',previousStatement:'waffle',nextStatement:'waffle',
+    tooltip:'Use a literal to set the property before the game starts.',args0:[
+      {type:'field_dropdown',name:'name',options:Object.entries(initialFieldsFor(scope)).map(([key,label])=>[label,key])},
+      {type:'input_value',name:'value',check:'WafflePhysicsLiteral'},
+    ]});
 }};
 for(const [name,[style,message0,result,parameters]] of Object.entries(reporters)){
   const type=reporterBlockType(name);
@@ -349,7 +352,7 @@ for(const [id,[,fields]] of Object.entries(Blocks)){
       if(collectionFields.has(key)){spec.args0[i]=collectionField(this,data,key,id);return;}
       if(!Object.hasOwn(dynamicFields,key))return;
       const [list,empty]=dynamicFields[key];
-      const nullable=key==='image'||key==='font'||key==='flag'||id==='set_room_music'||id==='set_room_ambience';
+      const nullable=key==='image'||key==='font'||key==='flag'||(key==='room'&&id==='room_exit')||id==='set_room_music'||id==='set_room_ambience';
       spec.args0[i]=menu(key,()=>nullable?['',...data[list]]:data[list],empty,
         nullable?{'':key==='font'&&id==='set_hud_font'?'Game default':key==='flag'||key==='font'?empty:'None',...data[list+'Labels']}:data[list+'Labels']??{});
     });
@@ -449,7 +452,10 @@ const toolbox = (isRoom,isGame=false,isTile=false,isModule=false,pixelUnits=fals
     events:[...(isModule?[]:[...(isGame?[init('game_startup'),block('declare',{kind:'events',name:'started'},{value:'Started'})]:[]),
       init('init'),block('init_properties'),
       ...(!isRoom&&!isGame?[block('init_body',{mode:'static'}),block('init_property',{name:'density'},{value:1})]:[]),
-      ...(isRoom&&!isGame?[block('instance_property',{name:'layer'},{value:0}),block('layer_property',{name:'spawn_flag'},{value:''})]:[]),
+      ...(isGame?[block('init_property',{name:'default_font'},{value:'builtin'})]:[]),
+      ...(isRoom&&!isGame?[block('init_property',{name:'room_view'},{value:'platformer'}),
+        block('instance_property',{name:'layer'},{value:0}),block('layer_property',{name:'collidable'},{value:true}),
+        block('room_exit',{edge:'right',routing:'fixed'},{when:true,seamless:false}),block('alternate_exit',{edge:'right'})]:[]),
       block('tick'),block('timer'),block('received_event'),
       block(isTile?'tile_event':isRoom?'room_event':'world_event',{event:isTile?'begin_contact':'start'}),
       ...(!isRoom&&!isTile?[block('clone_start')]:[])]),block('event_sender'),block('event_entity')],

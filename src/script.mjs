@@ -74,7 +74,7 @@ export function compileScript(script,modules={},trace,registry){
     collections:registry?.collections??validateCollections(script.collections),
     aliases:registry?.propertyAliases??propertyAliases(script.declarations?.globals,script.declarations?.flags,registry?.items),
   };
-  const {events,physics,definition,instances,layers}=compileInitProperties(script.events,registry);
+  const {events,physics,definition,instances,layers,exits}=compileInitProperties(script.events,registry);
   const result=compileEvents(script,events,modules,trace,registry,context);
   for(const [name,r] of routines){
     const args=r.params.map((_,index)=>defaults[paramType(r,index)]);
@@ -82,7 +82,7 @@ export function compileScript(script,modules={},trace,registry){
     try{compileEvents(script,{start:[block]},modules,undefined,registry,context);}
     catch(error){if(error.node===block || !error.node)error.node=r;throw error;}
   }
-  return {...result,...(physics?{initPhysics:physics}:{}),...(definition?{definition}:{}),...(instances?{instances}:{}),...(layers?{layers}:{})};
+  return {...result,...(physics?{initPhysics:physics}:{}),...(definition?{definition}:{}),...(instances?{instances}:{}),...(layers?{layers}:{}),...(exits?{exits}:{})};
 }
 function validateScriptDefinition(script,modules,routines,registry) {
   const constants=script.constants??{};
@@ -417,7 +417,7 @@ function compileEvents(script, sourceEvents, modules, trace, registry, {collecti
         enter(depth);
         current=block;
         if(block.op==='init_properties')throw Error('Connect one Init properties block directly below On init or On game startup');
-        if(['init_property','instance_property','layer_property'].includes(block.op))throw Error('Put static properties inside Init properties');
+        if(['init_property','instance_property','layer_property','room_exit','alternate_exit'].includes(block.op))throw Error('Put static properties inside Init properties');
         if (block.op===validation)expression(block.value,0,depth+1);
         else if (block.op==='call')call(block.name,block.args,false,r=>{
           const returns=[];

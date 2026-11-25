@@ -146,8 +146,9 @@
       if(!await onBeforeSave())return false;
       const result=await fetch(endpoint(),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
       if(!result.ok)throw Error((await result.json()).error);
-      onFileEdit((await result.json()).edit,'script edit in '+(selected||sprite));original=data;
-      if(!selected)await onSave(sprite,isRoom,isGame,data,isTile);
+      const saved=await result.json();
+      onFileEdit(saved.edit,'script edit in '+(selected||sprite));original=data;
+      if(!selected)await onSave(sprite,isRoom,isGame,data,isTile,saved.roomAuthoring);
       error='';
       if(generation===editNumber){dirty=false;recovered=false;await draft.write(null);}
       return true;

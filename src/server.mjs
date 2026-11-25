@@ -15,7 +15,7 @@ import {projectStore} from './project-store.mjs';
 import {projectBasename} from './resource-name.mjs';
 import {gameScriptPath,initialGameScript,readGameScript} from './game-script.mjs';
 import {initialTileScript,tileScriptPath,tileStartsAnimated} from './tile-script.mjs';
-import {changeRoomView,initialRoomScript,roomScriptPath,roomSettingKeys} from './room-script.mjs';
+import {initialRoomScript,roomScriptPath,roomSettingKeys} from './room-script.mjs';
 import {initialPropertyRows} from './init-properties.mjs';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -27,7 +27,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import { compileProject, previewTiles, previewRoomArt, inspectBitfont, discoverAssets, describeArt, projectPath } from './compiler.mjs';
 import { encodeCbor, decodeCbor } from './cartridge.mjs';
-import { initialScript,buttons,Opcodes,platformGravity } from './schema.mjs';
+import { initialScript,buttons,Opcodes } from './schema.mjs';
 import { embedCartridge, playerTemplate } from './web-export.mjs';
 import { Runtime, initSync } from '../web-built/runtime/runtime.js';
 
@@ -366,44 +366,7 @@ const server = createServer(async (req, res) => {
         explicitBehavior(project);
         const gameScript=await readGameScript(project,store.read);
         return send(res, 200, {path:root,project, gameScript:gameScript&&{declarations:gameScript.declarations,constants:gameScript.constants,collections:gameScript.collections},
-          shaderDefinitions:cartridge?.shaderDefinitions??{}, roomBackgrounds:cartridge?.roomPreviewBackgrounds??{}, assets:await discoverAssets(root,store), art:await describeArt(root,store), revision, previewKey});
-      }
-      const viewEdit=url.pathname.match(/^\/api\/room-view\/([A-Za-z0-9_-]+)$/);
-      if(viewEdit&&req.method==='PUT'){
-        const {view}=await jsonBody(req);
-        if(!['platformer','top_down'].includes(view))throw Error('Choose a room view');
-        const id=viewEdit[1];
-        const result=await change(async()=>{
-          const project=JSON.parse(await store.read('project.json','utf8'));
-          const room=Object.hasOwn(project.rooms,id)&&project.rooms[id];
-          if(!room)throw Error('Unknown room');
-          const previous=room.view??(Math.abs(room.gravity??platformGravity)<.01?'top_down':'platformer');
-          const path=room.script??roomScriptPath(id);
-          const old=await store.read(path).catch(error=>{if(error.code!=='ENOENT')throw error;return null;});
-          const source=old&&path.endsWith('.ws')?old.toString():null;
-          const pixelUnits=project.physicsUnits==='pixels';
-          const unit=source!=null?parseScript(source):old?decodeCbor(old):initialRoomScript(room,undefined,pixelUnits);
-          const replacements=changeRoomView(unit,previous,view,pixelUnits);
-          let nextSource=source;
-          const changes=[...replacements];
-          if(source!=null)changes.sort(([left],[right])=>locations.get(right).from-locations.get(left).from);
-          for(const [current,block] of changes){
-            if(source!=null){
-              const loc=locations.get(current);
-              const text=formatScript({events:{init:[block]}}).split('\n')[1].trim();
-              nextSource=nextSource.slice(0,loc.from)+text+nextSource.slice(loc.to);
-            }
-            Object.assign(current,block);
-          }
-          room.view=view;
-          room.script=path;
-          for(const key of roomSettingKeys)delete room[key];
-          if(unit.source!=null)delete unit.source;
-          const files=new Map([[path,path.endsWith('.ws')?nextSource??formatScript(unit):encodeCbor(unit)],['project.json',JSON.stringify(project,null,2)+'\n']]);
-          const edit=await history.saveMany(files,()=>recompile(project,new Map([['room:'+id,unit]]),()=>store.save([...files])));
-          return {project,edit,revision,previewKey};
-        });
-        return send(res,200,result);
+          shaderDefinitions:cartridge?.shaderDefinitions??{}, roomBackgrounds:cartridge?.roomPreviewBackgrounds??{}, roomAuthoring:cartridge?.roomAuthoring??{}, assets:await discoverAssets(root,store), art:await describeArt(root,store), revision, previewKey});
       }
       if (url.pathname === '/api/project' && req.method === 'PUT') {
         const project = await jsonBody(req);
@@ -412,7 +375,7 @@ const server = createServer(async (req, res) => {
           const files=[['project.json',JSON.stringify(project,null,2)+'\n']], scripts=new Map();
           for(const [id,room] of Object.entries(project.rooms??{}))if(!Object.hasOwn(old.rooms,id)&&!room.script){
             if(!/^[A-Za-z0-9_-]{1,64}$/.test(id))throw Error('Invalid room name');
-            const unit=initialRoomScript(room,project.roomDefaults,project.physicsUnits==='pixels');
+            const unit=initialRoomScript(room,project.roomDefaults);
             const template=await store.read('scripts/modules/room_defaults.ws','utf8').catch(error=>{
               if(error.code!=='ENOENT')throw error;
               return null;
@@ -437,7 +400,7 @@ const server = createServer(async (req, res) => {
           }
           await recompile(project,scripts,()=>store.save(files));
         });
-        return send(res, 200, {ok:true});
+        return send(res, 200, {ok:true,roomAuthoring:cartridge?.roomAuthoring??{}});
       }
       if(url.pathname==='/api/modules' && req.method==='GET'){
         return send(res,200,(await store.list('scripts').catch(err=>{if(err.code==='ENOENT')return [];throw err;}))
@@ -488,7 +451,7 @@ const server = createServer(async (req, res) => {
           const file = (isGame?project.gameScript:isTile?null:project[collection][id].script) ?? defaultPath;
           const data = await store.read(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
           const script=data ? (isGame?await readGameScript(project,store.read):file.endsWith('.ws') ? {...parseScript(data.toString()),source:data.toString()} : decodeCbor(data)) :
-            isGame?initialGameScript(project):isTile?initialTileScript(project.tiles[id]):isRoom?initialRoomScript(project.rooms[id],undefined,project.physicsUnits==='pixels'):initialScript(project.sprites[id]);
+            isGame?initialGameScript(project):isTile?initialTileScript(project.tiles[id]):isRoom?initialRoomScript(project.rooms[id]):initialScript(project.sprites[id]);
           if(!data&&!isGame&&!isTile&&!isRoom)script.events.init[0].body.unshift(...initialPropertyRows(project.sprites[id]));
           if(url.searchParams.has('debug')){
             const labels=new WeakMap();
@@ -544,7 +507,7 @@ const server = createServer(async (req, res) => {
             const commit=()=>recompile(project,new Map([[scriptId,script]]),()=>store.save(files));
             return manifest?history.saveMany(files,commit):history.save(file,data,commit,file.endsWith('.ws')?Buffer.from(''):previous);
           });
-          return send(res, 200, {ok:true,edit});
+          return send(res, 200, {ok:true,edit,roomAuthoring:cartridge?.roomAuthoring??{}});
         }
       }
       return send(res, 404, {error:'Unknown editor route'});

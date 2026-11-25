@@ -1,6 +1,6 @@
 # Edit a script
 
-Open **Code** beside an entity. Edit its script on the right and use the stage on the left to see the selected room. The Project sidebar highlights the room or entity whose script is open. **Play here** runs the current room in the stage. **Stop** or Esc returns to the stage preview. Select **Text** to open CodeMirror. Studio saves valid edits automatically and keeps incomplete scripts as drafts.
+Open **Code** and choose a script from the **Script file** menu. **Play room…** opens a playtest with a room picker above the game. Select **Stop** or press Esc to return to the script. Use **Room** to lay out the level. Select **Text** in Code to open CodeMirror. Studio saves valid edits automatically and keeps incomplete scripts as drafts.
 
 Both views use one compiler. The cartridge contains register bytecode. Studio
 keeps comments with the text until you change the program in Blocks.
@@ -11,7 +11,7 @@ Long loops yield automatically and resume from the same instruction. A `wait(1)`
 
 ## Couch and LAN players
 
-Assign a different player slot to each playable entity in the room. Its input checks and button events then use that slot for both couch and LAN players. Use `controller_connected(1)` through `controller_connected(4)` to check the current roster. In the Game script, use `on controller connected 2` or `on controller disconnected 2` to react to changes. These events work for all four slots.
+In the Room script's initial properties, assign each playable instance a different slot with `instance_property("Goose", "player", 1)`. Slots run from 1 to 4. Use 0 to clear an existing assignment. Input checks and button events use the assigned slot for both couch and LAN players. Use `controller_connected(1)` through `controller_connected(4)` to check the current roster. In the Game script, use `on controller connected 2` or `on controller disconnected 2` to react to changes. These events work for all four slots.
 
 Players share one screen by default. To enable split-screen in the native player, add **Game settings → Split screen** to **On game startup** in the Game script, or use text.
 
@@ -29,7 +29,7 @@ For couch play, use `set_first_controller(1)` to start assigning gamepads at Pla
 
 ## Room scripts
 
-Pick a room from **Room scripts** in the script file menu. This keeps the current stage and editor view. Selecting a room in the sidebar also selects its script. Use **Room** for room settings and **Camera** for camera controls. A room script starts on each entry, runs its own tick, and reads controller 1. The room inspector supplies defaults on each entry. When you load a save, the current room state is restored before `on restored`.
+Pick a room from **Room scripts** in the script file menu or from the Code sidebar. In Blocks, use **Room** for settings and **Camera** for camera controls. A room script starts on each entry, runs its own tick, and reads controller 1. When you load a save, the current room state is restored before `on restored`.
 
 ```ruby
 on start
@@ -49,26 +49,37 @@ on tick
 end
 ```
 
-Choose a placed entity from the searchable **Find entity** block or connect an entity query. Set the starting zoom in the room inspector under **Camera**. Zoom is a multiplier from 0.25× to 4×, and 1× uses the game’s default zoom. **Reset room camera** restores the room’s default target and zoom. Use **Set room music** and **Set room ambience** to select a sound or choose **None**. In the room inspector under **Rendering**, use **Browse…** to import a PNG or Aseprite background into the project. You can also choose an existing project image.
+Choose a placed entity from the searchable **Find entity** block or connect an entity query. Set the starting zoom with `camera_zoom` in the initial properties. Zoom is a multiplier from 0.25× to 4×, and 1× uses the game’s default zoom. **Reset room camera** restores the room’s default target and zoom. Use **Set room music** and **Set room ambience** to select a sound or choose **None**. Use **Background image** in the room inspector to choose or import a PNG or Aseprite background.
 
-Set behavior in the Room script's **On init → Init room properties** block. Use **Initial property of entity** for a named placement and **Initial property of layer** for a layer's activation flag. New rooms call `room_defaults.configure()` after their generated initial properties when you define that zero-argument procedure in a module named `room_defaults`.
+Set behavior in the Room script's **On init → Init room properties** block. Use **Initial property of entity** for a named placement and **Initial property of layer** for collision and activation flags. New rooms call `room_defaults.configure()` after their generated initial properties when you define that zero-argument procedure in a module named `room_defaults`.
 
 ```ruby
 on init
   init_properties
+    property room_view = "top_down"
+    instance_property("Goose", "player", 1)
     instance_property("Goose", "health", 5)
     instance_property("Goose", "remember_state", true)
     instance_property("Berry", "respawn_mode", "never")
     layer_property("Hidden path", "spawn_flag", "path_open")
+    layer_property("Floor", "collidable", false)
+    room_exit("right", "yard", "save")
+    alternate_exit("right", "vault")
   end
 end
 ```
+
+Room view sets the defaults for gravity, borders, and depth sorting. Explicit settings for those behaviors in the Room script take precedence. Use `room_exit("right", "yard")` for a fixed destination or `room_exit("right", "")` to remove an existing route. Use `"save"` to pick a destination per save or `"crossing"` to pick on each crossing. The optional flag and required value restrict an exit to when the flag matches. For seamless scrolling, define a fixed, unflagged route on each of the two matching edges with `room_exit("right", "yard", "fixed", "", true, true)`. The World tab displays the routes.
+
+To use an imported bitfont by default, set `property default_font = "my_font"` in the Game script's **On game startup → Init properties** block. Use the font's asset ID or `"builtin"`.
 
 ### Across room changes
 
 A player controls the entity assigned to their slot in the destination room. Place and assign an entry for each slot you want in that room. Adjacent exits transfer position and velocity to the matching slot. Local variables and health start from that placement's defaults. Enable `remember_state` to restore a named entity's state when returning to its room. Use Game globals or player inventory for data shared across rooms. HUD sprites also cross rooms.
 
 ## Entity sounds and contact
+
+Set the default collider with `property collider = "box"` or `property collider = "silhouette"` in the entity script's initial properties. Draw custom shapes for individual animation frames with **Edit frame colliders…** in Entities.
 
 In **Sound**, use **Stop playing sounds for** to cut the sound effects started by the selected entity. Use **This entity** to stop its own sounds, or **Find entity** to choose another instance. Room music and ambience keep playing.
 

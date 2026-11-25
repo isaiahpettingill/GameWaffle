@@ -19,9 +19,15 @@ export function initialScript(actor){
   return {events};
 }
 export const hudAnchors=['top_left','top_center','top_right','center_left','center','center_right','bottom_left','bottom_center','bottom_right'];
+export const roomEdges=['left','right','up','down'];
 export const Blocks = {
   instance_property:['Initial property of entity %1 · %2 = %3',[['instance','text',''],['name','text','animation'],['value','value','idle']]],
   layer_property:['Initial property of layer %1 · %2 = %3',[['layer','text',''],['name','text','spawn_flag'],['value','value','']]],
+  room_exit:['Room exit %1 to %2 · routing %3 · flag %4 is %5 · seamless %6',[
+    ['edge',roomEdges,'right'],['room','text',''],['routing',['fixed','save','crossing'],'fixed','optional'],
+    ['flag','text','','optional'],['when','boolean',true,'optional'],['seamless','boolean',false,'optional'],
+  ]],
+  alternate_exit:['Add %2 as an alternate %1 exit',[['edge',roomEdges,'right'],['room','text','']]],
   set_display_resolution:['Set game resolution to %1 × %2',[['width','integer',320],['height','integer',224]]],
   set_adaptive_display:['Set adaptive display min %1 × %2 max %3 × %4 pixel zoom %5',[
     ['min_width','integer',128],['min_height','integer',128],['max_width','integer',512],['max_height','integer',512],['zoom','integer',2],

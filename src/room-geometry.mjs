@@ -14,13 +14,13 @@ export function growRoom(room,size,{left=0,top=0,right=0,bottom=0},layers=room.l
     entities:left||top?room.entities.map(entity=>({...entity,x:entity.x+left*size,y:entity.y+top*size})):room.entities};
 }
 
-export function growSeamNeighbors(rooms,id,size,growth){
+export function growSeamNeighbors(rooms,id,size,growth,routes=rooms){
   const pending=new Map();
   for(const [start,end,edges] of [['left','right',['up','down']],['top','bottom',['left','right']]]){
     if(!growth[start]&&!growth[end])continue;
     const visited=new Set([id]), queue=[id];
     for(const room of queue)for(const edge of edges){
-      const target=seamlessNeighbor(rooms,room,edge);
+      const target=seamlessNeighbor(routes,room,edge);
       if(!target||visited.has(target))continue;
       visited.add(target);queue.push(target);
       Object.assign(pending.get(target)??pending.set(target,{}).get(target),{[start]:growth[start],[end]:growth[end]});

@@ -497,11 +497,12 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     return namedFonts.get(id);
   }
   let font=builtinFont;
-  if(project.activeBitfont && !['builtin','legacy'].includes(project.activeBitfont)){
-    const config=project.bitfonts?.[project.activeBitfont];
+  const defaultFontId=gameScript?.definition?.default_font??project.activeBitfont;
+  if(defaultFontId && !['builtin','legacy'].includes(defaultFontId)){
+    const config=project.bitfonts?.[defaultFontId];
     if(!config)throw Error('Choose an installed bitfont');
-    font=await loadFont(project.activeBitfont);
-  }else if(project.font && project.activeBitfont!=='builtin'){
+    font=await loadFont(defaultFontId);
+  }else if(project.font && defaultFontId!=='builtin'){
     const image=await source(project.font);
     const characters=[...(project.fontCharacters??'')];
     const height=Math.ceil((96+characters.length)/16)*8;
@@ -513,7 +514,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     font={width:96,height,rgba:image.frames[0].rgba,
       glyphs:Object.fromEntries(characters.map((character,index)=>[character,96+index]))};
   }
-  const roomScripts=new Map();
+  const roomScripts=new Map(),roomExits=new Map();
   for (const [id, room] of Object.entries(project.rooms ?? {})) {
     key(id, 'room');
     const scriptKey='room:'+id, file=room.script??roomScriptPath(id), isText=file.endsWith('.ws');
@@ -527,6 +528,12 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       roomScripts.set(id,{unit,script});
       for(const target of script.hudSprites)hudSprites.add(target);
     }
+    const routes={...room.exits};
+    for(const [edge,exit] of roomScripts.get(id)?.script.exits??[]){
+      if(exit.targets.length)routes[edge]=exit;
+      else delete routes[edge];
+    }
+    roomExits.set(id,routes);
   }
   function includeLayerSprites(images,ids){
     for(const id of ids){
@@ -537,14 +544,14 @@ export async function compileProject(root, { project: draft, scripts = new Map()
   }
   const hudFrames=new Map();
   includeLayerSprites(hudFrames,hudSprites);
-  const rooms = Object.create(null), atlases = Object.create(null), roomPreviewBackgrounds=Object.create(null);
+  const rooms = Object.create(null), atlases = Object.create(null), roomPreviewBackgrounds=Object.create(null), roomAuthoring=Object.create(null);
   for (const [id, room] of Object.entries(project.rooms ?? {})) {
     const authored=roomScripts.get(id);
     const settings=authored?{}:room;
     const cols = integer(room.cols, 1, Math.floor(4096 / size), 'room columns');
     const rows = integer(room.rows, 1, Math.floor(4096 / size), 'room rows');
     const width = cols * size, height = rows * size;
-    const view = room.view ?? (Math.abs(room.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer');
+    const view = authored?.script.definition?.room_view ?? room.view ?? (Math.abs(room.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer');
     if (!['platformer','top_down'].includes(view)) throw Error(`Unknown room view: ${view}`);
     const gravity = view === 'top_down'?0:number(settings.gravity??platformGravity*gravityScale,-100*gravityScale,100*gravityScale,'room gravity')/gravityScale;
     const cameraZoom = number(settings.cameraZoom ?? 1, .25, 4, 'default camera zoom');
@@ -602,6 +609,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       }
     }
     const players = new Set();
+    const playerSlots=Object.create(null), collision=[];
     const names = instanceNames(room.entities ?? []);
     const usedNames = new Set();
     for (const [index, placement] of (room.entities ?? []).entries()) {
@@ -623,6 +631,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         integer(entry.player, 0, 3, 'player slot');
         if (players.has(entry.player)) throw Error(`Duplicate player slot in ${id}`);
         players.add(entry.player);
+        playerSlots[name]=entry.player;
       }
       const physics = entry.physics ? props({ ...definition.physics, ...entry.physics }, definition.physics.mode,pixelUnits) : undefined;
       const type=entityTypes.get(entry.sprite);
@@ -637,6 +646,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     }
     for (const [index, placement] of (room.layers ?? []).entries()) {
       const layer=placementProperties(placement,authored?.script.layers?.get(placement.name));
+      collision.push(Boolean(layer.collidable));
       const order = integer(layer.order ?? index, -10000, 10000, 'visual layer');
       const cells = new Map(), zone = new Map();
       const chunks = new Map();
@@ -714,8 +724,8 @@ export async function compileProject(root, { project: draft, scripts = new Map()
         down:{x:width/2,y:height+size/2,width,height:size},
       };
       for(const edge of scriptBorder||border==='closed'?Object.keys(walls):['left','right']){
-        const exit=room.exits?.[edge],opposite={left:'right',right:'left',up:'down',down:'up'}[edge];
-        const back=project.rooms[exit?.targets?.[0]]?.exits?.[opposite];
+        const exit=roomExits.get(id)[edge],opposite={left:'right',right:'left',up:'down',down:'up'}[edge];
+        const back=roomExits.get(exit?.targets?.[0])?.[opposite];
         if(exit?.adjacent && exit.mode==='fixed' && !exit.flag && back?.adjacent && back.mode==='fixed' && !back.flag && back.targets[0]===id)continue;
         const side=edge==='left'||edge==='right';
         solids.push({...walls[edge],physics,...(scriptBorder?{border:side?1:2,disabled:border==='open'||border==='sides'&&!side}:{})});
@@ -732,12 +742,13 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     for(const id of usedFonts)images.set('ui/font/'+id,await loadFont(id));
     for(const [id,image] of itemIcons)images.set(id,image);
     const exits={};
-    for(const [edge,exit] of Object.entries(room.exits??{})){
+    for(const [edge,exit] of Object.entries(roomExits.get(id))){
       if(!['left','right','up','down'].includes(edge)||!['fixed','save','crossing'].includes(exit.mode)
         || !exit.targets?.length || exit.targets.some(t=>!Object.hasOwn(project.rooms,t)))throw Error('Invalid exit in '+id);
       if(exit.flag && !Object.hasOwn(flags,exit.flag))throw Error('Unknown exit flag in '+id);
       exits[edge]={mode:exit.mode,targets:exit.targets,flag:exit.flag||null,when:exit.when??true,adjacent:exit.adjacent??false};
     }
+    roomAuthoring[id]={view,exits,collision,players:playerSlots};
     atlases[id] = atlas(images);
     const layoutKey=createHash('sha256').update(JSON.stringify({size,gravity,cols,rows,solids,entities,scriptHost})).digest('hex');
     rooms[id] = { layoutKey, scriptHost, title: room.title ?? id, ripple, shader, hd:settings.shader?.kind==='hd'?(settings.shader.strength??35):0, exits, cols, rows, width, height, size, baked, solids, entities,
@@ -766,7 +777,7 @@ export async function compileProject(root, { project: draft, scripts = new Map()
   const presetProgram=[...usedShaders].some(id=>id.startsWith('preset:'))
     ?await compileShader(await readFile(new URL('./shaders/presets.spv',import.meta.url))):null;
   return { runtimeAbi, pixelUnits, controls,items,menus,events:Object.keys(events),localization,minimap,saveId:project.saveId??project.name, name: project.name ?? 'GameWaffle game', start, rooms, atlases, sprites, audio, globals, flags, camera,
-    gameProgram:gameScript?.events,initialGlobals,collections,roomPreviewBackgrounds,
+    gameProgram:gameScript?.events,initialGlobals,collections,roomPreviewBackgrounds,roomAuthoring,
     shaders:Object.fromEntries([...usedShaders].map(id=>[id,id.startsWith('preset:')?{...presetProgram,...allShaders[id]}:allShaders[id]])),
     shaderDefinitions:Object.fromEntries(Object.entries(allShaders).map(([id,{title,uniformSize,parameters}])=>[id,{title,uniformSize,parameters}])) ,
     coverArt,tilePreviews, spritePreviews, fontGlyphs:font.glyphs,fontLayout:font.layout, fontFallbackGlyphs:font.layout||namedFonts.size?builtinFont.glyphs:undefined,

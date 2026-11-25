@@ -1,4 +1,4 @@
-import {gameCommands,roomCommands} from './schema.mjs';
+import {gameCommands,roomCommands,roomEdges} from './schema.mjs';
 
 export const physicsModes=['none','static','dynamic','kinematic','sensor','ladder','one_way','breakable','fluid'];
 export const initialPhysicsFields={
@@ -11,15 +11,24 @@ const respawnFields={respawn_mode:['Respawn mode',['default','never','on_entry',
   respawn_ticks:['Respawn delay (ticks)','integer'],respawn_flag:['Respawn flag','string'],respawn_when:['Respawn flag state','boolean']};
 const entityFields={...spawnFields,...respawnFields,
   width:['Body width','number'],height:['Body height','number'],gravity_mode:['Gravity control',['room','script']],
-  always_active:['Run off camera','boolean'],remember_state:['Remember state','boolean']};
+  collider:['Collider shape',['box','silhouette']],always_active:['Run off camera','boolean'],remember_state:['Remember state','boolean']};
 const tileFields={...spawnFields,remember_removal:['Remember destroyed tiles','boolean']};
+const roomFields={room_view:['Room view',['platformer','top_down']]};
+const gameFields={default_font:['Default bitfont','string']};
 export const instanceFields={...spawnFields,...respawnFields,remember_state:entityFields.remember_state,
   layer:['Draw layer','integer'],health:['Starting health','number'],animation:['Starting animation','string'],
-  flip_x:['Face left at start','boolean'],standard_movement:['Built-in movement','boolean']};
-export const initialDefinitionFields=Object.fromEntries(Object.entries({...entityFields,...tileFields}).map(([name,[label]])=>[name,label]));
+  flip_x:['Face left at start','boolean'],standard_movement:['Built-in movement','boolean'],player:['Player slot (0 for none)','integer']};
+export const layerFields={...spawnFields,collidable:['Enable layer collision','boolean']};
+const definitionFields={entity:entityFields,tile:tileFields,room:roomFields,game:gameFields};
+const allDefinitionFields={...entityFields,...tileFields,...roomFields,...gameFields};
+export const initialDefinitionFields=Object.fromEntries(Object.entries(allDefinitionFields).map(([name,[label]])=>[name,label]));
+export function initialFieldsFor(scope){
+  const physics=scope==='entity'||scope==='tile'?initialPhysicsFields:{};
+  return {...physics,...Object.fromEntries(Object.entries(definitionFields[scope]??{}).map(([name,[label]])=>[name,label]))};
+}
 const placementKeys={spawn_flag:'flag',spawn_when:'when',remember_state:'rememberState',
   remember_removal:'persistRemoval',flip_x:'flipX',standard_movement:'standardMovement',layer:'layer',animation:'animation',
-  width:'width',height:'height',gravity_mode:'gravityMode',always_active:'alwaysActive'};
+  width:'width',height:'height',gravity_mode:'gravityMode',collider:'collider',always_active:'alwaysActive',collidable:'collidable'};
 const respawnKeys={respawn_mode:'mode',respawn_ticks:'ticks',respawn_flag:'flag',respawn_when:'when'};
 
 export function initialPropertyRows(asset={},tile=false){
@@ -66,6 +75,7 @@ export function placementProperties(base,settings){
     if(Object.hasOwn(settings,name))result[key]=settings[name];
   }
   if(settings.health!=null)result.physics={...base.physics,health:settings.health};
+  if(settings.player!=null)result.player=settings.player===0?null:settings.player-1;
   for(const [name,key] of Object.entries(respawnKeys)){
     if(Object.hasOwn(settings,name))result.respawn={...result.respawn,[key]:settings[name]};
   }
@@ -93,7 +103,7 @@ function physicsValue(row){
 export function compileInitProperties(events,registry){
   if(events?.init?.[0]?.op!=='init_properties'&&events?.game_startup?.[0]?.op!=='init_properties')
     return {events};
-  const scope=initScope(registry), physics=Object.create(null), definition=Object.create(null), instances=new Map(), layers=new Map(), source={...events};
+  const scope=initScope(registry), physics=Object.create(null), definition=Object.create(null), instances=new Map(), layers=new Map(), exits=new Map(), source={...events};
   for(const event of ['init','game_startup']){
     if(!Array.isArray(events[event]))continue;
     const group=events[event][0];
@@ -103,12 +113,12 @@ export function compileInitProperties(events,registry){
     const rows=[];
     for(const row of group.body){
       if(row.op==='init_property'){
-        if(registry&&scope!=='entity'&&scope!=='tile')fail(row,'Physics properties belong to an entity type or tile variant');
         if(Object.hasOwn(initialDefinitionFields,row.name)){
           if(Object.hasOwn(definition,row.name))fail(row,'Set '+row.name+' only once');
-          definition[row.name]=literal(row,!registry?{...entityFields,...tileFields}:scope==='tile'?tileFields:entityFields);
+          definition[row.name]=literal(row,registry?definitionFields[scope]:allDefinitionFields);
           continue;
         }
+        if(registry&&scope!=='entity'&&scope!=='tile')fail(row,'Physics properties belong to an entity type or tile variant');
         if(Object.hasOwn(physics,row.name))fail(row,'Set '+row.name+' only once');
         physics[row.name]=physicsValue(row);
         continue;
@@ -120,8 +130,28 @@ export function compileInitProperties(events,registry){
         if(typeof name!=='string'||!name.trim()||name.length>96)fail(row,'Choose a name from the room');
         const record=values.get(name)??Object.create(null);
         if(Object.hasOwn(record,row.name))fail(row,'Set '+row.name+' only once for '+name);
-        record[row.name]=literal(row,instance?instanceFields:spawnFields);
+        record[row.name]=literal(row,instance?instanceFields:layerFields);
+        if(row.name==='player'&&(record.player<0||record.player>4))fail(row,'Choose player 1 to 4 or 0 for none');
         values.set(name,record);
+        continue;
+      }
+      if(row.op==='room_exit'||row.op==='alternate_exit'){
+        if(registry&&scope!=='room')fail(row,'Define room exits in the Room script');
+        const {edge,room:target}=row;
+        if(!roomEdges.includes(edge)||typeof target!=='string'||!/^([A-Za-z0-9_-]{1,64})?$/.test(target))
+          fail(row,'Choose an edge and a destination room');
+        if(row.op==='alternate_exit'){
+          const exit=exits.get(edge);
+          if(!target||!exit?.targets.length||exit.mode==='fixed')fail(row,'Define a random exit before adding alternates');
+          if(!exit.targets.includes(target))exit.targets.push(target);
+        }else{
+          if(exits.has(edge))fail(row,'Set the '+edge+' exit only once');
+          const mode=row.routing??'fixed',flag=row.flag??'',when=row.when??true,adjacent=row.seamless??false;
+          if(!['fixed','save','crossing'].includes(mode)||typeof flag!=='string'||typeof when!=='boolean'||typeof adjacent!=='boolean')
+            fail(row,'Use literal exit routing, flag and seamless settings');
+          if(adjacent&&(mode!=='fixed'||flag||!target))fail(row,'Seamless exits need a fixed destination and no flag');
+          exits.set(edge,{mode,targets:target?[target]:[],flag,when,adjacent});
+        }
         continue;
       }
       if(registry?!propertySets[scope].has(row.op):!Object.values(propertySets).some(set=>set.has(row.op)))
@@ -133,5 +163,5 @@ export function compileInitProperties(events,registry){
     source[event]=[...rows,...events[event].slice(1)];
   }
   return {events:source,...(Object.keys(physics).length?{physics}:{}),
-    ...(Object.keys(definition).length?{definition}:{}),...(instances.size?{instances}:{}),...(layers.size?{layers}:{})};
+    ...(Object.keys(definition).length?{definition}:{}),...(instances.size?{instances}:{}),...(layers.size?{layers}:{}),...(exits.size?{exits}:{})};
 }

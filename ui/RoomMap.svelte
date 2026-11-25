@@ -12,7 +12,7 @@
 
   let {
     room, roomId, projectPath, size, tiles, sprites, tileArt, spriteArt, previewModes, authoredVariants, previewImage: image, backgroundUrl, layerIndex,
-    selectedEntity = $bindable(-1), tileId = $bindable(''), spriteId = $bindable(''), tool = $bindable('select'),placeAs=$bindable(''),
+    selectedEntity = $bindable(-1), tileId = $bindable(''), spriteId = $bindable(''), tool = $bindable('select'),authoring,
     undoLabel, redoLabel, onUndo, onRedo, onEdit, onLayer, onSprites, onAssets, onPlay, busy, previewOnly=false,
   } = $props();
 
@@ -125,7 +125,7 @@
         ctx.lineWidth = 1;
       }
       for (const {item,index} of orderedLayers(view)) {
-        if (!item.collidable || hidden[index]) continue;
+        if (!(authoring?.collision[index]??item.collidable) || hidden[index]) continue;
         for (const [x,y,id,variantIndex] of item.cells) {
           const type = previewModes[id]?.[tileVariant(id,x,y,variantIndex)] ?? tiles[id]?.physics?.mode ?? 'static';
           const color = collision[type];
@@ -435,7 +435,7 @@
       return Math.abs(actor.x-p.px) <= w/2+2 && Math.abs(actor.y-p.py) <= h/2+2;
     };
     const hits = room.entities.map((actor,index)=>({actor,index})).filter(entry=>hit(entry.actor));
-    const topDown = (room.view ?? (Math.abs(room.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer')) === 'top_down';
+    const topDown = (authoring?.view ?? room.view ?? (Math.abs(room.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer')) === 'top_down';
     hits.sort((a,b)=>(a.actor.layer ?? sprites[a.actor.sprite]?.layer ?? 0)-(b.actor.layer ?? sprites[b.actor.sprite]?.layer ?? 0)
       || ((room.ySort ?? topDown)
         ? a.actor.y+spriteSize(a.actor)[1]/2-b.actor.y-spriteSize(b.actor)[1]/2 : a.index-b.index));
@@ -556,11 +556,6 @@
     const {px,py} = placement(p);
     const name = newInstanceName(id,room.entities);
     const entity={sprite:id,name,x:px,y:py};
-    if(placeAs!==''){
-      if(room.entities.some(other=>other.player===Number(placeAs)))return;
-      entity.player=Number(placeAs);
-      placeAs='';tool='select';
-    }
     const entities = [...room.entities,entity];
     onEdit({...room,entities},'placement of '+(sprites[id].title??id));
     selectedEntity = entities.length-1;
@@ -815,7 +810,7 @@
   {#if spriteTool}
     {#if tool==='spawn'}
       <div class="palette">
-        <strong>Entity type</strong><div class="field-row"><label>Place as<select bind:value={placeAs}><option value="">No player</option>{#each [0,1,2,3] as slot}<option disabled={room.entities.some(e=>e.player===slot)} value={String(slot)}>Player {slot+1}</option>{/each}</select></label><label>Find an entity<input type="search" bind:value={spriteFilter}></label></div>
+        <strong>Entity type</strong><div class="field-row"><label>Find an entity<input type="search" bind:value={spriteFilter}></label></div>
         <div class="tile-list">
           <PagedList items={Object.keys(sprites)} query={spriteFilter} label="sprite choices" size={12}>{#snippet children(id)}
             <button class="swatch" class:selected={spriteId===id} aria-pressed={spriteId===id}

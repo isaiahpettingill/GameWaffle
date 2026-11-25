@@ -96,7 +96,7 @@ export async function launch(port,open){
           const settings={name,start:'room',tileSize:16,physicsUnits:'pixels',sprites:{},tiles:{},audio:{},rooms:{room},gameScript:gameScriptPath};
           const manifest=JSON.stringify(settings,null,2);
           const script=encodeCbor(initialGameScript(settings,{examples:true}));
-          const roomScript=encodeCbor(initialRoomScript(room,undefined,true));
+          const roomScript=encodeCbor(initialRoomScript(room));
           const archive=form.get('storage')==='archive';
           const base=projectBasename(name);
           const occupied=new Set((await readdir(destination)).map(entry=>entry.toLowerCase()));

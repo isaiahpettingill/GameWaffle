@@ -1,41 +1,26 @@
 import {platformGravity, roomBorder} from './schema.mjs';
-import {initStatements} from './init-properties.mjs';
 import {shaderPresets} from './shader-presets.mjs';
-import {pixelsPerMeter} from './physics-units.mjs';
 
 export const roomScriptPath=id=>`scripts/rooms/${id}.cbor`;
 export const roomSettingKeys=['cameraZoom','cameraBottomInset','border','closedEdges','gravity','background',
   'backgroundImage','backgroundParallax','ySort','music','ambience','shader','groupCamera'];
 
-export function changeRoomView(unit,from,to,pixelUnits){
-  const before=initStatements(initialRoomScript({view:from},undefined,pixelUnits));
-  const after=initStatements(initialRoomScript({view:to},undefined,pixelUnits));
-  const changes=new Map();
-  const init=initStatements(unit);
-  for(const op of ['set_room_gravity','set_room_border','set_room_depth_sort']){
-    const previous=before.find(block=>block.op===op);
-    const replacement=after.find(block=>block.op===op);
-    const current=init.findLast(block=>block.op===op);
-    const operand=Object.keys(previous).find(key=>key!=='op');
-    if(current&&current[operand]===previous[operand])changes.set(current,replacement);
-  }
-  return changes;
-}
-
-export function initialRoomScript(room,defaults={},pixelUnits=false){
+export function initialRoomScript(room,defaults={}){
   const settings={...defaults,...room};
-  const topDown=room.view==='top_down';
+  const topDown=room.view?room.view==='top_down':Math.abs(room.gravity??platformGravity)<.01;
   const start=[
+    {op:'init_property',name:'room_view',value:topDown?'top_down':'platformer'},
     {op:'camera_zoom',zoom:settings.cameraZoom??1},
     {op:'set_camera_bottom_inset',tiles:settings.cameraBottomInset??0},
-    {op:'set_room_border',border:roomBorder(settings,topDown)},
-    {op:'set_room_gravity',gravity:room.gravity??(topDown?0:settings.gravity??platformGravity*(pixelUnits?pixelsPerMeter:1))},
     {op:'set_room_background',color:settings.background??'#101a23'},
     {op:'set_room_background_image',image:settings.backgroundImage??'',scroll:settings.backgroundParallax??1},
-    {op:'set_room_depth_sort',enabled:settings.ySort??topDown},
     {op:'set_room_music',sound:settings.music??''},
     {op:'set_room_ambience',sound:settings.ambience??''},
   ];
+  if(settings.border!=null||settings.closedEdges!=null)start.push({op:'set_room_border',border:roomBorder(settings,topDown)});
+  const gravity=room.gravity??(!topDown?defaults.gravity:undefined);
+  if(gravity!=null)start.push({op:'set_room_gravity',gravity});
+  if(settings.ySort!=null)start.push({op:'set_room_depth_sort',enabled:settings.ySort});
   if(settings.shader?.kind&&settings.shader.kind!=='none'){
     const shader=settings.shader, parameters={};
     const exposed=shaderPresets['preset:'+shader.kind]?.parameters??[];

@@ -73,9 +73,8 @@
   let room=$derived(project?.rooms[roomId]), roomBackground=$derived(roomBackgrounds[roomId]??room?.backgroundImage), layer=$derived(room?.layers?.[layerIndex]);
   let sprite=$derived(project?.sprites?.[spriteId]), tile=$derived(project?.tiles?.[tileId]);
   let artFiles=$derived(assets.filter(file=>/\.(ase|aseprite|png)$/i.test(file)));
-  let stageFilter=$state(''),placeAs=$state('');
   let nameDialog=$state.raw(null),newName=$state(''),resourceDialog=$state.raw(null);
-  let gameSettings=$state(''),returnToCodeTarget=false,mobilePane=$state('Editor');
+  let codeOpened=$state(false),mobilePane=$state('Editor');
   const tabs=[['world','World'],['room','Room'],['actors','Entities'],['blocks','Code'],['assets','Assets'],['shaders','Shaders'],['resources','Resources'],['game','Game']];
 
   const historyStatus=$derived.by(()=>{
@@ -85,7 +84,8 @@
   const sortedLayers=$derived((room?.layers ?? []).map((layer,index)=>({layer,index,order:layer.order??index}))
     .sort((a,b)=>b.order-a.order || b.index-a.index));
   const maxTiles=$derived(Math.floor(4096/(project?.tileSize??24)));
-  const roomView=$derived(room?.view ?? (Math.abs(room?.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer'));
+  let roomAuthoring=$state.raw({});
+  const roomView=$derived(roomAuthoring[roomId]?.view??room?.view??(Math.abs(room?.gravity??platformGravity)<.01?'top_down':'platformer'));
   const actor=$derived(room?.entities[selectedEntity]);
   const exportName=$derived((project?.name??'game').toLowerCase().replace(/[^a-z0-9]+/g,'-') || 'game');
 
@@ -108,7 +108,8 @@
     return id;
   }
   let shaderDefinitions=$state.raw({});
-  let gameScript=$state.raw(null), gameCode=$state(false), codeTile=$state(''), codeVariant=$state(0);
+  let gameScript=$state.raw(null), gameCode=$state(false), codeTile=$state(''), codeVariant=$state(0), codeSpriteId=$state('');
+  const codeSprite=$derived(project?.sprites?.[codeSpriteId]);
   let editTileVariant=$state('0');
   const activeTileCode=$derived(!gameCode&&Boolean(codeTile));
   const gameFlags=$derived({...project?.flags,...gameScript?.declarations?.flags});
@@ -139,14 +140,14 @@
     fontsLabels:{builtin:'Built-in',...Object.fromEntries(Object.entries(project?.bitfonts??{}).map(([id,font])=>[id,font.name??id]))},
     flags:Object.keys(gameFlags),
   });
-  const codeRoomId=$derived(roomCode||(!spriteId?roomId:''));
+  const codeRoomId=$derived(roomCode||(!codeSpriteId?roomId:''));
   const codeRoom=$derived(project?.rooms[codeRoomId]);
   const activeRoomCode=$derived(!gameCode&&!activeTileCode&&Boolean(codeRoom));
   const roomScripts=$derived(Object.entries(project?.rooms??{}).map(([id,room])=>({id,title:room.title??id})));
   const tileScripts=$derived(Object.entries(project?.tiles??{}).flatMap(([id,tile])=>
     (tileArt[id]??[]).map((_,variant)=>({id,variant,title:(tile.title??tile.tag??id)+' · Variant '+(variant+1)}))));
   const entityScripts=$derived(Object.entries(project?.sprites??{}).map(([id,sprite])=>({id,title:sprite.title??id})));
-  const authoringView=$derived(tab==='room'||tab==='blocks'||tab==='game');
+  const authoringView=$derived(tab==='room'||tab==='blocks');
   const hasInspector=$derived(tab==='room'||(tab==='assets'&&assetKind==='tile'));
 
   function askName(kind,query,register,select){
@@ -329,12 +330,13 @@
         const names=instanceNames(map.entities);
         map.entities.forEach((entity,index)=>{entity.name=names[index];});
       }
-      projectPath=value.path;project=value.project;gameScript=value.gameScript; shaderDefinitions=value.shaderDefinitions??{}; roomBackgrounds=value.roomBackgrounds; assets=value.assets; art=value.art; revision=value.revision;
+      projectPath=value.path;project=value.project;gameScript=value.gameScript; shaderDefinitions=value.shaderDefinitions??{}; roomBackgrounds=value.roomBackgrounds; roomAuthoring=value.roomAuthoring; assets=value.assets; art=value.art; revision=value.revision;
       currentProject=savedProject=JSON.stringify(value.project);
       recovery=await draft.read();
       if(recovery===savedProject){recovery=null;await draft.write(null);}
       roomId=project.start ?? Object.keys(project.rooms)[0];
       spriteId=Object.keys(project.sprites ?? {})[0] ?? '';
+      codeSpriteId=spriteId;
       placementSprite=spriteId;
       tileId=Object.keys(project.tiles ?? {})[0] ?? '';
       layerIndex=chooseInitialLayer(project.rooms[roomId]);
@@ -368,6 +370,7 @@
         }
         if(JSON.stringify(shaderDefinitions)!==JSON.stringify(current.shaderDefinitions))shaderDefinitions=current.shaderDefinitions??{};
         if(JSON.stringify(roomBackgrounds)!==JSON.stringify(current.roomBackgrounds))roomBackgrounds=current.roomBackgrounds;
+        roomAuthoring=current.roomAuthoring;
         if(current.previewKey!==previewKey)await updatePreviews(current.previewKey);
         revision=current.revision;
       }
@@ -392,7 +395,7 @@
   }
   function replaceRoom(next,label='edit to '+(room.title??roomId),growth){
     if(busy)return;
-    if(growth)for(const [id,neighbor] of growSeamNeighbors(project.rooms,roomId,project.tileSize??24,growth))project.rooms[id]=neighbor;
+    if(growth)for(const [id,neighbor] of growSeamNeighbors(project.rooms,roomId,project.tileSize??24,growth,roomAuthoring))project.rooms[id]=neighbor;
     project.rooms[roomId]=next;
     updateDirty(label);
   }
@@ -402,6 +405,7 @@
     if(!project.rooms[roomId])roomId=project.start??Object.keys(project.rooms)[0];
     if(roomCode&&!project.rooms[roomCode])roomCode=roomId;
     if(!project.sprites?.[spriteId])spriteId=Object.keys(project.sprites??{})[0]??'';
+    if(!project.sprites?.[codeSpriteId])codeSpriteId=spriteId;
     if(!project.tiles?.[tileId])tileId=Object.keys(project.tiles??{})[0]??'';
     layerIndex=chooseInitialLayer(project.rooms[roomId]);
     placementSprite=spriteId;selectedEntity=-1;dimensions=null;
@@ -436,6 +440,7 @@
           gameScript=latest.gameScript;
           roomBackgrounds=latest.roomBackgrounds??{};
         }
+        roomAuthoring=latest.roomAuthoring;
         shaderDefinitions=latest.shaderDefinitions??{};
         assets=latest.assets;art=latest.art;revision=latest.revision;await updatePreviews(latest.previewKey);
       }catch(e){error=e.message;}finally{busy=false;}
@@ -533,20 +538,6 @@
     delete project.coverCrop;
     mark('cover removal');
   }
-  async function setView(view){
-    if(view===roomView||!await saveEdits())return;
-    busy=true;
-    try{
-      const result=await request('./api/room-view/'+encodeURIComponent(roomId),'PUT',{view});
-      project=result.project;
-      savedProject=JSON.stringify(project);
-      revision=result.revision;
-      updateDirty(undefined,false);
-      recordFile(result.edit,'room view');
-      scriptVersion++;
-      await updatePreviews(result.previewKey);
-    }catch(err){error=err.message;}finally{busy=false;}
-  }
   function openResize(){
     dimensions={cols:room.cols,rows:room.rows};
     roomOperation='resize';
@@ -614,36 +605,23 @@
       }
       error='';
     }
-    if(key==='layer' && value!=='' && (!Number.isInteger(value)||Math.abs(value)>10000))return;
-    if(key==='health' && value!=='' && (!Number.isFinite(value)||value<.001||value>1000000))return;
-    editRoom(next=>{
-      if(key==='player' && value!=='' && next.entities.some((entry,index)=>index!==selectedEntity && entry.player===Number(value)))return;
-      const entity=next.entities[selectedEntity];
-      if(key==='health'){
-        if(value!=='') (entity.physics??={}).health=value;
-        else if(entity.physics){
-          delete entity.physics.health;
-          if(!Object.keys(entity.physics).length)delete entity.physics;
-        }
-      }else if(value==='')delete entity[key];
-      else entity[key]=key==='player' ? Number(value) : value;
-    });
+    editRoom(next=>{next.entities[selectedEntity][key]=value;});
   }
-  let inlinePlaytest=$state(false), playtestFrame=$state();
+  let inlinePlaytest=$state(false), playtestFrame=$state(), playtestRoom=$state('');
   function stopInlinePlaytest(){
     inlinePlaytest=false;
-    requestAnimationFrame(()=>document.querySelector('.stage-tools button.primary')?.focus());
   }
   function handlePlaytestMessage(event){
     if(event.origin===location.origin && event.source===playtestFrame?.contentWindow && event.data==='gamewaffle:stop-playtest')stopInlinePlaytest();
   }
   async function startInlinePlaytest(){
     if(!await finishScript() || (dirty && !await saveProject()) || tab!=='blocks')return;
+    playtestRoom=activeRoomCode?codeRoomId:roomId;
     inlinePlaytest=true;
-    requestAnimationFrame(()=>playtestFrame?.focus());
   }
   function openTab(id){
     if(id!=='blocks')inlinePlaytest=false;
+    else codeOpened=true;
     mobilePane='Editor';
 
     if(id==='actors')assetKind='sprite';
@@ -660,10 +638,10 @@
   function useShaderTemplate(template){
     shaderTarget={session:++shaderSession,template};
   }
-  async function selectSprite(id){
-    if(!gameCode&&!activeTileCode&&!activeRoomCode&&spriteId===id&&scriptPanel&&!await scriptPanel.selectBase())return false;
-    if((gameCode||activeTileCode||activeRoomCode||spriteId!==id) && !await finishScript())return false;
-    gameCode=false;codeTile='';roomCode='';spriteId=id;assetKind='sprite';error='';
+  async function selectEntityScript(id){
+    if(!gameCode&&!activeTileCode&&!activeRoomCode&&codeSpriteId===id&&scriptPanel&&!await scriptPanel.selectBase())return false;
+    if((gameCode||activeTileCode||activeRoomCode||codeSpriteId!==id) && !await finishScript())return false;
+    gameCode=false;codeTile='';roomCode='';codeSpriteId=id;error='';
     return true;
   }
   async function selectRoomScript(id){
@@ -675,21 +653,14 @@
   async function openRoomScript(){
     if(await selectRoomScript(roomId))openTab('blocks');
   }
-  async function selectView(id){
-    if(id==='game')return openGameScript('game');
-    if(id==='blocks'&&gameCode&&returnToCodeTarget){
-      if(!await finishScript())return;
-      returnToCodeTarget=false;gameCode=false;
-    }
+  function selectView(id){
     openTab(id);
   }
-  async function openGameScript(view='blocks'){
+  async function openGameScript(){
     if(!await finishScript())return false;
     if(gameCode&&scriptPanel&&!await scriptPanel.selectBase())return false;
-    if(view==='game'&&!gameCode)returnToCodeTarget=true;
-    if(view!=='game'){returnToCodeTarget=false;codeTile='';}
-    gameCode=true;
-    openTab(view);
+    gameCode=true;codeTile='';
+    openTab('blocks');
     return true;
   }
   async function openTileScript(id,variant){
@@ -700,13 +671,11 @@
   async function selectScriptFile(kind,id,variant){
     if(kind==='game')return openGameScript();
     if(kind==='tile')return openTileScript(id,variant);
-    const selected=await (kind==='room'?selectRoomScript(id):selectSprite(id));
-    if(selected&&tab==='game')openTab('blocks');
-    return selected;
+    return kind==='room'?selectRoomScript(id):selectEntityScript(id);
   }
   function chooseDefinition(id){
     if(tab==='room'){
-      selectSprite(id);mobilePane='Editor';placementSprite=id;
+      mobilePane='Editor';placementSprite=id;
       mapTool='spawn';
       return;
     }
@@ -717,7 +686,9 @@
     event.dataTransfer.effectAllowed='copy';
   }
   async function openDefinition(id,view='actors'){
-    if(await selectSprite(id))openTab(view);
+    if(view==='actors')spriteId=id;
+    else if(!await selectEntityScript(id))return;
+    openTab(view);
   }
   function openEntityForm(){
     if(busy)return;
@@ -746,18 +717,17 @@
       || (b.item.order??b.index)-(a.item.order??a.index)).at(0)?.index??0;
   }
   async function selectRoom(id,from='open'){
-    const followRoom=from==='sidebar'||(activeRoomCode&&codeRoomId===roomId);
-    if(followRoom&&!await selectRoomScript(id))return;
+    if(tab==='blocks'&&from==='sidebar'){
+      if(await selectRoomScript(id))mobilePane='Editor';
+      return;
+    }
     if(id!==roomId){
       roomPanel='layers';selectedEntity=-1;dimensions=null;mapTool='select';
       roomId=id;layerIndex=chooseInitialLayer(project.rooms[id]);
       inlinePlaytest=false;
     }
     if(from==='open')openTab('room');
-    if(from==='sidebar'){
-      if(tab==='game')openTab('blocks');
-      else if(authoringView)mobilePane='Editor';
-    }
+    if(from==='sidebar'&&authoringView)mobilePane='Editor';
   }
   async function finishScript(){
     if(!scriptDirty || await scriptPanel?.flush())return true;
@@ -773,7 +743,8 @@
     const saved=JSON.stringify(project);
     projectWrite=(async()=>{
       try{
-        await request('./api/project','PUT',JSON.parse(saved));
+        const result=await request('./api/project','PUT',JSON.parse(saved));
+        roomAuthoring=result.roomAuthoring;
         savedProject=saved;updateDirty(undefined,false);
         if(!dirty)status='Project saved';
         return !dirty;
@@ -781,7 +752,8 @@
     })().finally(()=>projectWrite=null);
     return projectWrite;
   }
-  function saveScript(id,isRoom,isGame,data,isTile){
+  function saveScript(id,isRoom,isGame,data,isTile,authoring){
+    if(authoring)roomAuthoring=authoring;
     if(isTile){status='Script saved';return;}
     if(isRoom){
       const background=initStatements(data).findLast(row=>row.op==='set_room_background_image')?.image;
@@ -963,7 +935,7 @@
       }
       if(art[newSource]?.error)throw Error(art[newSource].error);
       (project.sprites??={})[id]={source:newSource,title:label,physics:{},gravityMode:'room'};
-      await selectSprite(id);
+      spriteId=id;
       mark('creation of '+label);
       addForm=false;
     }catch(err){assetError=String(err.message??err);}
@@ -1136,30 +1108,15 @@
     </div></details>
 </nav>
 <ExportDialog bind:this={exportDialog} basename={exportName} {localization} onSave={prepareExport} onClose={()=>fileMenu.querySelector('summary').focus()}/>
-{#if gameSettings==='project'}
-  <Modal title="Project settings" onClose={()=>gameSettings=''}>
-    <div class="project-options">
-      <section aria-label="Tile grid">
-        <h3>Tile grid</h3>
-        <div class="row"><span>Tile size</span><strong>{project.tileSize??24} × {project.tileSize??24} px</strong>
-          <button type="button" onclick={()=>pendingTileSize=project.tileSize??24}>Change tile size…</button>
-        </div>
-      </section>
-      <section aria-label="Cartridge cover">
-        <h3>Cartridge cover</h3>
-        <div class="row">
-          {#if project.coverImage&&coverPreview}<img class="cover-preview" src={coverPreview} alt="Cartridge cover art">{/if}
-          <button type="button" disabled={busy} onclick={()=>coverPicker.click()}>Choose cover image…</button>
-          {#if project.coverImage}
-            <button type="button" disabled={busy} onclick={()=>openCover({path:project.coverImage})}>Edit crop…</button>
-            <button type="button" disabled={busy} onclick={removeCover}>Remove cover</button>
-          {/if}
-          <input hidden type="file" aria-label="Cartridge cover image file" accept=".png,.jpg,.jpeg,.webp,.ase,.aseprite"
-            bind:this={coverPicker} onchange={event=>chooseCover(event.currentTarget)}>
-        </div>
-      </section>
+{#if inlinePlaytest && project.rooms[playtestRoom]}
+  <Modal title="Play room" wide onClose={stopInlinePlaytest}>
+    <div class="playtest-toolbar row">
+      <SearchSelect label="Playtest room" value={playtestRoom} options={roomScripts.map(({id,title})=>({value:id,label:title}))}
+        onChange={value=>playtestRoom=value}/>
+      <button type="button" onclick={stopInlinePlaytest}>Close</button>
     </div>
-    <div class="dialog-actions"><button type="button" onclick={()=>gameSettings=''}>Done</button></div>
+    <iframe bind:this={playtestFrame} class="inline-playtest" title="Game playtest" onload={()=>playtestFrame?.focus()}
+      src={'./player.html?playtest=1&inline=1&room='+encodeURIComponent(playtestRoom)}></iframe>
   </Modal>
 {/if}
 {#if coverEdit}
@@ -1227,8 +1184,9 @@
       <div class="category">
         <div class="heading row"><h3>Entities</h3><button class="small-button icon-button" title="Create entity" aria-label="Create entity" onclick={openEntityForm}><Plus size={14}/></button></div>
         <PagedList items={Object.keys(project.sprites??{})} label="entities" query={filter} text={id=>project.sprites[id].title??id}>{#snippet children(id)}
-          <div class="actor-entry"><button class="item" class:selected={tab==='room' ? mapTool==='spawn' && placementSprite===id : spriteId===id && (tab==='actors'||(tab==='blocks'&&!activeRoomCode))}
-            aria-pressed={tab==='blocks'?!activeRoomCode&&spriteId===id:undefined}
+          {@const selected=tab==='room'?mapTool==='spawn'&&placementSprite===id:tab==='actors'?spriteId===id:tab==='blocks'&&!gameCode&&!activeTileCode&&!activeRoomCode&&codeSpriteId===id}
+          <div class="actor-entry"><button class="item" class:selected
+            aria-pressed={tab==='blocks'?selected:undefined}
             draggable={tab==='room' && ['spawn','select'].includes(mapTool)} ondragstart={event=>dragDefinition(event,id)}
             title={tab==='room' ? 'Choose entity for placement' : 'Select entity'}
             onclick={()=>chooseDefinition(id)}>
@@ -1251,76 +1209,71 @@
         {#each tabs as [id,title]}{@const Icon=viewIcons[id]}<button class:active={tab===id} aria-current={tab===id?'page':undefined} onclick={()=>selectView(id)}><Icon size={15}/>{title}</button>{/each}
       </nav>
       <div class="author-panes" hidden={!authoringView}>
-        <section tabindex="-1" class="map-pane" hidden={tab==='game'} aria-label="Room editor">
-        {#if tab==='blocks'}
-          <div class="stage-tools row">
-            <SearchSelect label="Stage room" value={roomId} options={Object.entries(project.rooms).map(([value,room])=>({value,label:room.title??value}))}
-              onChange={value=>selectRoom(value,'stage')}/>
-            <div class="row">
-              {#if inlinePlaytest}<button onclick={stopInlinePlaytest}>Stop</button>
-              {:else}<button onclick={()=>openTab('room')}>Edit room</button>
-                <button class="primary" disabled={busy || !room} onclick={startInlinePlaytest}><Play size={14}/> Play here</button>
-              {/if}
-            </div>
-          </div>
-        {/if}
-        {#if tab==='blocks' && inlinePlaytest}
-          <iframe bind:this={playtestFrame} class="inline-playtest" title="Game playtest" src={'./player.html?playtest=1&inline=1&room='+encodeURIComponent(roomId)}></iframe>
-        {:else if tab!=='game'&&room}
+        <section tabindex="-1" class="map-pane" hidden={tab!=='room'} aria-label="Room editor">
+        {#if room}
         {#key roomId}
           <RoomMap {room} {roomId} {projectPath} size={project.tileSize??24} tiles={project.tiles??{}} sprites={project.sprites??{}}
-            {tileArt} {spriteArt} {previewModes} {authoredVariants} {previewImage} backgroundUrl={roomBackground?'./api/room-art?path='+encodeURIComponent(roomBackground)+'&revision='+(art[roomBackground]?.revision??''):undefined} {layerIndex} bind:selectedEntity bind:tileId bind:spriteId={placementSprite} bind:tool={mapTool} bind:placeAs {busy}
+            {tileArt} {spriteArt} {previewModes} {authoredVariants} {previewImage} backgroundUrl={roomBackground?'./api/room-art?path='+encodeURIComponent(roomBackground)+'&revision='+(art[roomBackground]?.revision??''):undefined} {layerIndex} bind:selectedEntity bind:tileId bind:spriteId={placementSprite} bind:tool={mapTool} authoring={roomAuthoring[roomId]} {busy}
             undoLabel={historyStatus.undo} redoLabel={historyStatus.redo}
             onUndo={()=>restoreEdit(true)} onRedo={()=>restoreEdit(false)} onEdit={replaceRoom}
-            onLayer={chooseLayer} onSprites={inspect=>{roomPanel='instances';if(inspect)mobilePane='Settings';if(actor)selectSprite(actor.sprite);}} onAssets={openTiles}
-            onPlay={playtest} previewOnly={tab==='blocks'} />
+            onLayer={chooseLayer} onSprites={inspect=>{roomPanel='instances';if(inspect)mobilePane='Settings';}} onAssets={openTiles}
+            onPlay={playtest} />
         {/key}
         {/if}
-        {#if tab==='blocks'}
-          <section class="stage-actors card" aria-label="Entities on the stage">
-            <div class="heading row"><h2>Entities</h2><button class="small-button icon-button" aria-label="Create entity" title="Create entity" onclick={openEntityForm}><Plus size={14}/></button></div>
-            {#if Object.keys(project.sprites??{}).length>8}
-              <input type="search" bind:value={stageFilter} aria-label="Find an entity type" placeholder="Find an entity type…">
-            {/if}
-            <div class="stage-actor-list">
-              <PagedList items={Object.keys(project.sprites??{})} label="entities" size={8} query={stageFilter}>{#snippet children(id)}
-                <button aria-pressed={!activeRoomCode&&spriteId===id} onclick={()=>selectSprite(id)}>
-                  {#if spriteArt[id]}<img src={spriteArt[id]} alt="" draggable="false">{:else}<SquareUserRound size={18}/>{/if}
-                  <span>{id}</span>
-                </button>
-              {/snippet}</PagedList>
-            </div>
-          </section>
-        {/if}
         </section>
-        <section tabindex="-1" class="code-pane" hidden={tab!=='blocks'&&tab!=='game'} aria-label={gameCode?'Game code':activeTileCode?'Tile code':activeRoomCode?'Room code':'Entity code'}>
-        {#if tab==='game'}
-          <div class="game-tools row">
-            <button type="button" onclick={()=>gameSettings='project'}><Settings2 size={15}/>Project settings…</button>
+        {#if codeOpened}
+        <section tabindex="-1" class="code-pane" hidden={tab!=='blocks'} aria-label={gameCode?'Game code':activeTileCode?'Tile code':activeRoomCode?'Room code':'Entity code'}>
+          <div class="code-actions row">
+            <button type="button" disabled={busy||!room} onclick={startInlinePlaytest}><Play size={15}/>Play room…</button>
           </div>
-        {/if}
-        {#if gameCode||activeTileCode||activeRoomCode||spriteId}
-          {#key (gameCode?'game':activeTileCode?'tile:'+codeTile+':'+codeVariant:activeRoomCode?'room:'+codeRoomId:'entity:'+spriteId)+':'+scriptVersion}<ScriptPanel bind:this={scriptPanel} isRoom={activeRoomCode} isGame={gameCode} isTile={activeTileCode} variant={codeVariant}
-            title={gameCode?'Game script':activeTileCode?(tileScripts.find(tile=>tile.id===codeTile&&tile.variant===codeVariant)?.title??codeTile):activeRoomCode?(codeRoom.title??codeRoomId)+' · Room script':sprite?.title??spriteId}
+        {#if gameCode||activeTileCode||activeRoomCode||codeSpriteId}
+          {#key (gameCode?'game':activeTileCode?'tile:'+codeTile+':'+codeVariant:activeRoomCode?'room:'+codeRoomId:'entity:'+codeSpriteId)+':'+scriptVersion}<ScriptPanel bind:this={scriptPanel} isRoom={activeRoomCode} isGame={gameCode} isTile={activeTileCode} variant={codeVariant}
+            title={gameCode?'Game script':activeTileCode?(tileScripts.find(tile=>tile.id===codeTile&&tile.variant===codeVariant)?.title??codeTile):activeRoomCode?(codeRoom.title??codeRoomId)+' · Room script':codeSprite?.title??codeSpriteId}
             {roomScripts} {entityScripts} {tileScripts} onSelectFile={selectScriptFile} bind:mode={scriptMode}
-            actorDefinition={gameCode||activeTileCode||activeRoomCode?null:sprite} newActor={!gameCode&&!activeTileCode&&!Object.hasOwn(JSON.parse(savedProject)[activeRoomCode?'rooms':'sprites']??{},activeRoomCode?codeRoomId:spriteId)} onBeforeSave={async()=>!dirty||await saveProject()} onFileEdit={recordFile} onNewEvent={newEvent} onNewField={newScriptField}
-            hasLegacyMovement={Object.values(project.rooms).some(room=>room.entities.some(entity=>entity.sprite===spriteId&&entity.standardMovement))}
+            actorDefinition={gameCode||activeTileCode||activeRoomCode?null:codeSprite} newActor={!gameCode&&!activeTileCode&&!Object.hasOwn(JSON.parse(savedProject)[activeRoomCode?'rooms':'sprites']??{},activeRoomCode?codeRoomId:codeSpriteId)} onBeforeSave={async()=>!dirty||await saveProject()} onFileEdit={recordFile} onNewEvent={newEvent} onNewField={newScriptField}
+            hasLegacyMovement={Object.values(project.rooms).some(room=>room.entities.some(entity=>entity.sprite===codeSpriteId&&entity.standardMovement))}
             initialMovement={roomView} onMovementPreset={({replaceLegacy})=>{
               if(!replaceLegacy)return;
               for(const map of Object.values(project.rooms)){
-                for(const entity of map.entities)if(entity.sprite===spriteId)delete entity.standardMovement;
+                for(const entity of map.entities)if(entity.sprite===codeSpriteId)delete entity.standardMovement;
               }
-              updateDirty('movement settings for '+(sprite.title??spriteId));
-            }} sprite={gameCode?'game':activeTileCode?codeTile:activeRoomCode?codeRoomId:spriteId} sprites={Object.keys(project.sprites??{})} animations={[...new Set(['default',...(art[sprite?.source]?.tags??[])])]} items={Object.keys(project.items??{})} {textKeys} localization={project.localization} menus={Object.keys(gameMenus)} references={activeRoomCode?{...blockReferences,names:instanceNames(codeRoom.entities??[]),layerNames:(codeRoom.layers??[]).map(layer=>layer.name).filter(Boolean)}:blockReferences} actions={[...buttons,...Object.keys(gameControls)]} bind:dirty={scriptDirty} bind:status={scriptStatus} onSave={saveScript} />{/key}
+              updateDirty('movement settings for '+(codeSprite.title??codeSpriteId));
+            }} sprite={gameCode?'game':activeTileCode?codeTile:activeRoomCode?codeRoomId:codeSpriteId} sprites={Object.keys(project.sprites??{})} animations={[...new Set(['default',...(art[codeSprite?.source]?.tags??[])])]} items={Object.keys(project.items??{})} {textKeys} localization={project.localization} menus={Object.keys(gameMenus)} references={activeRoomCode?{...blockReferences,names:instanceNames(codeRoom.entities??[]),layerNames:(codeRoom.layers??[]).map(layer=>layer.name).filter(Boolean)}:blockReferences} actions={[...buttons,...Object.keys(gameControls)]} bind:dirty={scriptDirty} bind:status={scriptStatus} onSave={saveScript} />{/key}
         {:else}<p class="empty card">Create an entity to edit its script.</p>{/if}
         </section>
+        {/if}
       </div>
       {#if !authoringView}<section class="aux-pane" aria-label="Project tools">
       {#if tab==='world' && room}
-        <World rooms={project.rooms} flags={Object.keys(gameFlags)} {roomId} onSelect={id=>selectRoom(id,'stage')} onEdit={(changes,label)=>{Object.assign(project.rooms,changes);updateDirty(label);}}/>
+        <World rooms={project.rooms} authoring={roomAuthoring} {roomId} onSelect={id=>selectRoom(id,'world')} onScript={openRoomScript}/>
+      {:else if tab==='game'}
+        <section class="card asseteditor" aria-label="Game settings">
+          <div class="row heading"><h2>Game</h2><button type="button" onclick={openGameScript}><Blocks size={15}/>Open game script</button></div>
+          <div class="project-options">
+            <section aria-label="Tile grid">
+              <h3>Tile grid</h3>
+              <div class="row"><span>Tile size</span><strong>{project.tileSize??24} × {project.tileSize??24} px</strong>
+                <button type="button" onclick={()=>pendingTileSize=project.tileSize??24}>Change tile size…</button>
+              </div>
+            </section>
+            <section aria-label="Cartridge cover">
+              <h3>Cartridge cover</h3>
+              <div class="row">
+                {#if project.coverImage&&coverPreview}<img class="cover-preview" src={coverPreview} alt="Cartridge cover art">{/if}
+                <button type="button" disabled={busy} onclick={()=>coverPicker.click()}>Choose cover image…</button>
+                {#if project.coverImage}
+                  <button type="button" disabled={busy} onclick={()=>openCover({path:project.coverImage})}>Edit crop…</button>
+                  <button type="button" disabled={busy} onclick={removeCover}>Remove cover</button>
+                {/if}
+                <input hidden type="file" aria-label="Cartridge cover image file" accept=".png,.jpg,.jpeg,.webp,.ase,.aseprite"
+                  bind:this={coverPicker} onchange={event=>chooseCover(event.currentTarget)}>
+              </div>
+            </section>
+          </div>
+        </section>
       {:else if tab==='resources'}
         <Localization value={project.localization} resources={gameScript?.declarations?.resources}
-          onChange={value=>set(project,'localization',value)} onAdd={select=>openResourceDialog('',select)} onGameScript={()=>openGameScript('game')}/>
+          onChange={value=>set(project,'localization',value)} onAdd={select=>openResourceDialog('',select)} onGameScript={openGameScript}/>
       {:else if tab==='shaders'}
         <ShaderWorkspace {project} files={assets} {shaderDefinitions} room={roomId} target={shaderTarget} drafts={shaderDrafts}
           onUpload={uploadLibraryAsset} onEdit={editLibraryAsset} onOpen={openLibraryAsset} onShader={openShaderWorkspace}
@@ -1329,12 +1282,10 @@
         <AssetLibrary bind:this={assetLibrary} {project} files={assets} {shaderDefinitions} initialKind={assetKind==='tile'?'tile':''}
           previewFor={libraryPreview} onUpload={uploadLibraryAsset} onEdit={editLibraryAsset} onOpen={openLibraryAsset} onEditSource={editSourceFile} onShader={openShaderWorkspace}>
           {#snippet fontTools(visible)}
-            <Bitfonts bind:this={bitfontsPanel} controlsVisible={visible} fonts={project.bitfonts??{}} active={project.activeBitfont??(project.font?'legacy':'builtin')}
-              legacy={project.font} sources={assets} onImport={data=>{recordFile(data.edit,'font source import');if(!assets.includes(data.path))assets=[...assets,data.path].sort();}}
-              onSelect={value=>set(project,'activeBitfont',value)}
-              onSave={(id,config,activate)=>{
+            <Bitfonts bind:this={bitfontsPanel} controlsVisible={visible} fonts={project.bitfonts??{}}
+              sources={assets} onImport={data=>{recordFile(data.edit,'font source import');if(!assets.includes(data.path))assets=[...assets,data.path].sort();}}
+              onSave={(id,config)=>{
                 (project.bitfonts??={})[id]=config;
-                if(activate)project.activeBitfont=id;
                 updateDirty('bitfont settings');
               }}/>
           {/snippet}
@@ -1342,7 +1293,7 @@
       {:else if tab==='actors'}
         <section class="card asseteditor">
           <div class="row heading"><h2>Entities</h2><button onclick={openEntityForm}><Plus size={16}/>New entity…</button></div>
-          <div class="field-row"><label>Entity type<select value={spriteId} onchange={e=>selectSprite(e.currentTarget.value)}>
+          <div class="field-row"><label>Entity type<select aria-label="Entity type" bind:value={spriteId}>
             {#each Object.keys(project.sprites??{}) as id}<option value={id}>{project.sprites[id].title??id}</option>{/each}
           </select></label>
           {#if spriteId}<button class="primary" onclick={()=>openDefinition(spriteId,'blocks')}><Blocks size={15}/>Open script</button>{/if}</div>
@@ -1358,10 +1309,7 @@
                 </select></label>
                 {@render editSource(sprite.source)}
               </div>
-              <div class="row entity-art-source">
-                <label class="stack">Collider shape <select value={sprite.collider??'box'} onchange={event=>set(sprite,'collider',event.currentTarget.value)}>
-                  <option value="box">Box</option><option value="silhouette">Sprite silhouette</option>
-                </select></label>
+              <div class="row">
                 <button disabled={!art[sprite.source]?.width} onclick={()=>editingColliders=spriteId}>Edit frame colliders…</button>
               </div>
               {#key spriteId}
@@ -1386,9 +1334,7 @@
             {:else}<button class="small-button" onclick={()=>set(project,'start',roomId)}>Set as starting room</button>{/if}
           </div>
           <label class="stack">Room name <input value={room.title??roomId} onchange={e=>setRoom('title',e.currentTarget.value)}></label>
-          <label class="stack">Room view <select aria-label="Room view" value={roomView} disabled={busy} onchange={e=>setView(e.currentTarget.value)}>
-            <option value="platformer">Platformer</option><option value="top_down">Top-down</option>
-          </select></label>
+          <p class="muted">{roomView==='top_down'?'Top-down':'Platformer'}</p>
           <div class="row"><span>{room.cols} × {room.rows} tiles</span><button onclick={openResize}>Resize room…</button></div>
           <div class="stack asset-source">
             <SearchSelect label="Background image" value={roomBackground??''} disabled={busy||importingBackground}
@@ -1403,12 +1349,12 @@
           <div class="heading row mini"><h3>Draw order</h3><button class="small-button" disabled={busy} onclick={addLayer}>Add layer</button></div>
           {#each sortedLayers as {layer:item,index}}
             <button class="item" class:selected={layerIndex===index} onclick={()=>chooseLayer(index)}>
-              <Layers3 size={14}/><span>{item.name}</span><small>{item.collidable?'Collision on':'Visual only'}</small>
+              <Layers3 size={14}/><span>{item.name}</span><small>{(roomAuthoring[roomId]?.collision[index]??item.collidable)?'Collision on':'Visual only'}</small>
             </button>
           {/each}
           {#if layer}
             <label class="stack">Layer name <input value={layer.name} onchange={e=>changeLayer('name',e.currentTarget.value)}></label>
-            <label class="check"><input type="checkbox" checked={layer.collidable} onchange={e=>changeLayer('collidable',e.currentTarget.checked)}> Enable collision</label>
+            <button class="small-button" onclick={openRoomScript}>Configure layer in script</button>
             <label class="stack">Layer order <input type="number" min="-10000" max="10000" value={layer.order??layerIndex} onchange={e=>{
               const value=e.currentTarget.valueAsNumber;
               if(Number.isInteger(value)&&Math.abs(value)<=10000)changeLayer('order',value);
@@ -1425,8 +1371,9 @@
             {#if room.entities.length>8}<input type="search" aria-label="Find placed entities" placeholder="Find placed entities" bind:value={instanceFilter}>{/if}
             <PagedList items={Object.entries(room.entities)} text={entry=>(entry[1].name??'')+' '+entry[1].sprite} query={room.entities.length>8?instanceFilter:''} label="placed entities">{#snippet children([key,entity])}
               {@const index=Number(key)}
+              {@const player=roomAuthoring[roomId]?.players[entity.name??entity.sprite] ?? (roomAuthoring[roomId]?null:entity.player)}
               <button class="item" class:selected={selectedEntity===index} onclick={()=>{selectedEntity=index;mapTool='select';}}>
-                <span>{entity.name ?? entity.sprite}</span>{#if entity.player!=null}<small>Player {entity.player+1}</small>{/if}
+                <span>{entity.name ?? entity.sprite}</span>{#if player!=null}<small>Player {player+1}</small>{/if}
               </button>
             {/snippet}</PagedList>
           </div>
@@ -1442,9 +1389,6 @@
               <label class="stack">X position <input type="number" min="0" value={actor.x} onchange={e=>changeActor('x',e.currentTarget.valueAsNumber)}></label>
               <label class="stack">Y position <input type="number" min="0" value={actor.y} onchange={e=>changeActor('y',e.currentTarget.valueAsNumber)}></label>
             </div>
-            <label class="stack">Controlled by <select aria-label="Controlled by" value={actor.player==null ? '' : String(actor.player)} onchange={e=>changeActor('player',e.currentTarget.value)}>
-              <option value="">No player</option>{#each [0,1,2,3] as player}<option disabled={room.entities.some((entry,index)=>index!==selectedEntity&&entry.player===player)} value={String(player)}>Player {player+1}</option>{/each}
-            </select></label>
             {#key actor.name}
               <EntityTags tags={entityTagLabels} selected={actor.components??[]} inherited={definition?.components??[]}
                 resolveTag={resolveEntityTag} onChange={value=>changeActor('components',value)}/>
@@ -1496,7 +1440,7 @@
     <Modal title="New Room" onClose={()=>roomOperation=''}>
       <form onsubmit={event=>{event.preventDefault();addRoom();}}>
         <label>Room name<input bind:value={newRoomName} maxlength="100" required></label>
-        <label>Room view<select bind:value={newRoomView}><option value="platformer">Platformer</option><option value="top_down">Top-down</option></select></label>
+        <label>Room template<select bind:value={newRoomView}><option value="platformer">Platformer</option><option value="top_down">Top-down</option></select></label>
         <div class="dialog-actions"><button type="button" onclick={()=>roomOperation=''}>Cancel</button><button class="primary">Create room</button></div>
       </form>
     </Modal>
@@ -1566,7 +1510,6 @@
   .stack{display:grid;gap:.23rem;color:var(--muted);font-size:.75rem;margin-top:.45rem;}
   .pair{display:grid;grid-template-columns:1fr 1fr;gap:0 .46rem;}
   .mini{margin-top:.75rem;margin-bottom:.26rem;}
-  .check{display:flex;align-items:center;gap:.3rem;font-size:.75rem;color:var(--muted);margin-top:.4rem;}
   .asseteditor,.empty{padding:.8rem;}
   .asseteditor .stack{max-width:34rem;}
   .start-room{margin-bottom:.15rem;}
@@ -1574,7 +1517,7 @@
   .project-options{display:grid;gap:.75rem}
   .project-options section{display:grid;gap:.38rem;border-top:1px solid var(--line);padding-top:.5rem}
   .project-options h3{color:var(--text);font-size:.83rem;margin:0}
-  .game-tools{justify-content:flex-end;margin-bottom:.35rem}
+  .code-actions{justify-content:flex-end;padding-bottom:.3rem}
   .cover-preview{width:4rem;height:4rem;object-fit:contain;background:var(--well);border:1px solid var(--line)}
   .instance-list{display:grid;gap:1px;}
   .instance-source{margin-top:.55rem;}
@@ -1603,15 +1546,8 @@
   }
 
   main.coding{grid-template-columns:minmax(155px,185px) minmax(0,1fr)}
-  .coding .author-panes{grid-template-columns:minmax(0,1fr) minmax(0,1.8fr)}
-  .stage-tools{justify-content:space-between;align-items:end;padding:.3rem 0 .5rem}
-  .stage-tools :global(.search-select){flex:1 1 9rem}
-  .stage-actors h2{font-size:1rem;margin:0}
-  .inline-playtest{display:block;width:100%;flex:1 1 0;min-height:0;border:0;background:#12121a}
-  .stage-actors{margin-top:.35rem;padding:.5rem;max-height:35%;overflow:auto;flex:none}
-  .stage-actor-list{display:flex;flex-wrap:wrap;gap:.35rem}
-  .stage-actor-list button{display:grid;justify-items:center;gap:.2rem;min-width:4.25rem;max-width:100%;overflow-wrap:anywhere}
-  .stage-actor-list img{width:28px;height:28px;object-fit:contain;image-rendering:pixelated}
+  .inline-playtest{display:block;width:100%;height:min(70dvh,48rem);border:0;background:#12121a}
+  .playtest-toolbar{margin-bottom:.55rem}
   .work{display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;min-height:0}
   .author-panes[hidden]{display:none}
   .author-panes{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:.35rem;min-height:0}
@@ -1627,10 +1563,5 @@
     main[data-pane="Project"]>.project,main[data-pane="Settings"]>.inspector{order:1;overflow:auto;flex:1}
     main.wide[data-pane="Settings"]>.work{display:grid}
     .work{flex:1;min-height:0}
-  }
-  @media(max-width:620px){
-    .coding .author-panes{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(13rem,2fr) minmax(14rem,3fr);
-      overflow:auto;overscroll-behavior:contain}
-    .stage-actors{max-height:28%}
   }
 </style>

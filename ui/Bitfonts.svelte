@@ -5,10 +5,11 @@
   import SearchSelect from './SearchSelect.svelte';
   import {resourceName} from '../src/resource-name.mjs';
   import {fontFile} from '../src/font.mjs';
-  let { fonts, active, legacy, sources, controlsVisible=true, onSelect, onSave, onImport }=$props();
+  let { fonts, sources, controlsVisible=true, onSave, onImport }=$props();
   let editing=$state(null), name=$state(''), source=$state(''), width=$state(6), height=$state(8), assignments=$state({});
   let file=$state.raw(null), error=$state(''), busy=$state(false), picker=$state();
-  const installed=$derived(fonts[active]);
+  let selected=$state('');
+  const selectedFont=$derived(fonts[selected]?selected:Object.keys(fonts)[0]??'');
   const sheet=$derived(/\.png$/i.test(source));
   let preview=$state('');
   $effect(()=>{
@@ -48,21 +49,21 @@
         if(!response.ok)throw Error(data.error);
       }
       const id=editing || resourceName(config.name,'bitfont',[fonts,{builtin:true,legacy:true}]);
-      onSave(id,config,editing==='');
+      onSave(id,config);
+      selected=id;
       editing=null;
     }catch(err){error=err.message;}finally{busy=false;}
   }
 </script>
 
 {#if controlsVisible}<div class="bitfonts">
-  <SearchSelect label="Game bitfont" value={active} options={[
-    {value:'builtin',label:'Built-in'},
-    ...(legacy?[{value:'legacy',label:'Original bitmap font'}]:[]),
-    ...Object.entries(fonts).map(([value,font])=>({value,label:font.name})),
-  ]} onChange={onSelect}/>
+  {#if selectedFont}
+    <SearchSelect label="Bitfont" value={selectedFont}
+      options={Object.entries(fonts).map(([value,font])=>({value,label:font.name}))} onChange={value=>selected=value}/>
+  {/if}
   <div class="row">
     <button onclick={()=>open()}>Import bitfont…</button>
-    {#if installed}<button onclick={()=>open(active)}>Edit bitfont…</button>{/if}
+    {#if selectedFont}<button onclick={()=>open(selectedFont)}>Edit bitfont…</button>{/if}
   </div>
 </div>{/if}
 {#if editing!==null}
