@@ -93,6 +93,36 @@ pub(crate) fn actors<S: Serializer>(
 
 struct Details<'a, 'view>(&'a [ActorView<'view>]);
 
+pub(crate) fn particles<S: Serializer>(
+    batches: &[crate::particles::Batch],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct Batch<'a> {
+        color: u32,
+        size: u8,
+        points: &'a serde_bytes::Bytes,
+    }
+
+    use serde::ser::SerializeSeq;
+    let mut sequence = serializer.serialize_seq(Some(batches.len()))?;
+    let mut points = Vec::new();
+    for batch in batches {
+        points.clear();
+        points.reserve(batch.points.len() * 4);
+        for &[x, y] in &batch.points {
+            points.extend_from_slice(&x.to_le_bytes());
+            points.extend_from_slice(&y.to_le_bytes());
+        }
+        sequence.serialize_element(&Batch {
+            color: batch.color,
+            size: batch.size,
+            points: serde_bytes::Bytes::new(&points),
+        })?;
+    }
+    sequence.end()
+}
+
 impl Serialize for Details<'_, '_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(self.0.iter().map(|actor| {

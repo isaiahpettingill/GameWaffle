@@ -7,11 +7,35 @@ use rapier2d::prelude::{
     PairFilterContext, PhysicsHooks, PhysicsWorld, Pose, QueryFilter, RigidBody, RigidBodyBuilder,
     RigidBodyHandle, Rotation, SharedShape, SolverFlags,
 };
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 pub const PPM: f32 = 24.0;
 pub type Body = RigidBodyHandle;
-pub(crate) type ContactPairs = BTreeSet<(u32, u32)>;
+#[derive(Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "rollback", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "rollback", serde(transparent))]
+pub(crate) struct ContactPairs(Vec<(u32, u32)>);
+
+impl ContactPairs {
+    pub(crate) fn contains(&self, pair: &(u32, u32)) -> bool {
+        self.0.binary_search(pair).is_ok()
+    }
+
+    fn difference(&self, other: &Self) -> impl Iterator<Item = (u32, u32)> {
+        let mut remaining = other.0.as_slice();
+        self.0.iter().copied().filter(move |pair| {
+            while remaining.first().is_some_and(|candidate| candidate < pair) {
+                remaining = &remaining[1..];
+            }
+            remaining.first() != Some(pair)
+        })
+    }
+
+    pub(crate) fn sort_and_deduplicate(&mut self) {
+        self.0.sort_unstable();
+        self.0.dedup();
+    }
+}
 
 #[derive(Clone, Copy)]
 struct CollisionFilter {
@@ -295,7 +319,7 @@ impl World {
                 body.reset_forces(false);
             }
         }
-        contacts.next.clear();
+        contacts.next.0.clear();
         let pair = |a: u128, b: u128| {
             let (a, b) = (a as u32, b as u32);
             (a.min(b), a.max(b))
@@ -309,26 +333,19 @@ impl World {
                 self.physics.colliders.get(contact.collider1),
                 self.physics.colliders.get(contact.collider2),
             ) {
-                contacts.next.insert(pair(a.user_data, b.user_data));
+                contacts.next.0.push(pair(a.user_data, b.user_data));
             }
         }
         for (_, a, _, b, touching) in self.physics.intersection_pairs() {
             if touching {
-                contacts.next.insert(pair(a.user_data, b.user_data));
+                contacts.next.0.push(pair(a.user_data, b.user_data));
             }
         }
-        contacts.events.extend(
-            contacts
-                .pairs
-                .difference(&contacts.next)
-                .map(|&(a, b)| (false, a, b)),
-        );
-        contacts.events.extend(
-            contacts
-                .next
-                .difference(&contacts.pairs)
-                .map(|&(a, b)| (true, a, b)),
-        );
+        contacts.next.sort_and_deduplicate();
+        if contacts.pairs != contacts.next {
+            contacts.events.extend(contacts.pairs.difference(&contacts.next).map(|(a, b)| (false, a, b)));
+            contacts.events.extend(contacts.next.difference(&contacts.pairs).map(|(a, b)| (true, a, b)));
+        }
         std::mem::swap(&mut contacts.pairs, &mut contacts.next);
     }
 
@@ -493,6 +510,25 @@ pub fn valid_colliders(colliders: &[Collider]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "rollback")]
+    #[test]
+    fn rollback_contacts_keep_the_sorted_set_encoding() {
+        let legacy = std::collections::BTreeSet::from([(1_u32, 8_u32), (2, 4), (5, 9)]);
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&legacy, &mut bytes).unwrap();
+        let previous: ContactPairs = ciborium::from_reader(bytes.as_slice()).unwrap();
+
+        let mut next = ContactPairs(vec![(5, 9), (2, 3), (2, 3), (1, 6)]);
+        next.sort_and_deduplicate();
+        assert!(next.contains(&(2, 3)));
+        assert_eq!(previous.difference(&next).collect::<Vec<_>>(), [(1, 8), (2, 4)]);
+        assert_eq!(next.difference(&previous).collect::<Vec<_>>(), [(1, 6), (2, 3)]);
+
+        let mut encoded = Vec::new();
+        ciborium::into_writer(&previous, &mut encoded).unwrap();
+        assert_eq!(encoded, bytes);
+    }
 
     #[test]
     fn one_way_platform_lands_and_drops() {

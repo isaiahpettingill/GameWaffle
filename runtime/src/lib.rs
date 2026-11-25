@@ -76,6 +76,14 @@ struct Bullet {
     remaining: u32,
 }
 
+struct Zone {
+    id: u32,
+    position: Vec2,
+    width: f32,
+    height: f32,
+    physics: Physics,
+}
+
 struct Actor {
     tile_mark: Option<model::TileMark>,
     hidden: bool,
@@ -198,6 +206,8 @@ pub struct Runtime {
     world: World,
     contacts: Contacts,
     actors: BTreeMap<u32, Actor>,
+    first_scene_actor: u32,
+    first_physics_actor: u32,
     entity_ids: std::collections::BTreeSet<u32>,
     animated_colliders: std::collections::BTreeSet<u32>,
     named_entities: BTreeMap<String, u32>,
@@ -242,6 +252,7 @@ pub struct Runtime {
     camera_window: [u32; 2],
     camera_seams: bool,
     tile_entities: std::collections::BTreeSet<u32>,
+    zones_by_x: Vec<usize>,
     checkpoint: Option<Vec<u8>>,
     checkpoint_requested: bool,
     retry: bool,
@@ -347,7 +358,8 @@ impl Runtime {
 
     pub fn snapshot(&self) -> Result<Vec<u8>, String> {
         let view = self.view();
-        let mut bytes = Vec::with_capacity(256 + 64 * view.actors.len());
+        let particle_bytes: usize = view.particles.iter().map(|batch| 32 + 4 * batch.points.len()).sum();
+        let mut bytes = Vec::with_capacity(256 + 64 * view.actors.len() + particle_bytes);
         ciborium::into_writer(&view, &mut bytes).map_err(|error| error.to_string())?;
         Ok(bytes)
     }
@@ -412,6 +424,10 @@ impl Runtime {
     }
 
     fn camera_viewport(&self) -> [i32; 4] {
+        self.viewport_with_focus(self.focus())
+    }
+
+    fn viewport_with_focus(&self, focus: Option<[f32; 2]>) -> [i32; 4] {
         let room = &self.game.rooms[&self.room];
         let full = [(room.cols as f32 * room.size) as u32, room.height as u32];
         let height = self.room_settings.camera_height.or(room.camera_height).unwrap_or(full[1]);
@@ -424,7 +440,7 @@ impl Runtime {
         };
         let size = camera.view_size(window, self.room_settings.zoom);
         let [w,h] = [size[0].min(limits[0]), size[1].min(limits[1])];
-        let focus = self.focus().or_else(|| self.actors.values().find(|actor| !actor.hidden && actor.player == Some(0)).map(|actor| [actor.p.x, actor.p.y]))
+        let focus = focus.or_else(|| self.scene_actors().find(|actor| !actor.hidden && actor.player == Some(0)).map(|actor| [actor.p.x, actor.p.y]))
             .unwrap_or([full[0] as f32 / 2., full[1] as f32 / 2.]);
         let margins = if self.camera_seams { room.seam_margins } else { [0; 4] };
         let axis = |center: f32, size: u32, limit: u32, before: u32, after: u32| {
@@ -438,7 +454,7 @@ impl Runtime {
 
     fn focus(&self) -> Option<[f32; 2]> {
         if self.group_camera {
-            let mut players = self.actors.values().filter(|actor| {
+            let mut players = self.scene_actors().filter(|actor| {
                 !actor.hidden && actor.player.is_some_and(|slot| self.connected_players & (1 << slot) != 0)
             });
             if let Some(first) = players.next() {
@@ -457,25 +473,27 @@ impl Runtime {
             self.camera_actor
                 .and_then(|id| self.actors.get(&id))
                 .or_else(|| {
-                    self.actors
-                        .values()
+                    self.scene_actors()
                         .find(|a| !a.hidden && a.player == Some(self.camera_slot)
                             && (self.camera_slot != 0 || self.connected_players & 1 != 0))
-                        .or_else(|| self.actors.values().find(|a| !a.hidden
+                        .or_else(|| self.scene_actors().find(|a| !a.hidden
                             && a.player.is_some_and(|slot| self.connected_players & (1 << slot) != 0)))
-                        .or_else(|| self.actors.values().find(|a| !a.hidden && a.player == Some(self.camera_slot)))
+                        .or_else(|| self.scene_actors().find(|a| !a.hidden && a.player == Some(self.camera_slot)))
                 })
                 .map(|a| [a.p.x, a.p.y])
         })
     }
+
+    fn scene_actors(&self) -> impl Iterator<Item = &Actor> {
+        self.actors.range(self.first_scene_actor..).map(|(_, actor)| actor)
+    }
+
     pub fn view(&self) -> Snapshot<'_> {
         let top_down = self.game.rooms[&self.room].is_top_down();
+        let focus = self.focus();
         let actors = self
-            .actors
-            .values()
-            .filter(|actor| {
-                !actor.hidden && !self.static_ids.contains(&actor.id) && Some(actor.id) != self.room_script_id && actor.id != 0
-            })
+            .scene_actors()
+            .filter(|actor| !actor.hidden && Some(actor.id) != self.room_script_id)
             .map(|actor| {
                 let elapsed = (self.tick - actor.animation_start) * 1000 / 60;
                 let image = actor
@@ -571,8 +589,8 @@ impl Runtime {
             explored: (self.game_settings.minimap.as_deref().unwrap_or(&self.game.minimap) == "explored").then_some(&self.visited),
             tick: self.tick,
             actors,
-            focus: self.focus(),
-            viewport: self.camera_viewport(),
+            focus,
+            viewport: self.viewport_with_focus(focus),
             dialog: self.dialog.front().map(|d| d.0.as_str()),
             menu: self.menu.as_ref(),
             hud_font: &self.hud_font,
@@ -765,6 +783,8 @@ impl Runtime {
             world,
             contacts: Contacts::default(),
             actors: BTreeMap::new(),
+            first_scene_actor: 1,
+            first_physics_actor: 1,
             entity_ids: Default::default(),
             animated_colliders: Default::default(),
             named_entities: Default::default(),
@@ -809,6 +829,7 @@ impl Runtime {
             camera_window,
             camera_seams,
             tile_entities: Default::default(),
+            zones_by_x: Vec::new(),
             checkpoint: None,
             checkpoint_requested: false,
             retry: false,
@@ -927,6 +948,10 @@ impl Runtime {
             self.next = 0;
             self.add(Some(GAME_SCRIPT.into()), None, Physics::default(), Vec2::ZERO, (1., 1.), (0, None));
         }
+        // Baked solids occupy a contiguous prefix of the room's actor IDs. Older
+        // cartridges can supply other body modes here, so only skip fixed terrain in physics.
+        self.first_physics_actor = self.next + room.solids.iter()
+            .take_while(|solid| solid.physics.mode == Mode::Static).count() as u32;
         for solid in room.solids {
             let id = self.add(
                 None,
@@ -946,6 +971,7 @@ impl Runtime {
                 }
             }
         }
+        self.first_scene_actor = self.next;
         self.gates.clear();
         for spawn in room.entities {
             if !spawn.conditions.is_empty() {
@@ -1289,8 +1315,7 @@ impl Runtime {
             (v - size / 2.).clamp(0., (extent - size).max(0.)) + size / 2.
         };
         let views: Vec<_> = self
-            .actors
-            .values()
+            .scene_actors()
             .filter(|a| a.player.is_some())
             .map(|a| [a.p.x, a.p.y])
             .chain(self.focus())
@@ -1417,7 +1442,9 @@ impl Runtime {
         let mut actions = Vec::new();
         let suspended: Vec<_> = self
             .actors
-            .values()
+            .get(&0)
+            .into_iter()
+            .chain(self.scene_actors())
             .flat_map(|actor| {
                 actor
                     .scripts
@@ -1457,7 +1484,9 @@ impl Runtime {
         if std::mem::take(&mut self.restored) {
             let actors: Vec<_> = self
                 .actors
-                .values()
+                .get(&0)
+                .into_iter()
+                .chain(self.scene_actors())
                 .filter(|actor| actor.sprite.is_some() && actor.bullet.is_none())
                 .map(|actor| actor.id)
                 .collect();
@@ -1612,7 +1641,7 @@ impl Runtime {
         self.move_bullets(&mut actions);
         self.contacts.previous.clear();
         let top_down = self.game.rooms[&self.room].is_top_down();
-        for actor in self.actors.values() {
+        for (_, actor) in self.actors.range(self.first_physics_actor..) {
             if actor.active()
                 && matches!(actor.physics.mode, Mode::Dynamic | Mode::Kinematic)
                 && let Some(body) = actor.body
@@ -1650,8 +1679,8 @@ impl Runtime {
                 }
             }
         }
-        let events = std::mem::take(&mut self.contacts.events);
-        for (began, a, b) in events {
+        let mut contacts = std::mem::take(&mut self.contacts.events);
+        for (began, a, b) in contacts.drain(..) {
             self.events.push(RuntimeEvent::Contact { began, a, b });
             let event = if began {
                 "begin_contact"
@@ -1675,6 +1704,7 @@ impl Runtime {
                 ScriptPayload::Numbers([i64::from(a), 0]),
             );
         }
+        self.contacts.events = contacts;
         self.apply(&mut actions, &inputs);
         let size = self.game.rooms[&self.room].size;
         for (owner, spawn) in std::mem::take(&mut self.pending_instances) {
@@ -1714,7 +1744,8 @@ impl Runtime {
     fn run_timers(&mut self, inputs: &[Input; 4], actions: &mut Vec<Action>) {
         if self.timer_schedules.is_empty() { return; }
         let mut due = Vec::new();
-        for actor in self.actors.values().filter(|actor| actor.active() && actor.bullet.is_none()) {
+        for actor in self.actors.get(&0).into_iter().chain(self.scene_actors())
+            .filter(|actor| actor.active() && actor.bullet.is_none()) {
             let elapsed = self.tick.saturating_sub(actor.created_at);
             if elapsed == 0 { continue; }
             if let Some(timers) = actor.sprite.as_ref().and_then(|name| self.timer_schedules.get(name)) {
@@ -2677,16 +2708,40 @@ impl Runtime {
     }
 
     fn zones(&mut self, inputs: &[Input; 4], actions: &mut Vec<Action>) {
+        let dynamic_bodies = self.actors.range(self.first_physics_actor..)
+            .filter(|(_, actor)| actor.active() && actor.physics.mode == Mode::Dynamic)
+            .take(8)
+            .count();
+        if dynamic_bodies == 0 {
+            return;
+        }
         let density_scale = if self.game.pixel_units { 1.0 } else { PPM * PPM };
         let zones: Vec<_> = self
             .actors
-            .values()
+            .range(self.first_physics_actor..)
+            .map(|(_, actor)| actor)
             .filter(|a| a.active() && matches!(a.physics.mode, Mode::Fluid | Mode::Ladder))
-            .map(|a| (a.id, a.p, a.width, a.height, a.physics.clone()))
+            .map(|actor| Zone {
+                id: actor.id, position: actor.p, width: actor.width, height: actor.height,
+                physics: actor.physics.clone(),
+            })
             .collect();
+        let indexed = dynamic_bodies == 8 && zones.len() >= 64
+            && zones.iter().all(|zone| zone.position.x.is_finite());
+        let mut widest = 0.0_f32;
+        if indexed {
+            if self.zones_by_x.len() != zones.len() {
+                self.zones_by_x.clear();
+                self.zones_by_x.extend(0..zones.len());
+            }
+            self.zones_by_x.sort_unstable_by(|&a, &b| zones[a].position.x.total_cmp(&zones[b].position.x));
+            widest = zones.iter().map(|zone| zone.width).fold(0.0, f32::max);
+        }
+        let mut candidates = Vec::new();
         for actor in self
             .actors
-            .values_mut()
+            .range_mut(self.first_physics_actor..)
+            .map(|(_, actor)| actor)
             .filter(|a| a.active() && a.physics.mode == Mode::Dynamic)
         {
             let base_gravity = actor.physics.gravity * actor.tick_gravity.unwrap_or(1.0);
@@ -2700,11 +2755,12 @@ impl Runtime {
                 mass * density_scale / (actor.width * actor.height)
             });
             let mut ladder = false;
-            for (id, p, w, h, zone) in &zones {
+            let mut apply_zone = |region: &Zone| {
+                let zone = &region.physics;
                 if !physics::allows(&actor.physics, zone)
-                    || !overlap(actor.p, actor.width, actor.height, *p, *w, *h)
+                    || !overlap(actor.p, actor.width, actor.height, region.position, region.width, region.height)
                 {
-                    continue;
+                    return;
                 }
                 if zone.mode == Mode::Ladder {
                     ladder = true;
@@ -2714,20 +2770,43 @@ impl Runtime {
                             - (center - extent / 2.).max(water - span / 2.))
                             / extent
                     };
-                    let fraction = submerged_axis(actor.p.x, actor.width, p.x, *w)
-                        * submerged_axis(actor.p.y, actor.height, p.y, *h);
+                    let fraction = submerged_axis(actor.p.x, actor.width, region.position.x, region.width)
+                        * submerged_axis(actor.p.y, actor.height, region.position.y, region.height);
                     let portion = fraction.min(1.0 - submerged);
                     submerged += portion;
                     gravity -= base_gravity * portion * zone.buoyancy * zone.density / body_density;
                     fluid_drag += portion * zone.drag;
                     if portion > 0.0 && zone.damage > 0.0 && actor.sprite.is_some() {
                         actions.push(Action::Damage {
-                            source: *id,
+                            source: region.id,
                             target: actor.id,
                             amount: Some(portion * zone.damage * STEP),
                         });
                     }
                 }
+            };
+            if indexed && actor.p.x.is_finite() {
+                let width = widest + actor.width;
+                let x = actor.p.x;
+                let left = self.zones_by_x.partition_point(|&i| {
+                    let center = zones[i].position.x;
+                    center < x && (x - center) * 2.0 >= width
+                });
+                let right = left + self.zones_by_x[left..].partition_point(|&i| {
+                    let center = zones[i].position.x;
+                    center <= x || (center - x) * 2.0 < width
+                });
+                candidates.clear();
+                candidates.extend(self.zones_by_x[left..right].iter().copied().filter(|&i| {
+                    (zones[i].position.y - actor.p.y).abs() * 2.0 < actor.height + zones[i].height
+                }));
+                // Preserve the original actor ID order for damage and overlapping fluids.
+                candidates.sort_unstable();
+                for &i in &candidates {
+                    apply_zone(&zones[i]);
+                }
+            } else {
+                zones.iter().for_each(apply_zone);
             }
             if ladder
                 && !self.game.rooms[&self.room].is_top_down()
@@ -2835,8 +2914,7 @@ impl Runtime {
 
     fn move_bullets(&mut self, actions: &mut Vec<Action>) {
         let updates: Vec<_> = self
-            .actors
-            .values()
+            .scene_actors()
             .filter_map(|actor| {
                 let bullet = actor.bullet.as_ref()?;
                 let mut v = actor.v;

@@ -30,5 +30,16 @@ export function decodeFrame(bytes){
     actors[i]=actor;
   }
   frame.actors=actors;
+  for(const batch of frame.particles??[]){
+    const bytes=batch.points;
+    if(!(bytes instanceof Uint8Array))continue;
+    if(bytes.byteLength%4)throw Error('Invalid snapshot particle data');
+    const coords=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+    const points=new Array(bytes.byteLength/4);
+    for(let i=0,offset=0;i<points.length;i++,offset+=4){
+      points[i]=[coords.getInt16(offset,true),coords.getInt16(offset+2,true)];
+    }
+    batch.points=points;
+  }
   return frame;
 }

@@ -1009,6 +1009,7 @@ impl Runtime {
         }
         self.world = state.world;
         self.contacts.pairs = state.touching;
+        self.contacts.pairs.sort_and_deduplicate();
         self.prior_buttons = state.prior_buttons;
         self.view_size = state.view_size;
         self.restored = state.restored;

@@ -407,6 +407,8 @@ executable. Run `npm run check:editor`.
 
 After building, run `node packaging/bench-runtime.mjs` to measure script parsing and compilation, cartridge loading, and WebAssembly frame delivery. Pass Wasm build directories to compare them on identical cartridges. Use `--write-fixtures DIR` to keep the benchmark cartridges for native runs. For native timing, run `cargo run --release --manifest-path runtime/Cargo.toml --example bench-runtime`, optionally passing cartridge files after `--`. Use Node's `--cpu-prof` to capture a profile of the Wasm benchmark.
 
+Run `node packaging/bench-scenes.mjs` to time simulation, snapshot encoding, and snapshot decoding separately across fixed terrain, dynamic bodies, fluid zones, particles, and script dispatch. Pass two Wasm build directories to compare median timings and verify that both builds produce the same decoded state. Add `--write-fixtures DIR` to use those scenes with the native benchmark.
+
 To test the packages without publishing a release, run **Build GameWaffle** on a development branch.
 
 ## Recover an edit

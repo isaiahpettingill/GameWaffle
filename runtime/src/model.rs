@@ -711,6 +711,7 @@ pub struct Snapshot<'a> {
     pub tick: u64,
     #[serde(serialize_with = "crate::frame::actors")]
     pub actors: Vec<ActorView<'a>>,
+    #[serde(serialize_with = "crate::frame::particles")]
     pub particles: &'a [crate::particles::Batch],
     pub focus: Option<[f32; 2]>,
     pub viewport: [i32; 4],
