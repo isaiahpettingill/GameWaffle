@@ -4,6 +4,7 @@ import {postprocess} from './room-postprocess.js';
 import {runShaderPipeline} from './shader-pipeline.js';
 import {dialogue_lines,hd_frame,room_gradient_pixels} from '../web-built/runtime/runtime.js';
 import {cameraView,fitFrame} from './camera.js';
+import {gamePixelSize,paintPixels,positionPixels} from './pixel-display.js';
 const images = new WeakMap();
 const rippleBuffers = new WeakMap();
 const sceneBuffers = new WeakMap();
@@ -206,8 +207,12 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false, pr
       ctx.restore();
     }
     ctx.save();
-    ctx.translate(Math.round(entry.x), Math.round(entry.y));
-    ctx.rotate(entry.angle || 0);
+    const angle=entry.angle||0;
+    ctx.translate(
+      angle?Math.round(entry.x):Math.round(entry.x-entry.width/2)+entry.width/2,
+      angle?Math.round(entry.y):Math.round(entry.y-entry.height/2)+entry.height/2,
+    );
+    if(angle)ctx.rotate(angle);
     ctx.scale(entry.facing < 0 ? -1 : 1,entry.flip_y ? -1 : 1);
     ctx.drawImage(image,...rect,-entry.width/2,-entry.height/2,entry.width,entry.height);
     ctx.restore();
@@ -360,24 +365,26 @@ export function drawRoom(canvas, cart, snapshot, atlasImages, showGrid=false, pr
     display.fillRect(0,0,displayWidth,displayHeight);
     display.drawImage(frame,...fitFrame(width,height,displayWidth,displayHeight));
   }
-  const physicalScale=Math.min(box.width/displayWidth,box.height/displayHeight)*(globalThis.devicePixelRatio??1);
-  const outputScale=Math.min(physicalScale,4096/Math.max(displayWidth,displayHeight));
-  const outputSize=presentation?[displayWidth,displayHeight].map(axis=>Math.max(1,Math.round(axis*outputScale))):undefined;
+  const dpr=globalThis.devicePixelRatio||1;
+  const x0=Math.round(box.left*dpr), y0=Math.round(box.top*dpr);
+  const areaWidth=Math.round(box.right*dpr)-x0, areaHeight=Math.round(box.bottom*dpr)-y0;
+  const outputSize=presentation?gamePixelSize(displayWidth,displayHeight,Math.min(4096,areaWidth),Math.min(4096,areaHeight)):undefined;
   const displayResult=runPasses(canvas,'display',canvas,cart.shaders,displayPipeline,snapshot.tick,outputSize);
-  const bitmap=typeof ImageBitmap!=='undefined'&&displayResult.image instanceof ImageBitmap&&presentation?.getContext('bitmaprenderer');
-  if(presentation)presentation.hidden=!bitmap;
-  if(displayResult.image){
-    const image=displayResult.image;
-    if(bitmap){
-      if(presentation.width!==image.width)presentation.width=image.width;
-      if(presentation.height!==image.height)presentation.height=image.height;
-      bitmap.transferFromImageBitmap(image);
-    }else{
-      const display=canvas.getContext('2d');
-      display.setTransform(1,0,0,1,0,0);
-      display.drawImage(image,0,0,displayWidth,displayHeight);
-      image.close?.();
-    }
+  const rendered=displayResult.image;
+  if(presentation && outputSize){
+    const [w,h]=outputSize, left=x0+Math.floor((areaWidth-w)/2), top=y0+Math.floor((areaHeight-h)/2);
+    positionPixels(canvas,box,left,top,w,h,dpr);
+    positionPixels(presentation,box,left,top,w,h,dpr);
+    const display=paintPixels(presentation,canvas,w,h);
+    if(rendered)display.drawImage(rendered,0,0,w,h);
+    canvas.style.opacity='0';
+    presentation.hidden=false;
+  }else if(rendered){
+    const display=canvas.getContext('2d');
+    display.setTransform(1,0,0,1,0,0);
+    display.imageSmoothingEnabled=false;
+    display.drawImage(rendered,0,0,displayWidth,displayHeight);
   }
+  rendered?.close?.();
   return roomResult.status??displayResult.status??'';
 }

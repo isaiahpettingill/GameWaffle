@@ -134,12 +134,18 @@ fn touch_button(
     y: f32,
 ) -> Option<usize> {
     let (w, h) = canvas.output_size().ok()?;
-    let scale = (w as f32 / width as f32).min(h as f32 / height as f32);
+    let scale = presentation_scale([width, height], [w, h]);
+    if scale <= 0. { return None; }
     let lx = (x * w as f32 - (w as f32 - width as f32 * scale) / 2.) / scale;
     let ly = (y * h as f32 - (h as f32 - height as f32 * scale) / 2.) / scale;
     overlay(width, height)
         .iter()
         .position(|r| lx >= r.x && lx < r.x + r.w && ly >= r.y && ly < r.y + r.h)
+}
+
+fn presentation_scale([width, height]: [u32; 2], [available_w, available_h]: [u32; 2]) -> f32 {
+    let fit = (available_w as f32 / width as f32).min(available_h as f32 / height as f32);
+    if fit >= 1. { fit.floor() } else { fit }
 }
 
 fn direct_touch(id: sdl3::sys::touch::SDL_TouchID) -> bool {
@@ -339,9 +345,13 @@ fn draw_world<T: sdl3::render::RenderTarget>(
                 }
                 continue;
             }
+            let sprite_origin = |center: f32, size: f32| {
+                if actor.angle == 0. { (center - size / 2.).round() }
+                else { center.round() - size / 2. }
+            };
             let dest = FRect::new(
-                actor.x.round() - x as f32 - actor.width / 2.,
-                actor.y.round() - y as f32 - actor.height / 2.,
+                sprite_origin(actor.x, actor.width) - x as f32,
+                sprite_origin(actor.y, actor.height) - y as f32,
                 actor.width,
                 actor.height,
             );
@@ -985,7 +995,7 @@ pub fn run_network(
     if verify {
         window.hidden();
     }
-    let mut window = window.resizable().position_centered().build()?;
+    let mut window = window.resizable().high_pixel_density().position_centered().build()?;
     let mut icon = png::Decoder::new(std::io::Cursor::new(include_bytes!(
         "../../studio/icons/icon.png"
     )))
@@ -1583,10 +1593,15 @@ pub fn run_network(
             })();
         })?;
         rendered?;
+        let scale = presentation_scale(display, [output.0, output.1]);
         canvas.set_logical_size(
             display[0],
             display[1],
-            sdl3::sys::render::SDL_LOGICAL_PRESENTATION_LETTERBOX,
+            if scale >= 1. {
+                sdl3::sys::render::SDL_LOGICAL_PRESENTATION_INTEGER_SCALE
+            } else {
+                sdl3::sys::render::SDL_LOGICAL_PRESENTATION_LETTERBOX
+            },
         )?;
         canvas.set_draw_color(Color::RGB(14, 14, 22));
         canvas.clear();
@@ -1597,8 +1612,6 @@ pub fn run_network(
                 .then_some((g, s, passes))
         });
         if let Some((game, snapshot, passes)) = game_passes {
-            let scale = (output.0 as f32 / display[0] as f32)
-                .min(output.1 as f32 / display[1] as f32);
             let dimensions = display.map(|size| ((size as f32 * scale).round() as u32).clamp(1, 4096));
             if display_shader_targets.as_ref().is_none_or(|targets| targets.dimensions != dimensions) {
                 display_shader_targets = Some(shaders::Targets::new(&creator, dimensions)?);

@@ -8,6 +8,7 @@
   import {draftFile} from './recovery.js';
   import {growRoom} from '../src/room-geometry.mjs';
   import { newInstanceName, spriteDragType } from '../src/instances.mjs';
+  import {paintPixels,positionPixels,wheelPixels} from './pixel-display.js';
 
   let {
     room, roomId, projectPath, size, tiles, sprites, tileArt, spriteArt, previewModes, previewImage: image, backgroundUrl, layerIndex,
@@ -28,6 +29,7 @@
   let grid = $state(true), collisionView = $state(false), snap = $state(true);
   let zoom = $state(null), viewportWidth = $state(1), viewportHeight = $state(1);
   let viewport=$state(), canvas = $state(), overlay=$state(), draft = $state.raw(null), hover = $state.raw(null), gesture;
+  let mapStage, artwork, artworkFrame;
   let space = $state(false), hidden = $state({});
   let shift=$state.raw({left:0,top:0}), rightPaint=false, pendingOrigin;
   let viewReady=false,cameraTimer,lastCamera;
@@ -74,6 +76,7 @@
 
   function drawArtwork() {
     if (!canvas) return;
+    queueArtwork();
     const ctx = canvas.getContext('2d');
     ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = view.background ?? '#171829';
@@ -93,9 +96,9 @@
         const img = image(spriteArt[actor.sprite]);
         if (img?.complete && img.naturalWidth) {
           ctx.save();
-          ctx.translate(actor.x,actor.y);
+          ctx.translate(Math.round(actor.x-w/2)+(actor.flipX?w:0),Math.round(actor.y-h/2));
           if (actor.flipX) ctx.scale(-1,1);
-          ctx.drawImage(img,-w/2,-h/2,w,h);
+          ctx.drawImage(img,0,0,w,h);
           ctx.restore();
         }
         else { ctx.fillStyle = '#a16b8c'; ctx.fillRect(actor.x-w/2,actor.y-h/2,w,h); }
@@ -194,8 +197,30 @@
     return ()=>{cancelled=true;};
   });
   function draw(){drawArtwork();drawOverlay();}
+  function queueArtwork(){
+    if(!artworkFrame)artworkFrame=requestAnimationFrame(()=>{
+      artworkFrame=0;
+      if(!artwork||!canvas||!viewport||!mapStage)return;
+      const room=canvas.getBoundingClientRect(), port=viewport.getBoundingClientRect();
+      const parent=mapStage.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
+      const pixel=value=>Math.round(value*dpr);
+      const [x,y,right,bottom]=[room.left,room.top,room.right,room.bottom].map(pixel);
+      const portLeft=port.left+viewport.clientLeft,portTop=port.top+viewport.clientTop;
+      const left=Math.max(x,pixel(portLeft)), top=Math.max(y,pixel(portTop));
+      const w=Math.min(right,pixel(portLeft+viewport.clientWidth))-left;
+      const h=Math.min(bottom,pixel(portTop+viewport.clientHeight))-top;
+      artwork.hidden=w<1||h<1;
+      if(artwork.hidden)return;
+      positionPixels(artwork,parent,left,top,w,h,dpr);
+      paintPixels(artwork,canvas,w,h,[x-left,y-top,right-x,bottom-y]);
+    });
+  }
+  function onScroll(){rememberCamera();queueArtwork();}
   $effect(()=>{drawArtwork();});
   $effect(()=>{drawOverlay();});
+  $effect(()=>{
+    if(canvas&&viewport&&scale&&viewportWidth&&viewportHeight)queueArtwork();
+  });
 
   function centerRoom() {
     if(!canvas||!viewport)return;
@@ -240,6 +265,7 @@
     cameraStore.write(lastCamera);
   }
   onDestroy(saveCamera);
+  onDestroy(()=>cancelAnimationFrame(artworkFrame));
 
   function rememberCamera(){
     if(!viewReady||previewOnly||!viewport||!canvas?.clientWidth||gesture?.growth)return;
@@ -666,8 +692,8 @@
     const pinch=event.ctrlKey||event.metaKey;
     if(!vertical || (!pinch && (event.deltaX || event.shiftKey || space || !discrete)))return;
     event.preventDefault();
-    const amount=event.deltaMode===1?event.deltaY*32:event.deltaY;
-    zoomAt(scale*Math.exp(-Math.max(-240,Math.min(240,amount))*(pinch?.007:.0015)),event.clientX,event.clientY);
+    const amount=wheelPixels(event,viewport.clientHeight);
+    zoomAt(scale*Math.exp(-Math.max(-240,Math.min(240,amount))*.0008),event.clientX,event.clientY);
   }
 
   $effect(()=>{
@@ -707,7 +733,7 @@
   }
 </script>
 
-<svelte:window onpagehide={saveCamera} onpointerdown={event=>{rightPaint=event.button===2&&paintContext&&viewport?.contains(event.target);}}
+<svelte:window onresize={queueArtwork} onpagehide={saveCamera} onpointerdown={event=>{rightPaint=event.button===2&&paintContext&&viewport?.contains(event.target);}}
   oncontextmenu={contextMenu} onkeydown={keydown} onkeyup={event=>{if (event.code==='Space') space=false;}} onblur={()=>space=false} />
 <section class="card map" class:preview={previewOnly}>
   {#if !previewOnly}<header class="maphead">
@@ -744,17 +770,19 @@
   </div>
   </div>
   {/if}
+  <div class="map-stage" bind:this={mapStage}>
+  <canvas class="pixel-art" aria-hidden="true" hidden bind:this={artwork}></canvas>
   <div class="viewport" role={previewOnly?'img':'application'} aria-label={previewOnly?'Preview of '+(room.title??roomId):'Room canvas'}
     bind:this={viewport} bind:clientWidth={viewportWidth} bind:clientHeight={viewportHeight}
     onpointerdown={startPointer} onpointermove={movePointer} onpointerup={event=>endPointer(event,true)}
     onpointercancel={event=>endPointer(event,false)} onlostpointercapture={event=>endPointer(event,false)}
-    onscroll={rememberCamera}
+    onscroll={onScroll}
     onauxclick={event=>{if(event.button===1)event.preventDefault();}} onpointerleave={()=>{if(!gesture)hover=null;}}>
     <div class="canvas-space" class:outside-grid={outsidePreview&&grid}
       style:--cell={size*scale+'px'} style:--pan-x={panX+'px'} style:--pan-y={panY+'px'}
       style:padding-inline={panX+'px'} style:padding-block={panY+'px'}>
       <div class="canvas-layer">
-      <canvas tabindex={previewOnly?undefined:0} inert={previewOnly} aria-label="Room map" class:hand={tool==='hand' || space} class:select={tool==='pick' || tool==='select'}
+      <canvas tabindex={previewOnly?undefined:0} inert={previewOnly} aria-label="Room map" class="room-source" class:hand={tool==='hand' || space} class:select={tool==='pick' || tool==='select'}
         bind:this={canvas} {width} {height} data-left={shift.left} data-top={shift.top} style:width={`${width*scale}px`} style:height={`${height*scale}px`}
         ondragover={dragOver} ondrop={drop}></canvas>
       {#if !previewOnly}
@@ -768,6 +796,7 @@
       {/if}
       </div>
     </div>
+  </div>
   </div>
   {#if !previewOnly}
   {#if collisionView}<div class="legend"><span class="solid">Solid</span><span class="one-way">One-way</span><span class="fluid">Fluid</span><span class="ladder">Ladder</span><span class="dynamic">Moving</span><span class="breakable">Breakable</span><span class="sensor">Sensor</span></div>{/if}
@@ -840,17 +869,21 @@
     flex:none;padding:.25rem .45rem;border-top:1px solid var(--line)}
   .map-toolbar :is(.row,.tools,.view-tools){gap:.2rem}
   .tools button.selected,.view-tools button[aria-pressed=true]{background:#313244;border-color:#b4befe;color:#cba6f7;}
-  .viewport{flex:1 1 0;min-height:4rem;overflow:auto;background:var(--well);overscroll-behavior:contain;touch-action:none;overflow-anchor:none;border-block:1px solid var(--line);}
+  .map-stage{position:relative;flex:1 1 0;min-height:4rem;overflow:hidden;background:var(--well)}
+  .viewport{position:relative;box-sizing:border-box;width:100%;height:100%;overflow:auto;overscroll-behavior:contain;touch-action:none;overflow-anchor:none;border-block:1px solid var(--line);}
   .canvas-space{display:grid;place-items:center;box-sizing:border-box;width:max-content;min-width:100%;min-height:100%;padding:16px;}
   canvas{display:block;touch-action:none;cursor:crosshair;box-shadow:0 0 0 1px #514958,0 8px 25px #0007;}
-  .canvas-layer{position:relative}
+  .canvas-layer{position:relative;box-shadow:0 0 0 1px #514958,0 8px 25px #0007}
+  .room-source{opacity:0}
+  .pixel-art{position:absolute;pointer-events:none;box-shadow:none}
+  .pixel-art[hidden]{display:none}
   .tile-grid{position:absolute;inset:0;pointer-events:none;--origin-x:0px;--origin-y:0px;
     background-image:
       repeating-linear-gradient(to right,#ece6fa35 var(--origin-x) calc(var(--origin-x) + 1px),transparent calc(var(--origin-x) + 1px) calc(var(--origin-x) + var(--cell))),
       repeating-linear-gradient(to bottom,#ece6fa35 var(--origin-y) calc(var(--origin-y) + 1px),transparent calc(var(--origin-y) + 1px) calc(var(--origin-y) + var(--cell)));
   }
   .outside-grid .tile-grid{inset:calc(-1 * var(--pan-y)) calc(-1 * var(--pan-x));--origin-x:var(--pan-x);--origin-y:var(--pan-y);}
-  .outside-grid .canvas-layer>canvas:not(.overlay){box-shadow:0 0 0 1px #514958;}
+  .outside-grid .canvas-layer{box-shadow:0 0 0 1px #514958;}
   .edge-preview{position:absolute;pointer-events:none;width:var(--cell);height:var(--cell);
     outline:1px solid var(--accent);outline-offset:-1px;background-color:#cba6f720;background-size:100% 100%;image-rendering:pixelated;opacity:.75}
   canvas.overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;box-shadow:none}

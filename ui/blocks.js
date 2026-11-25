@@ -3,6 +3,7 @@ import * as Blockly from 'blockly/core';
 import * as English from 'blockly/msg/en';
 import './block-picker.js';
 import {installBlockSelection} from './block-selection.js';
+import {wheelPixels} from './pixel-display.js';
 import {branchBody,branchCondition} from './conditional-block.js';
 import { Events, Blocks, buttons, inputEvent, receivedEvent, timerEvent, controllerEvent, messageInputs, entityQueries, reporters, roomCommands, gradientCommands, gameCommands, tileCommands, drawingCommands, collectionCommands, commandScopeError, valueInput } from '../src/schema.mjs';
 import {roomShaders} from '../src/room-shaders.mjs';
@@ -724,8 +725,8 @@ export function mountBlocks(node, onChange, sprites, items, actions, animations,
     event.preventDefault();
     event.stopPropagation();
     const box=workspace.getParentSvg().getBoundingClientRect();
-    const amount=event.deltaMode===1?event.deltaY*16:event.deltaMode===2?event.deltaY*100:event.deltaY;
-    workspace.zoom(event.clientX-box.left,event.clientY-box.top,-Math.max(-3,Math.min(3,amount/90)));
+    const amount=wheelPixels(event,box.height);
+    workspace.zoom(event.clientX-box.left,event.clientY-box.top,-Math.max(-1.25,Math.min(1.25,amount/240)));
   }
   node.addEventListener('wheel',controlWheel,{capture:true,passive:false});
   observer.observe(node);

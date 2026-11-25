@@ -116,12 +116,33 @@ Blockly.fieldRegistry.register('field_search_dropdown',SearchDropdown);
 
 class ColorPicker extends Blockly.FieldTextInput {
   static fromJson(options){return new ColorPicker(options.text);}
+  initView(){
+    super.initView();
+    this.swatch=Blockly.utils.dom.createSvgElement('rect',{
+      class:'block-color-swatch',width:12,height:12,rx:2,
+      'aria-hidden':'true','pointer-events':'none',
+    },this.getSvgRoot());
+  }
+  updateSize_(margin){
+    super.updateSize_(margin);
+    if(!this.swatch||!this.textElement_)return;
+    const offset=Number(this.textElement_.getAttribute('x'));
+    const rtl=this.getSourceBlock()?.RTL;
+    this.size_.width+=18;
+    if(!rtl)this.textElement_.setAttribute('x',String(offset+18));
+    this.swatch.setAttribute('x',String(rtl?this.size_.width-offset-12:offset));
+    this.swatch.setAttribute('y',String((this.size_.height-12)/2));
+    const color=this.getValue();
+    this.swatch.style.fill=/^#[0-9a-f]{6}$/i.test(color)?color:'none';
+    this.positionBorderRect_();
+  }
   showEditor_(){
     const dropdown=Blockly.DropDownDiv;
     dropdown.hideWithoutAnimation();
     dropdown.clearContent();
     const input=document.createElement('input');
     input.type='color';
+    input.className='block-color-input';
     input.value=this.getValue();
     input.setAttribute('aria-label','Choose color');
     input.addEventListener('input',()=>this.setValue(input.value));

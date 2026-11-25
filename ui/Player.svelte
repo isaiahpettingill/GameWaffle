@@ -374,7 +374,8 @@
   .feedback,.error{font-size:.75rem;padding:.22rem .6rem;background:#181825}.feedback{color:#bac2de}.error{color:#f38ba8}
   .playfield{flex:1;min-height:0;position:relative;display:flex;flex-direction:column}
   .screen{flex:1;min-height:0;position:relative;display:grid;place-items:center;overflow:hidden}
-  canvas{width:100%;height:100%;position:absolute;inset:0;object-fit:contain}
+  canvas{width:100%;height:100%;position:absolute;left:0;top:0;object-fit:contain}
+  canvas[hidden]{display:none}
   .shader-output{pointer-events:none}
   .touch{position:absolute;inset:0;pointer-events:none;touch-action:none;display:grid;grid-template-columns:1fr auto 1fr;align-items:end;padding:clamp(.35rem,2vw,1rem);}
   .touch button{pointer-events:auto;touch-action:none;user-select:none;background:#292537d9;border-color:#9d819ccc;color:#fff1d6;min-width:34px;min-height:34px;padding:.2rem;}

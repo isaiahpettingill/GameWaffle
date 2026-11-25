@@ -136,8 +136,8 @@
 
 <style>
   .preview{min-width:0;display:grid;gap:.5rem;align-content:start}
-  .screen{display:grid;aspect-ratio:4/3;align-items:center;min-width:0;background:var(--well);overflow:hidden;border:1px solid var(--line)}
-  canvas{grid-area:1/1;width:100%;height:100%;object-fit:contain;image-rendering:pixelated;min-width:0;min-height:0}
+  .screen{position:relative;aspect-ratio:4/3;min-width:0;background:var(--well);overflow:hidden;outline:1px solid var(--line)}
+  canvas{position:absolute;width:100%;height:100%;object-fit:contain;image-rendering:pixelated}
   canvas[hidden]{display:none}
   .controls,.controls label{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
   .controls{justify-content:space-between}

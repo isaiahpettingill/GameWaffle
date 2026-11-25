@@ -173,6 +173,20 @@ for(const width of [1280,800,390,320]){
     const beforeZoom=(await roomMap.boundingBox()).width;
     await page.mouse.wheel(0,-120);
     await page.waitForFunction(previous=>document.querySelector('canvas[aria-label="Room map"]').getBoundingClientRect().width>previous,beforeZoom);
+    const beforeControlZoom=(await roomMap.boundingBox()).width;
+    await page.keyboard.down('Control');
+    await page.mouse.wheel(0,-120);
+    await page.keyboard.up('Control');
+    await page.waitForFunction(previous=>document.querySelector('canvas[aria-label="Room map"]').getBoundingClientRect().width>previous,beforeControlZoom);
+    assert.ok((await roomMap.boundingBox()).width/beforeControlZoom<1.12,'Ctrl+scroll zooms in a small step');
+    const art=page.locator('.map-pane .pixel-art');
+    await art.waitFor();
+    assert.ok(await art.evaluate(canvas=>{
+      const box=canvas.getBoundingClientRect();
+      return Math.abs(box.width*devicePixelRatio-canvas.width)<.05
+        && Math.abs(box.height*devicePixelRatio-canvas.height)<.05
+        && !canvas.getContext('2d').imageSmoothingEnabled;
+    }),'The stage art is drawn directly at the display pixel density');
     const beforeWheel=await pan();
     await page.mouse.wheel(34,20);
     await page.waitForFunction(previous=>document.querySelector('.map-pane .viewport').scrollLeft>previous,beforeWheel.x+14);
@@ -252,13 +266,25 @@ for(const width of [1280,800,390,320]){
     const previousRoom=await roomSource.innerText();
     assert.match(previousRoom,/on init/);
     const changedRoom=previousRoom.replace(/camera_zoom\(1(?:\.0)?\)/,'camera_zoom(1.5)')
-      .replace('set_camera_bottom_inset(0)','set_camera_bottom_inset(2)');
+      .replace('set_camera_bottom_inset(0)','set_camera_bottom_inset(2)')
+      .replace(/set_room_background\("#[0-9a-f]+"\)/i,'set_room_background("#bafffe")');
     await roomSource.fill(changedRoom);
     await until('Room camera init',async()=>{
       const unit=await(await page.request.get(url+'/api/room-script/yard')).json();
       return initializers(unit.events.init).some(row=>row.op==='camera_zoom'&&row.zoom.real===1.5)&&
         initializers(unit.events.init).some(row=>row.op==='set_camera_bottom_inset'&&row.tiles===2);
     },page);
+    await page.getByRole('button',{name:'Blocks',exact:true}).click();
+    const colorField=page.locator('.blocklyBlockCanvas .waffle_set_room_background');
+    const swatch=colorField.locator('.block-color-swatch');
+    const swatchColor=()=>swatch.evaluate(element=>getComputedStyle(element).fill);
+    assert.equal(await swatchColor(),'rgb(186, 255, 254)');
+    await colorField.getByText('#bafffe',{exact:true}).click();
+    const colorInput=page.getByLabel('Choose color',{exact:true});
+    assert.equal(await colorInput.inputValue(),'#bafffe');
+    await colorInput.fill('#ff8844');
+    await until('Color preview updates',async()=>await swatchColor()==='rgb(255, 136, 68)',page);
+    await colorInput.press('Escape');
     await nav.getByText('Game',{exact:true}).click();
     await page.getByRole('button',{name:'Text',exact:true}).click();
     const gameSource=page.locator('.cm-content');
@@ -276,9 +302,26 @@ for(const width of [1280,800,390,320]){
       const checkDisplay=async()=>assert.deepEqual(await fixedPlayer.getByLabel('Game display').evaluate(canvas=>
         [canvas.width,canvas.height,canvas.dataset.viewHeight]),[320,180,'120']);
       await checkDisplay();
+      const checkPixels=scale=>fixedPlayer.waitForFunction(scale=>{
+        const source=document.querySelector('[aria-label="Game display"]'), output=document.querySelector('.shader-output');
+        if(output.hidden||output.width!==source.width*scale||output.height!==source.height*scale)return false;
+        const box=output.getBoundingClientRect();
+        if(Math.abs(box.width*devicePixelRatio-output.width)>.05||Math.abs(box.height*devicePixelRatio-output.height)>.05)return false;
+        const rgba=canvas=>new Uint32Array(canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data.buffer);
+        const colors=rgba(source), pixels=rgba(output);
+        return colors.every((color,index)=>{
+          const x=index%source.width*scale,y=Math.floor(index/source.width)*scale;
+          for(let row=0;row<scale;row++)for(let col=0;col<scale;col++){
+            if(pixels[(y+row)*output.width+x+col]!==color)return false;
+          }
+          return true;
+        });
+      },scale);
+      await checkPixels(3);
       await fixedPlayer.setViewportSize({width:430,height:560});
       await fixedPlayer.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
       await checkDisplay();
+      await checkPixels(1);
     }finally{await fixedPlayer.close();}
     await gameSource.fill(previousGame);
     await until('Adaptive resolution',async()=> initializers((await(await page.request.get(url+'/api/game-script')).json()).events.game_startup).some(row=>row.op==='set_adaptive_display'),page);

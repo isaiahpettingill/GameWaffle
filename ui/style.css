@@ -162,6 +162,8 @@ body.studio #app label:has(>input[type=checkbox]) { display:flex; align-items:ce
 
 .block-field-picker{width:min(17rem,75vw);padding:.4rem}
 .block-field-picker input{width:100%;min-width:0}
+.block-color-swatch{stroke:#71748d;stroke-width:1px}
+.blocklyDropDownDiv .block-color-input{display:block;width:5rem;min-width:5rem;margin:.3rem;padding:.15rem}
 .block-field-options{display:grid;gap:2px;max-height:min(15rem,38vh);overflow-y:auto;overflow-x:hidden;margin-top:.35rem}
 .block-field-options button{text-align:left;overflow-wrap:anywhere}
 .block-field-options:empty{display:none}
