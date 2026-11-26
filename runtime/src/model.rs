@@ -254,6 +254,8 @@ pub struct Solid {
     pub border: u8,
     #[serde(default)]
     pub disabled: bool,
+    #[serde(default, rename = "seamGate")]
+    pub seam_gate: Option<(String, bool)>,
     #[serde(deserialize_with = "read_float")]
     pub x: f32,
     #[serde(deserialize_with = "read_float")]
@@ -279,6 +281,8 @@ pub struct Exit {
     pub flag: Option<String>,
     pub when: bool,
     pub adjacent: bool,
+    #[serde(default, rename = "seamSpan")]
+    pub seam_span: Option<[i32; 3]>,
 }
 #[derive(Clone, Deserialize)]
 pub struct Room {

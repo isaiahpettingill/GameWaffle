@@ -40,6 +40,7 @@
   import { tileSizes } from '../src/script.mjs';
   import { decodeCbor, encodeCbor } from '../src/cartridge.mjs';
   import {growSeamNeighbors} from '../src/room-geometry.mjs';
+  import {updateRoomExit} from '../src/room-exits.mjs';
   import RoomMap from './RoomMap.svelte';
   import { instanceNames, newInstanceName, spriteDragType } from '../src/instances.mjs';
 
@@ -665,6 +666,22 @@
   async function openRoomScript(){
     if(await selectRoomScript(roomId))openTab('blocks');
   }
+  function moveWorldRoom(id,position,previous){
+    if(busy)return;
+    for(const [room,origin] of Object.entries(previous))
+      project.rooms[room].mapPosition=room===id?position:[...origin];
+    mark('move of '+(project.rooms[id].title??id)+' on the world map');
+  }
+  async function writeWorldExit(id,edge,route){
+    if(!await finishScript()||!await saveProject())throw Error(scriptBlocker||error||'Save your current edits first.');
+    const path='./api/room-script/'+encodeURIComponent(id);
+    const original=await request(path);
+    const script=updateRoomExit(original,edge,route);
+    const saved=await request(path,'PUT',script);
+    recordFile(saved.edit,'exit edit in '+(project.rooms[id].title??id));
+    saveScript(id,true,false,script,false,saved.roomAuthoring);
+    scriptVersion++;
+  }
   function selectView(id){
     openTab(id);
   }
@@ -1250,7 +1267,9 @@
       </div>
       {#if !authoringView}<section class="aux-pane" aria-label="Project tools">
       {#if tab==='world' && room}
-        <World rooms={project.rooms} authoring={roomAuthoring} {roomId} onSelect={id=>selectRoom(id,'world')} onScript={openRoomScript}/>
+        <World rooms={project.rooms} authoring={roomAuthoring} start={project.start} {roomId}
+          {tileArt} {authoredVariants} {previewImage} flags={Object.keys(gameFlags)}
+          onSelect={id=>selectRoom(id,'world')} onScript={openRoomScript} onMove={moveWorldRoom} onExit={writeWorldExit}/>
       {:else if tab==='game'}
         <section class="card asseteditor" aria-label="Game settings">
           <div class="row heading"><h2>Game</h2><button type="button" onclick={openGameScript}><Blocks size={15}/>Open game script</button></div>

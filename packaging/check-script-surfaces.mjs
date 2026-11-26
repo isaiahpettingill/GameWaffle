@@ -5,7 +5,9 @@ import {readFile} from 'node:fs/promises';
 import {compileProject} from '../src/compiler.mjs';
 import {compileScript} from '../src/script.mjs';
 import {initialRoomScript} from '../src/room-script.mjs';
+import {updateRoomExit} from '../src/room-exits.mjs';
 import {pack} from '../src/pack.mjs';
+import {decodePng} from '../src/png.mjs';
 import {parseScript,formatScript} from '../src/wafflescript.mjs';
 import {Runtime,initSync} from '../web-built/runtime/runtime.js';
 
@@ -300,3 +302,100 @@ runtime.load_game(checkpoint);
 assert.equal(decodeFrame(runtime.snapshot()).actors.find(actor=>actor.name==='Hero').player,1);
 runtime.free();
 console.log('Passed Game and room initialization, typed collections, tile events, controller assignment, drawing, Wasm JIT parity, and save restoration');
+
+const placedRooms={name:'World layout',physicsUnits:'pixels',tileSize:16,start:'west',flags:{back_open:false},
+  sprites:{hero:{source:sample.sprites.pilot.source,physics:{mode:'kinematic'}}},
+  rooms:{
+    west:{cols:20,rows:12,view:'top_down',mapPosition:[0,0],entities:[{sprite:'hero',name:'Hero',player:0,x:296,y:112}],layers:[]},
+    east:{cols:14,rows:8,view:'top_down',mapPosition:[20,3],entities:[{sprite:'hero',name:'Hero',player:0,x:64,y:64}],layers:[]},
+  },
+};
+const movement=parseScript('on tick\n  if action.right then\n    velocity(240, 0)\n  elif action.left then\n    velocity(-240, 0)\n  else\n    velocity(0, 0)\n  end\nend');
+const route=(target,flag='')=>({targets:[target],mode:'fixed',when:true,flag,adjacent:true});
+const west=updateRoomExit(parseScript(''), 'right',route('east'));
+const eastSource='# Arrival room\non init # Keep this comment\n  init_properties\n    camera_zoom(1)\n  end\nend\n\non pressed.a\n  flag.back_open = true\nend\n';
+const east=updateRoomExit({...parseScript(eastSource),source:eastSource},'left',route('west','back_open'));
+assert.match(east.source,/on init # Keep this comment/);
+assert.match(east.source,/on pressed.a\n  flag.back_open = true/);
+const readPlayer=frame=>frame.actors.find(actor=>actor.player===0);
+for(const returnRoute of [false,true]){
+  const scripts=new Map([['hero',movement],['room:west',west]]);
+  if(returnRoute)scripts.set('room:east',east);
+  const linked=await compileProject('demo',{project:placedRooms,scripts});
+  assert.equal(linked.runtimeAbi,22);
+  assert.deepEqual(linked.rooms.west.exits.right.seamSpan,[48,48,176]);
+  assert.equal(linked.rooms.west.baked.find(layer=>layer.image==='seam/right').y,48);
+  assert.equal(linked.rooms.east.seams.left,true);
+  assert.equal(Boolean(linked.rooms.east.exits.left),returnRoute);
+  const game=Runtime.from_cartridge(pack(linked));
+  try{
+    const tick=input=>{
+      const frame=decodeFrame(game.step_buttons(input));
+      assert.deepEqual(frame.events.filter(event=>event.kind==='script_error'),[]);
+      return frame;
+    };
+    let current;
+    for(let i=0;i<30;i++){current=tick(8);if(current.room==='east')break;}
+    assert.equal(current.room,'east');
+    assert.ok(Math.abs(readPlayer(current).y-64)<.05,'Player stays aligned across the offset seam');
+    for(let i=0;i<24;i++)assert.equal(tick(4).room,'east');
+    if(returnRoute){
+      tick(16);
+      for(let i=0;i<24;i++){current=tick(4);if(current.room==='west')break;}
+      assert.equal(current.room,'west','The flag opens the reverse seam');
+      assert.ok(Math.abs(readPlayer(current).y-112)<.05);
+    }
+  }finally{game.free();}
+}
+const unaligned=structuredClone(placedRooms);
+unaligned.rooms.east.mapPosition=[22,3];
+const draft=await compileProject('demo',{project:unaligned,scripts:new Map([['room:west',west]])});
+assert.equal(draft.rooms.west.exits.right,undefined);
+assert.deepEqual(draft.roomAuthoring.west.exits.right.targets,['east']);
+console.log('Passed offset, one-way, and flag-gated world seams');
+
+const waterWorld=structuredClone(placedRooms);
+waterWorld.tileSize=24;
+waterWorld.tiles={water:sample.tiles.water};
+for(const room of Object.values(waterWorld.rooms)){
+  room.entities[0].x*=1.5;
+  room.entities[0].y*=1.5;
+}
+waterWorld.rooms.east.layers=[{name:'Pond',collidable:true,cells:[[0,3,'water',0],[0,4,'water',0]]}];
+const sky=parseScript(`on start
+  set_room_background("#bafffe")
+  set_background_gradient("radial", "smooth")
+  set_gradient_focus(1, 0.1, 0.3, 0.4, "#f9f06b")
+end`);
+const swimmer=parseScript(formatScript(movement).replace('on tick\n',
+  'on tick\n  flag.wet = tile.touching_kind(entity.id, "fluid", "any")\n'));
+waterWorld.flags.wet=false;
+const waterCart=await compileProject('demo',{project:waterWorld,scripts:new Map([['hero',swimmer],['room:west',west],['room:east',sky]])});
+const atlas=waterCart.atlases.west, [stripX,stripY,stripWidth,stripHeight]=atlas.entries['seam/right'];
+const png=decodePng(atlas.png);
+const skyColors=new Set();
+for(let col=0;col<stripWidth;col++){
+  const offset=4*((stripY+32)*png.width+stripX+col);
+  skyColors.add(png.data.subarray(offset,offset+3).join(','));
+}
+assert.ok(stripHeight>32&&skyColors.has('186,255,254')&&skyColors.size>2,'The seam previews the neighboring scripted sky');
+const pond=waterCart.rooms.west.entities.find(entity=>entity.clip?.some(frame=>frame.image.startsWith('seam/right/fluid/')));
+assert.equal(pond.physics.mode,'fluid');
+assert.equal(pond.tileMark.tile,'water');
+const fluidRuntime=Runtime.from_cartridge(pack(waterCart));
+try{
+  let touchedBeforeCrossing=false, arrived=false;
+  for(let i=0;i<32;i++){
+    const frame=decodeFrame(fluidRuntime.step_buttons(8));
+    const wet=decodeSave(fluidRuntime.save_game()).flags.includes('wet');
+    if(frame.room==='east'){
+      arrived=true;
+      break;
+    }
+    touchedBeforeCrossing||=Boolean(wet);
+  }
+  assert.ok(arrived&&touchedBeforeCrossing,'The player senses the neighboring fluid before crossing');
+  fluidRuntime.step_buttons(8);
+  assert.ok(decodeSave(fluidRuntime.save_game()).flags.includes('wet'));
+}finally{fluidRuntime.free();}
+console.log('Passed scripted skies and fluid sensing across world seams');

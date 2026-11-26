@@ -795,7 +795,6 @@ impl Runtime {
                 ),
             ];
             for (edge, hit) in edges {
-                let seam = room.seams.contains_key(edge);
                 let old_width = room.size * room.cols as f32;
                 let old_height = room.height;
                 let crossed = match edge {
@@ -807,7 +806,10 @@ impl Runtime {
                 let Some(exit) = room
                     .exits
                     .get(edge)
-                    .filter(|_| if seam { crossed } else { hit })
+                    .filter(|exit| if exit.adjacent && room.seams.contains_key(edge) {
+                        let along = if matches!(edge, "left" | "right") { actor.p.y } else { actor.p.x };
+                        crossed && exit.seam_span.is_none_or(|[_, start, end]| (start as f32..end as f32).contains(&along))
+                    } else { hit })
                 else {
                     continue;
                 };
@@ -830,6 +832,8 @@ impl Runtime {
                 };
                 let target = exit.targets[key as usize % exit.targets.len()].clone();
                 let adjacent = exit.adjacent;
+                let seam = adjacent && room.seams.contains_key(edge);
+                let offset = exit.seam_span.map_or(0., |span| span[0] as f32);
                 let positions: Vec<_> = self
                     .actors
                     .values()
@@ -848,12 +852,12 @@ impl Runtime {
                                     p.x + match edge {
                                         "left" => dest.size * dest.cols as f32,
                                         "right" => -old_width,
-                                        _ => 0.,
+                                        _ => -offset,
                                     },
                                     p.y + match edge {
                                         "up" => dest.height,
                                         "down" => -old_height,
-                                        _ => 0.,
+                                        _ => -offset,
                                     },
                                 );
                                 a.teleport(

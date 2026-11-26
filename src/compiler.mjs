@@ -5,6 +5,8 @@ import {createHash} from 'node:crypto';
 import {atmospherePresets,bakeRoomShader,bakeShaderPreset} from './room-shaders.mjs';
 import {compileColliders} from './colliders.mjs';
 import {addSeams} from './seams.mjs';
+import {initialBackdrop} from './seam-background.mjs';
+import {roomMapPositions,seamlessNeighbor,sharedRoomEdge,validMapPosition} from './room-geometry.mjs';
 import {generateMinimap} from './minimap.mjs';
 import {byteCache} from './compile-cache.mjs';
 import {compileMidi} from './midi.mjs';
@@ -535,6 +537,12 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     }
     roomExits.set(id,routes);
   }
+  const mapRooms=Object.fromEntries(Object.entries(project.rooms??{}).map(([id,room])=>{
+    if(room.mapPosition!==undefined&&!validMapPosition(room.mapPosition))throw Error('Invalid world map position in '+id);
+    return [id,{cols:integer(room.cols,1,Math.floor(4096/size),'room columns'),
+      rows:integer(room.rows,1,Math.floor(4096/size),'room rows'),mapPosition:room.mapPosition,exits:roomExits.get(id)}];
+  }));
+  const mapPositions=roomMapPositions(mapRooms,mapRooms,project.start);
   function includeLayerSprites(images,ids){
     for(const id of ids){
       const sprite=sprites[id];
@@ -551,6 +559,17 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     const cols = integer(room.cols, 1, Math.floor(4096 / size), 'room columns');
     const rows = integer(room.rows, 1, Math.floor(4096 / size), 'room rows');
     const width = cols * size, height = rows * size;
+    const seamlessEdges=new Map();
+    for(const edge of Object.keys(mapRooms[id].exits)){
+      const target=seamlessNeighbor(mapRooms,id,edge);
+      if(!target)continue;
+      const span=sharedRoomEdge(mapRooms,mapPositions,id,edge,target);
+      seamlessEdges.set(edge,span&&[span.offset*size,span.start*size,span.end*size]);
+      const route=mapRooms[id].exits[edge];
+      const back=seamlessNeighbor(mapRooms,target,{left:'right',right:'left',up:'down',down:'up'}[edge]);
+      if(span&&(route.flag||back!==id||span.offset||span.start||span.end!==(edge==='left'||edge==='right'?rows:cols)))
+        runtimeAbi=Math.max(runtimeAbi,22);
+    }
     const view = authored?.script.definition?.room_view ?? room.view ?? (Math.abs(room.gravity ?? platformGravity) < .01 ? 'top_down' : 'platformer');
     if (!['platformer','top_down'].includes(view)) throw Error(`Unknown room view: ${view}`);
     const gravity = view === 'top_down'?0:number(settings.gravity??platformGravity*gravityScale,-100*gravityScale,100*gravityScale,'room gravity')/gravityScale;
@@ -715,20 +734,26 @@ export async function compileProject(root, { project: draft, scripts = new Map()
     }
     const border = roomBorder(settings, view === 'top_down');
     if (!['closed','sides','open'].includes(border)) throw Error('Invalid room border');
-    if (scriptBorder || border !== 'open') {
+    {
       const physics = props(undefined, 'static');
-      const walls={
-        left:{x:-size/2,y:height/2,width:size,height:height+size*16},
-        right:{x:width+size/2,y:height/2,width:size,height:height+size*16},
-        up:{x:width/2,y:-size/2,width,height:size},
-        down:{x:width/2,y:height+size/2,width,height:size},
-      };
-      for(const edge of scriptBorder||border==='closed'?Object.keys(walls):['left','right']){
-        const exit=roomExits.get(id)[edge],opposite={left:'right',right:'left',up:'down',down:'up'}[edge];
-        const back=roomExits.get(exit?.targets?.[0])?.[opposite];
-        if(exit?.adjacent && exit.mode==='fixed' && !exit.flag && back?.adjacent && back.mode==='fixed' && !back.flag && back.targets[0]===id)continue;
+      for(const edge of ['left','right','up','down']){
         const side=edge==='left'||edge==='right';
-        solids.push({...walls[edge],physics,...(scriptBorder?{border:side?1:2,disabled:border==='open'||border==='sides'&&!side}:{})});
+        const initial=border==='closed'||border==='sides'&&side;
+        const length=side?height:width, extra=side?size*8:0;
+        const span=seamlessEdges.get(edge);
+        const route=mapRooms[id].exits[edge];
+        const ranges=span?[
+          ...(span[1]>0?[[-extra,span[1]]]:[]),
+          ...(span[2]<length?[[span[2],length+extra]]:[]),
+        ]:[[-extra,length+extra]];
+        const wall=(start,end)=>{
+          const middle=(start+end)/2, extent=end-start;
+          return side?{x:edge==='left'?-size/2:width+size/2,y:middle,width:size,height:extent}
+            :{x:middle,y:edge==='up'?-size/2:height+size/2,width:extent,height:size};
+        };
+        if(initial||scriptBorder)for(const [start,end] of ranges)
+          solids.push({...wall(start,end),physics,...(scriptBorder?{border:side?1:2,disabled:!initial}:{})});
+        if(span&&route.flag)solids.push({...wall(span[1],span[2]),physics,seamGate:[route.flag,route.when??true]});
       }
     }
     const ripple = bakeRoomShader(settings.shader,images);
@@ -749,16 +774,21 @@ export async function compileProject(root, { project: draft, scripts = new Map()
       exits[edge]={mode:exit.mode,targets:exit.targets,flag:exit.flag||null,when:exit.when??true,adjacent:exit.adjacent??false};
     }
     roomAuthoring[id]={view,exits,collision,players:playerSlots};
+    const runtimeExits={...exits};
+    for(const [edge,seamSpan] of seamlessEdges){
+      if(seamSpan)runtimeExits[edge]={...exits[edge],seamSpan};
+      else delete runtimeExits[edge];
+    }
     atlases[id] = atlas(images);
     const layoutKey=createHash('sha256').update(JSON.stringify({size,gravity,cols,rows,solids,entities,scriptHost})).digest('hex');
-    rooms[id] = { layoutKey, scriptHost, title: room.title ?? id, ripple, shader, hd:settings.shader?.kind==='hd'?(settings.shader.strength??35):0, exits, cols, rows, width, height, size, baked, solids, entities,
+    rooms[id] = { layoutKey, scriptHost, title: room.title ?? id, ripple, shader, hd:settings.shader?.kind==='hd'?(settings.shader.strength??35):0, exits:runtimeExits, cols, rows, width, height, size, baked, solids, entities,
       ...(tileCells.size?{tileCells}:{}),
       blockers: [...blockers], background: settings.background ?? '#101a23', music: settings.music,
       ambience: settings.ambience, group_camera:(settings.groupCamera??legacyCamera?.groupCamera)===true,
       groupCameraOverride:settings.groupCamera,
       ...(cameraZoom===1?{}:{cameraZoom}), ...(bottomInset?{cameraHeight:height-bottomInset*size}:{}), gravity, view, ySort };
   }
-  addSeams(rooms,atlases,sprites,atlas);
+  await addSeams(rooms,atlases,sprites,atlas,id=>initialBackdrop(roomScripts.get(id)?.unit,rooms[id]));
   const start = project.start ?? Object.keys(rooms)[0];
   if (!Object.hasOwn(rooms, start)) throw Error('Choose a valid starting room');
   const minimapMode=gameUnit?'off':project.minimap??'off';

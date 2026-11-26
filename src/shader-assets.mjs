@@ -3,21 +3,24 @@ import {readFile} from 'node:fs/promises';
 import {byteCache} from './compile-cache.mjs';
 
 const cache=byteCache(16*1024*1024);
-let inspector;
+let runtimeModule;
 
-async function loadInspector(){
+async function initializeRuntime(){
   const runtime=await import('../web-built/runtime/runtime.js');
   runtime.initSync({module:await readFile(new URL('../web-built/runtime/runtime_bg.wasm',import.meta.url))});
-  if(!runtime.inspect_spirv)throw Error('Build GameWaffle Studio to import shaders');
-  return runtime.inspect_spirv;
+  return runtime;
+}
+
+export function loadProjectRuntime(){
+  return runtimeModule??=initializeRuntime().catch(error=>{runtimeModule=undefined;throw error;});
 }
 
 export async function compileShader(bytes){
   if(bytes.length>512*1024)throw Error('A SPIR-V shader can be up to 512 KiB');
   const key=createHash('sha256').update(bytes).digest('hex');
   if(cache.get(key))return cache.get(key);
-  inspector??=loadInspector().catch(error=>{inspector=undefined;throw error;});
-  const inspect=await inspector;
+  const {inspect_spirv:inspect}=await loadProjectRuntime();
+  if(!inspect)throw Error('Build GameWaffle Studio to import shaders');
   try{
     const definition={...JSON.parse(inspect(bytes)),fingerprint:key,spirv:Uint8Array.from(bytes)};
     return cache.put(key,definition,bytes.length+definition.wgsl.length+definition.msl.length);

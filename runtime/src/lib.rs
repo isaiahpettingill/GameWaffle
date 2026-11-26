@@ -276,6 +276,7 @@ pub struct Runtime {
     entry_removed: HashSet<String>,
     static_ids: HashSet<u32>,
     border_walls: Vec<(physics::Body, u8, bool)>,
+    seam_gates: Vec<(physics::Body, String, bool)>,
     tick: u64,
     next: u32,
     inputs: [Input; 4],
@@ -835,6 +836,7 @@ impl Runtime {
             entry_removed: Default::default(),
             static_ids: HashSet::new(),
             border_walls: Vec::with_capacity(4),
+            seam_gates: Vec::new(),
             tick: 0,
             next: 1,
             inputs: [Input::default(); 4],
@@ -969,6 +971,7 @@ impl Runtime {
         self.blocked = room.blockers.iter().copied().collect();
         self.static_ids.clear();
         self.border_walls.clear();
+        self.seam_gates.clear();
         self.dialog.clear();
         self.menu = None;
         self.counters.clear();
@@ -1006,6 +1009,13 @@ impl Runtime {
                 (0, None),
             );
             self.static_ids.insert(id);
+            if let Some((flag, when)) = solid.seam_gate
+                && let Some(body) = self.actors[&id].body
+            {
+                let enabled = self.flag(&flag) != when;
+                self.world.set_body_enabled(body, enabled);
+                self.seam_gates.push((body, flag, when));
+            }
             if solid.border != 0 {
                 if let Some(body) = self.actors[&id].body {
                     self.border_walls.push((body, solid.border, !solid.disabled));
@@ -1107,7 +1117,14 @@ impl Runtime {
     }
 
     fn sync_gates(&mut self) -> Result<(), String> {
-        if !std::mem::take(&mut self.gates_dirty) || self.gates.is_empty() {
+        if !std::mem::take(&mut self.gates_dirty) {
+            return Ok(());
+        }
+        for (body, flag, when) in &self.seam_gates {
+            let enabled = self.flag(flag) != *when;
+            self.world.set_body_enabled(*body, enabled);
+        }
+        if self.gates.is_empty() {
             return Ok(());
         }
         let mut gates = std::mem::take(&mut self.gates);
@@ -1173,6 +1190,10 @@ impl Runtime {
             (layer, spawn.player.filter(|slot| *slot < 4)),
         );
         let actor = self.actors.get_mut(&id).unwrap();
+        if actor.sprite.is_none() && actor.physics.mode == Mode::Fluid && actor.tile.is_some() {
+            // Fluid tiles on either side of a seam share the game clock.
+            actor.animation_start = 0;
+        }
         actor.origin = origin;
         actor.tile_mark = spawn.tile_mark;
         if actor.tile_mark.is_some() {

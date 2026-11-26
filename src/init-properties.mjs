@@ -149,7 +149,7 @@ export function compileInitProperties(events,registry){
           const mode=row.routing??'fixed',flag=row.flag??'',when=row.when??true,adjacent=row.seamless??false;
           if(!['fixed','save','crossing'].includes(mode)||typeof flag!=='string'||typeof when!=='boolean'||typeof adjacent!=='boolean')
             fail(row,'Use literal exit routing, flag and seamless settings');
-          if(adjacent&&(mode!=='fixed'||flag||!target))fail(row,'Seamless exits need a fixed destination and no flag');
+          if(adjacent&&(mode!=='fixed'||!target))fail(row,'Seamless exits need a fixed destination');
           exits.set(edge,{mode,targets:target?[target]:[],flag,when,adjacent});
         }
         continue;

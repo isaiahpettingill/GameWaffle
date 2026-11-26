@@ -69,7 +69,15 @@ on init
 end
 ```
 
-Room view sets the defaults for gravity, borders, and depth sorting. Explicit settings for those behaviors in the Room script take precedence. Use `room_exit("right", "yard")` for a fixed destination or `room_exit("right", "")` to remove an existing route. Use `"save"` to pick a destination per save or `"crossing"` to pick on each crossing. The optional flag and required value restrict an exit to when the flag matches. For seamless scrolling, define a fixed, unflagged route on each of the two matching edges with `room_exit("right", "yard", "fixed", "", true, true)`. The World tab displays the routes.
+Room view sets the defaults for gravity, borders, and depth sorting. Explicit settings for those behaviors in the Room script take precedence. Use `room_exit("right", "yard")` for a fixed destination or `room_exit("right", "")` to remove an existing route. Use `"save"` to pick a destination per save or `"crossing"` to pick on each crossing.
+
+In **World**, drag the room previews to line up their terrain. Rooms snap to the tile grid and nearby edges. Use the wheel to zoom, drag empty space to pan, and use the arrow keys on a focused room to move it one tile.
+
+Select the source room and choose an edge below the map. Set its destination and enable **Seamless scrolling** for a shared edge. Saving writes a `room_exit` statement to the Room script. The usable opening is the overlap between the two facing edges, including when the rooms have different sizes. An exit with a gap needs alignment before it can be crossed.
+
+The visible neighboring terrain uses the starting background color, gradient, and artwork from its Room script. Neighboring water animates and affects the player across the opening. Live background shaders and later script changes take effect when the room becomes active.
+
+Every exit is directional. To add a locked return, declare `flag return_open = false` in the Game script, then choose that flag on the destination room's return edge. World writes the equivalent of `room_exit("left", "meadow", "fixed", "return_open", true, true)`. In the event that unlocks it, write `flag.return_open = true`.
 
 To use an imported bitfont by default, set `property default_font = "my_font"` in the Game script's **On game startup → Init properties** block. Use the font's asset ID or `"builtin"`.
 
